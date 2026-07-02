@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pick the video-engine driver at boot: cedrus (mainline) or cedar (BSP+libcedarc).
+# They share the VE, so only one loads. Priority: cmdline ve= > /etc/ve-driver > cedrus.
+VE=$(sed -n 's/.*\bve=\([a-z]*\).*/\1/p' /proc/cmdline 2>/dev/null)
+[ -z "$VE" ] && [ -r /etc/ve-driver ] && VE=$(tr -dc 'a-z' < /etc/ve-driver)
+[ -z "$VE" ] && VE=cedrus
+case "$1" in
+start)
+	case "$VE" in
+	cedar)  modprobe cedar_ve     && echo "[ve-select] cedar  (cedar_ve + /dev/ion + libcedarc)" > /dev/console ;;
+	*)      modprobe sunxi-cedrus && echo "[ve-select] cedrus (mainline /dev/video0)" > /dev/console ;;
+	esac ;;
+esac

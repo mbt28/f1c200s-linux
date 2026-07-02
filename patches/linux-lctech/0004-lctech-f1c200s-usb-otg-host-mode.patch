@@ -1,0 +1,18 @@
+lctech f1c200s: set USB OTG to host mode for the CarPlay dongle
+
+The board's single USB (OTG) is on the Type-C socket; a CarPlay /
+Android-Auto dongle needs the SoC as USB host. The in-tree DTS defaults to
+"peripheral" (gadget). Force host mode. NOTE: VBUS on this socket is tied to
+the board Vin, so power the board from another source when hosting a dongle.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -67,7 +67,7 @@
+  * otherwise), but peripheral is probably the intention.
+  */
+ &usb_otg {
+-	dr_mode = "peripheral";
++	dr_mode = "host";
+ 	status = "okay";
+ };
+ 

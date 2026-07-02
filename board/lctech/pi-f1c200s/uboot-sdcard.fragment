@@ -1,0 +1,12 @@
+# Boot the kernel from the SD card.
+#
+# The lctech_pi_f1c200s board + DT alias serial0 -> uart1 (the on-board CH340
+# USB-C serial on PA2/PA3), so the Linux console is ttyS0 here even though it
+# is physically UART1.  The U-Boot defconfig already sets CONS_INDEX=2.
+#
+# Partition layout (see genimage-sdcard.cfg): p1 = FAT (zImage + dtb),
+# p2 = ext4 rootfs.  DRAM base 0x80000000.
+CONFIG_USE_BOOTARGS=y
+CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4"
+CONFIG_USE_BOOTCOMMAND=y
+CONFIG_BOOTCOMMAND="load mmc 0:1 0x80008000 zImage; load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000"

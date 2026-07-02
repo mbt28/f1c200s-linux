@@ -1,0 +1,208 @@
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -74,3 +74,205 @@
+ &usbphy {
+ 	status = "okay";
+ };
++
++/*
++ * 4.3" 480x272 RGB LCD (QiaoDian QD43003C0-40) on the 40-pin FPC, plus a
++ * Goodix GT911 capacitive touch controller on TWI0 (I2C0).
++ *
++ * The suniv display pipeline (DE1: frontend -> backend -> TCON0 -> panel) is
++ * not present in the mainline suniv dtsi, so the nodes are added here through
++ * a /soc path reference. They bind via their "allwinner,sun4i-a10-*" fallback
++ * compatibles, and every clock/reset they use exists in the mainline 6.6
++ * suniv CCU.
++ *
++ * Touch wiring (Lctech Pi F1C200s): RST = PA0, INT = PE12,
++ * SDA/SCL = TWI0 / I2C0 (PD0 / PD12).
++ */
++
++&pio {
++	i2c0_pd_pins: i2c0-pd-pins {
++		pins = "PD0", "PD12";
++		function = "i2c0";
++		bias-pull-up;		/* internal pull-ups (board may lack external) */
++	};
++
++	lcd_rgb565_pins: lcd-rgb565-pins {
++		pins = "PD1", "PD2", "PD3", "PD4", "PD5",
++		       "PD6", "PD7", "PD8", "PD9", "PD10", "PD11",
++		       "PD13", "PD14", "PD15", "PD16", "PD17",
++		       "PD18", "PD19", "PD20", "PD21";
++		function = "lcd";
++	};
++};
++
++&{/soc} {
++	tcon0: lcd-controller@1c0c000 {
++		compatible = "allwinner,suniv-f1c100s-tcon",
++			     "allwinner,sun4i-a10-tcon";
++		reg = <0x01c0c000 0x1000>;
++		interrupts = <29>;
++		clocks = <&ccu CLK_BUS_LCD>,
++			 <&ccu CLK_TCON>,
++			 <&ccu CLK_TVE1_CLK>;
++		clock-names = "ahb", "tcon-ch0", "tcon-ch1";
++		clock-output-names = "tcon-pixel-clock";
++		resets = <&ccu RST_BUS_LCD>;
++		reset-names = "lcd";
++		assigned-clocks = <&ccu CLK_TCON>;
++		assigned-clock-rates = <297000000>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&lcd_rgb565_pins>;
++		status = "okay";
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			tcon0_in: port@0 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <0>;
++
++				tcon0_in_be0: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&be0_out_tcon0>;
++				};
++			};
++
++			tcon0_out: port@1 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <1>;
++
++				tcon0_out_lcd: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&panel_input>;
++				};
++			};
++		};
++	};
++
++	de: display-engine {
++		compatible = "allwinner,suniv-f1c100s-display-engine",
++			     "allwinner,sun4i-a10-display-engine";
++		allwinner,pipelines = <&fe0>;
++		status = "okay";
++	};
++
++	fe0: display-frontend@1e00000 {
++		compatible = "allwinner,suniv-f1c100s-display-frontend",
++			     "allwinner,sun4i-a10-display-frontend";
++		reg = <0x01e00000 0x20000>;
++		interrupts = <30>;
++		clocks = <&ccu CLK_BUS_DE_FE>, <&ccu CLK_DE_FE>,
++			 <&ccu CLK_DRAM_DE_FE>;
++		clock-names = "ahb", "mod", "ram";
++		resets = <&ccu RST_BUS_DE_FE>;
++		status = "okay";
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			fe0_out: port@1 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <1>;
++
++				fe0_out_be0: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&be0_in_fe0>;
++				};
++			};
++		};
++	};
++
++	be0: display-backend@1e60000 {
++		compatible = "allwinner,suniv-f1c100s-display-backend",
++			     "allwinner,sun4i-a10-display-backend";
++		reg = <0x01e60000 0x10000>;
++		reg-names = "be";
++		interrupts = <31>;
++		clocks = <&ccu CLK_BUS_DE_BE>, <&ccu CLK_DE_BE>,
++			 <&ccu CLK_DRAM_DE_BE>;
++		clock-names = "ahb", "mod", "ram";
++		resets = <&ccu RST_BUS_DE_BE>;
++		reset-names = "be";
++		assigned-clocks = <&ccu CLK_DE_BE>;
++		assigned-clock-rates = <300000000>;
++		status = "okay";
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			be0_in: port@0 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <0>;
++
++				be0_in_fe0: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&fe0_out_be0>;
++				};
++			};
++
++			be0_out: port@1 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				reg = <1>;
++
++				be0_out_tcon0: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&tcon0_in_be0>;
++				};
++			};
++		};
++	};
++};
++
++/ {
++	backlight: backlight {
++		compatible = "gpio-backlight";
++		gpios = <&pio 4 6 GPIO_ACTIVE_HIGH>;	/* PE6 = backlight enable */
++		default-on;
++	};
++
++	panel: panel {
++		compatible = "qiaodian,qd43003c0-40", "simple-panel";
++		power-supply = <&reg_vcc3v3>;
++		backlight = <&backlight>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			panel_input: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&tcon0_out_lcd>;
++			};
++		};
++	};
++};
++
++&i2c0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c0_pd_pins>;
++	clock-frequency = <100000>;	/* 100 kHz: tolerant of weak pull-ups */
++	status = "okay";
++
++	touchscreen@5d {
++		compatible = "goodix,gt911";
++		reg = <0x5d>;
++		interrupt-parent = <&pio>;
++		interrupts = <4 12 2>;			/* PE12, IRQ_TYPE_EDGE_FALLING */
++		irq-gpios   = <&pio 4 12 GPIO_ACTIVE_HIGH>;	/* PE12 */
++		reset-gpios = <&pio 0 0  GPIO_ACTIVE_HIGH>;	/* PA0 */
++		AVDD28-supply = <&reg_vcc3v3>;
++		touchscreen-size-x = <480>;
++		touchscreen-size-y = <272>;
++	};
++};

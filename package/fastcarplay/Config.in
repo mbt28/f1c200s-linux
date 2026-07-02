@@ -1,0 +1,20 @@
+config BR2_PACKAGE_FASTCARPLAY
+	bool "FastCarPlay"
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on !BR2_STATIC_LIBS
+	select BR2_PACKAGE_FFMPEG
+	select BR2_PACKAGE_FFMPEG_SWSCALE
+	select BR2_PACKAGE_LIBUSB
+	select BR2_PACKAGE_OPENSSL
+	select BR2_PACKAGE_SDL2
+	select BR2_PACKAGE_SDL2_TTF
+	select BR2_PACKAGE_LIBDRM
+	help
+	  C++ CarPlay and Android Auto receiver for Autobox-compatible
+	  USB dongles.
+
+	  https://github.com/mbt28/FastCarPlay
+
+comment "FastCarPlay needs a toolchain w/ C++, threads, dynamic library"
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS || BR2_STATIC_LIBS

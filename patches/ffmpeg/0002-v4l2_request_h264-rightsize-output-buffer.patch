@@ -1,0 +1,31 @@
+v4l2_request_h264: right-size the coded/OUTPUT buffer for low-RAM parts
+
+The upstream hwaccel hardcodes a 4 MiB H.264 coded buffer, and one is bundled
+with EVERY pooled DPB frame (see v4l2_request_frame_alloc), so the cedrus
+vb2-dma-contig pool balloons to ~DPB x 4 MiB (~24-44 MiB). On the 64 MiB
+Allwinner F1C200s that cannot fit (alloc fails / OOM). Coded data is bounded by
+the raw frame size, so size the OUTPUT buffer to the resolution with a 1 MiB
+floor: ~1 MiB for <=720p, auto-scaling for 1080p. The whole VE pool then sits
+near ~20 MiB at 720p, fitting the 32 MiB CMA (see linux.fragment).
+
+--- a/libavcodec/v4l2_request_h264.c
++++ b/libavcodec/v4l2_request_h264.c
+@@ -438,7 +438,17 @@
+ 
+     fill_sps(&sps, h);
+ 
+-    ret = ff_v4l2_request_init(avctx, V4L2_PIX_FMT_H264_SLICE, 4 * 1024 * 1024, control, FF_ARRAY_ELEMS(control));
++    /*
++     * F1C200s (64 MB RAM): the upstream hwaccel hardcodes a 4 MiB coded/OUTPUT
++     * buffer, and one is bundled with EVERY pooled DPB frame, so the VE pool
++     * balloons to ~DPB x 4 MiB (~24-44 MiB) and cannot fit. Coded data is
++     * bounded by the raw frame size, so size the OUTPUT buffer to the
++     * resolution with a 1 MiB floor: ~1 MiB for <=720p (auto-scales for 1080p).
++     * This keeps the whole VE pool near ~20 MiB at 720p -> fits the 32 MiB CMA.
++     */
++    ret = ff_v4l2_request_init(avctx, V4L2_PIX_FMT_H264_SLICE,
++                               FFMAX(1024 * 1024, avctx->coded_width * avctx->coded_height),
++                               control, FF_ARRAY_ELEMS(control));
+     if (ret)
+         return ret;
+ 

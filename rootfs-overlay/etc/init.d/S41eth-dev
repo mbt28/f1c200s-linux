@@ -1,0 +1,32 @@
+#!/bin/sh
+# Dev-loop networking (NOT production; safe to delete). Brings up the USB-hub
+# ethernet (DM9601), tries DHCP, falls back to a fixed static, and prints the
+# resulting IP on the serial console. Lets us scp cedrus.ko + ssh-run tests
+# without reflashing the SD card.
+getip() {
+	{ ip addr show eth0 2>/dev/null; ifconfig eth0 2>/dev/null; } \
+		| grep -oE 'inet (addr:)?([0-9]+\.){3}[0-9]+' \
+		| grep -oE '([0-9]+\.){3}[0-9]+' | head -1
+}
+case "$1" in
+start)
+	i=0
+	while [ $i -lt 8 ] && [ ! -e /sys/class/net/eth0 ]; do sleep 1; i=$((i + 1)); done
+	[ -e /sys/class/net/eth0 ] || { echo "eth-dev: no eth0 (USB NIC not found)" > /dev/console; exit 0; }
+	ip link set eth0 up 2>/dev/null || ifconfig eth0 up
+	udhcpc -i eth0 -n -q -t 6 -T 1 >/dev/null 2>&1
+	IP=$(getip)
+	if [ -z "$IP" ]; then
+		ip addr add 192.168.7.2/24 dev eth0 2>/dev/null || \
+			ifconfig eth0 192.168.7.2 netmask 255.255.255.0
+		IP=$(getip)
+	fi
+	echo "============ eth-dev: eth0 = ${IP:-NONE}   (ssh root@${IP}) ============" > /dev/console
+	;;
+stop)
+	ip link set eth0 down 2>/dev/null || ifconfig eth0 down 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Dev-loop networking via USB-gadget ethernet (g_ether). One Type-C cable from the
+# board's OTG to the dev host = power + a deterministic usb0 link. Static IP, no
+# DHCP needed (point-to-point). NOT production; only present on the dev image.
+getip() {
+	{ ip addr show usb0 2>/dev/null; ifconfig usb0 2>/dev/null; } \
+		| grep -oE 'inet (addr:)?([0-9]+\.){3}[0-9]+' \
+		| grep -oE '([0-9]+\.){3}[0-9]+' | head -1
+}
+case "$1" in
+start)
+	i=0
+	while [ $i -lt 8 ] && [ ! -e /sys/class/net/usb0 ]; do sleep 1; i=$((i + 1)); done
+	[ -e /sys/class/net/usb0 ] || { echo "usb-gadget: no usb0 (g_ether not bound)" > /dev/console; exit 0; }
+	ip addr add 192.168.8.2/24 dev usb0 2>/dev/null || \
+		ifconfig usb0 192.168.8.2 netmask 255.255.255.0
+	ip link set usb0 up 2>/dev/null || ifconfig usb0 up
+	echo "============ usb-gadget: usb0 = $(getip)   (ssh root@192.168.8.2) ============" > /dev/console
+	;;
+stop)
+	ip link set usb0 down 2>/dev/null || ifconfig usb0 down 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

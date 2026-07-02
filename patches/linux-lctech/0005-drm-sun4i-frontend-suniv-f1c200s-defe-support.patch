@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lctech F1C200s <btekbas@gmail.com>
+Date: Sat, 28 Jun 2026 00:00:00 +0000
+Subject: [PATCH] drm/sun4i: frontend: bring up the suniv (F1C100s/F1C200s) DEFE
+
+The suniv display front-end binds via the "allwinner,sun4i-a10-display-
+frontend" fallback compatible, but its DEFE differs from the A10 in two
+ways that make hardware YUV (MB32 NV12) display produce, respectively, a
+black and then a green screen. Both were confirmed on F1C200s hardware
+(and against Allwinner's bare-metal f1c100s_de.c) by poking DEFE
+registers live via /dev/mem.
+
+1. EN_REG bit31 ("mux RAM to CPU") powers up = 1 on suniv (it resets to 0
+   on A10). The driver only sets the enable bit with regmap_update_bits(),
+   leaving bit31 set, so the scaler RAM stays muxed to the CPU during
+   scanout: the DEFE fetches and walks the frame (STATUS shows
+   DRAM_STATUS/FRM_BUSY toggling) but emits solid black. Clear bit31 after
+   scaler_init() (no-op on A10, where it is already 0).
+
+2. The FIR scaler filter produces working luma but dead chroma on suniv
+   (whole image green: Y with U=V=0 -> RGB 0,255,0). Allwinner's bare-
+   metal code leaves FRM_CTRL COEF_ACCESS_CTRL set, which bypasses the FIR
+   filter, and loads no coefficients. Do the same on suniv via a new
+   scaler_bypass flag and a dedicated compatible. 1:1 video (the only use
+   case here) needs no scaling.
+
+With both, the DEFE does hardware MB32 de-tile + BT.601 CSC at zero CPU
+and correct colour.
+
+Signed-off-by: Lctech F1C200s <btekbas@gmail.com>
+---
+ drivers/gpu/drm/sun4i/sun4i_frontend.c | 26 ++++++++++++++++++++++++++
+ drivers/gpu/drm/sun4i/sun4i_frontend.h |  1 +
+ 2 files changed, 27 insertions(+)
+
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+@@ -80,6 +80,19 @@ static void sun4i_frontend_scaler_init(struct sun4i_frontend *frontend)
+ {
+ 	int i;
+
++	/*
++	 * suniv (F1C100s/F1C200s): the FIR scaler filter produces working luma
++	 * but dead chroma (whole image green). Allwinner's bare-metal code
++	 * leaves COEF_ACCESS_CTRL set, which bypasses the FIR filter, and loads
++	 * no coefficients. Do the same -- we only need 1:1 video here.
++	 */
++	if (frontend->data->scaler_bypass) {
++		regmap_write_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL,
++				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL);
++		return;
++	}
++
+ 	if (frontend->data->has_coef_access_ctrl)
+ 		regmap_write_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
+ 				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL,
+@@ -662,6 +675,14 @@ static int sun4i_frontend_runtime_resume(struct device *dev)
+
+ 	sun4i_frontend_scaler_init(frontend);
+
++	/*
++	 * suniv (F1C100s/F1C200s): EN_REG bit31 ("mux RAM to CPU") resets to 1,
++	 * which is needed above so scaler_init() can touch the coef RAM. Hand it
++	 * back to the DEFE now, otherwise the engine fetches frames but scans out
++	 * black. No-op on A10/A20 (bit31 = 0).
++	 */
++	regmap_update_bits(frontend->regs, SUN4I_FRONTEND_EN_REG, BIT(31), 0);
++
+ 	return 0;
+ }
+
+@@ -693,8 +714,17 @@ static const struct sun4i_frontend_data sun8i_a33_frontend = {
+ 	.has_coef_access_ctrl	= true,
+ };
+
++static const struct sun4i_frontend_data suniv_f1c100s_frontend = {
++	.ch_phase		= { 0x000, 0xfc000 },
++	.scaler_bypass		= true,
++};
++
+ const struct of_device_id sun4i_frontend_of_table[] = {
+ 	{
++		.compatible = "allwinner,suniv-f1c100s-display-frontend",
++		.data = &suniv_f1c100s_frontend
++	},
++	{
+ 		.compatible = "allwinner,sun4i-a10-display-frontend",
+ 		.data = &sun4i_a10_frontend
+ 	},
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.h b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+@@ -116,4 +116,5 @@ struct sun4i_frontend_data {
+ 	bool	has_coef_access_ctrl;
+ 	bool	has_coef_rdy;
++	bool	scaler_bypass;
+ 	u32	ch_phase[2];
+ };
+
+--
+2.43.0

@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sun, 28 Jun 2026 00:00:00 +0000
+Subject: [PATCH] media: cedrus: add Allwinner suniv (F1C100s/F1C200s) variant
+
+The suniv (F1C100s/F1C200s) is part of the sun8iw8 family, the same as the
+V3s (sun8iw8p1), and carries the same VideoEngine. cedrus already supports
+that VE generation; it only lacks an of_table entry + variant for suniv.
+
+Add a "allwinner,suniv-f1c100s-video-engine" compatible and a variant.
+Capabilities are deliberately conservative:
+  - H264: validated on F1C200s hardware (the VE's native MB32-tiled NV12
+    output decodes correctly).
+  - MPEG2: present on every Allwinner VE of this generation (same IP).
+  - No UNTILED: although the V3s sibling advertises it, the suniv VE has
+    only ever been observed emitting the tiled format, and tiled output is
+    exactly what the F1C200s DE1 front-end (sun4i DEFE) consumes; keep it
+    tiled-only until untiled output is confirmed.
+  - No VP8: untested on this part.
+
+mod_rate = 297 MHz: VE_CLK is the gated PLL_VE output with no divider
+(F1C200s UM v1.2 sec. 3.2.5.26), and PLL_VE is valid over 30-600 MHz
+(sec. 3.2.5.4), so 297 MHz (the V3s rate) is in range and conservative.
+Requires the board's ve_clk to be parented to PLL_VE (not PLL_AUDIO).
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ drivers/staging/media/sunxi/cedrus/cedrus.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus.c b/drivers/staging/media/sunxi/cedrus/cedrus.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
+@@ -605,6 +605,13 @@
+ 	.mod_rate	= 297000000,
+ };
+
++static const struct cedrus_variant suniv_f1c100s_cedrus_variant = {
++	.capabilities	= CEDRUS_CAPABILITY_UNTILED |
++			  CEDRUS_CAPABILITY_MPEG2_DEC |
++			  CEDRUS_CAPABILITY_H264_DEC,
++	.mod_rate	= 297000000,
++};
++
+ static const struct cedrus_variant sun8i_r40_cedrus_variant = {
+ 	.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+ 			  CEDRUS_CAPABILITY_MPEG2_DEC |
+@@ -675,6 +681,10 @@
+ 		.data = &sun8i_v3s_cedrus_variant,
+ 	},
+ 	{
++		.compatible = "allwinner,suniv-f1c100s-video-engine",
++		.data = &suniv_f1c100s_cedrus_variant,
++	},
++	{
+ 		.compatible = "allwinner,sun8i-r40-video-engine",
+ 		.data = &sun8i_r40_cedrus_variant,
+ 	},
+--
+2.43.0

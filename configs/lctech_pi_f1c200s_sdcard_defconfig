@@ -1,0 +1,71 @@
+BR2_arm=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_6=y
+BR2_TARGET_GENERIC_HOSTNAME="lctech-f1c200s"
+BR2_TARGET_GENERIC_ISSUE="Welcome to CarPlay Linux (Lctech Pi F1C200s)"
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/genimage-sdcard.cfg"
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.80"
+BR2_LINUX_KERNEL_DEFCONFIG="sunxi"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/linux.fragment $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/linux-sdcard.fragment"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="allwinner/suniv-f1c200s-lctech-pi"
+BR2_LINUX_KERNEL_PATCH="$(BR2_EXTERNAL_CARPLAY_PATH)/patches/linux-lctech"
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+# Bigger rootfs to fit the bundled sample videos (~67M) + OS (~24M).
+BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
+# Bundle test video clips into /root/videos via a rootfs overlay.
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_CARPLAY_PATH)/rootfs-overlay"
+# ffmpeg for a quick video-playback test (software decode).
+# OUTDEVS pulls in the fbdev output device: ffmpeg ... -f fbdev /dev/fb0
+# (the ffmpeg CLI is default-y; swscale handles scaling/pixfmt for the panel).
+BR2_PACKAGE_FFMPEG=y
+BR2_PACKAGE_FFMPEG_SWSCALE=y
+BR2_PACKAGE_FFMPEG_OUTDEVS=y
+BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2024.01"
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="lctech_pi_f1c200s"
+BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/uboot-sdcard.fragment"
+BR2_TARGET_UBOOT_NEEDS_DTC=y
+BR2_TARGET_UBOOT_NEEDS_PYLIBFDT=y
+BR2_TARGET_UBOOT_NEEDS_OPENSSL=y
+BR2_TARGET_UBOOT_SPL=y
+BR2_TARGET_UBOOT_SPL_NAME="u-boot-sunxi-with-spl.bin"
+BR2_PACKAGE_HOST_DOSFSTOOLS=y
+BR2_PACKAGE_HOST_E2FSPROGS=y
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_PACKAGE_HOST_MTOOLS=y
+BR2_PACKAGE_HOST_SUNXI_TOOLS=y
+# --- Mainline cedrus HW decode (blob-free) ---
+# libdrm: cedrus decode -> sun4i DEFE atomic NV12+tiled plane (zero-copy KMS).
+BR2_PACKAGE_LIBDRM=y
+# rz/sz (ZMODEM) for transferring files over the serial console (no SD removal).
+BR2_PACKAGE_LRZSZ=y
+# FastCarPlay with the mainline-cedrus integration (CedrusDecoder, USE_CEDRUS=1).
+# Enabling CXX forces a one-time full toolchain rebuild; the package pulls in
+# SDL2/openssl/libusb/ffmpeg (v4l2-request hwaccel). Needs USB host for the dongle.
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_PACKAGE_FASTCARPLAY=y
+BR2_PACKAGE_I2C_TOOLS=y
+BR2_PACKAGE_LIBV4L_UTILS=y
+BR2_PACKAGE_LIBUDEV_ZERO=y
+# Dropbear SSH server for the dev loop: scp cedrus.ko + ssh-run tests over the
+# USB-hub DM9601 ethernet, no reflashing. Key auth via overlay authorized_keys.
+BR2_PACKAGE_DROPBEAR=y
+BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
+
+# Cedar (BSP) decode path kept alongside cedrus while the cedrus chroma bug is open.
+# Soft-float ARMv5 -> arm-linux-gnueabi blobs. Selected at boot by S20ve-select.
+BR2_PACKAGE_LIBCEDARC=y
+BR2_PACKAGE_LIBCEDARC_ARCHLIB="toolchain-sunxi-arm9-glibc"
+BR2_PACKAGE_LIBCEDARC_DECODER=y
+BR2_PACKAGE_LIBCEDARC_DECODER_H264=y
+BR2_PACKAGE_CEDAR_DECODE_TEST=y

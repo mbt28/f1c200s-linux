@@ -1,0 +1,14 @@
+# Fetched upstream trees (have their own history; pulled by scripts/fetch-sources.sh)
+/buildroot/
+/cedar/src/
+
+# Out-of-tree build output
+/output/
+
+# Bring-up video clips are not product content — fetch/copy locally, never vendor
+/rootfs-overlay/root/videos/
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store

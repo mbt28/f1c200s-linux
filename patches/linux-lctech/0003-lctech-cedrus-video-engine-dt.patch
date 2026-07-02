@@ -1,0 +1,38 @@
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -276,3 +276,35 @@
+ 		touchscreen-size-y = <272>;
+ 	};
+ };
++
++/* ===== Video Engine (mainline cedrus, blob-free) + SRAM-C ===== */
++
++&{/soc/sram-controller@1c00000} {
++	sram_c: sram@1d00000 {
++		compatible = "mmio-sram";
++		reg = <0x01d00000 0x80000>;
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges = <0 0x01d00000 0x80000>;
++
++		ve_sram: sram-section@0 {
++			compatible = "allwinner,suniv-f1c100s-sram-c",
++				     "allwinner,sun4i-a10-sram-c1";
++			reg = <0x000000 0x80000>;
++		};
++	};
++};
++
++&{/soc} {
++	cedrus: video-codec@1c0e000 {
++		compatible = "allwinner,suniv-f1c100s-video-engine",
++			     "allwinner,sun8i-v3s-video-engine";
++		reg = <0x01c0e000 0x1000>;
++		clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>, <&ccu CLK_DRAM_VE>;
++		clock-names = "ahb", "mod", "ram";
++		resets = <&ccu RST_BUS_VE>;
++		interrupts = <34>;
++		allwinner,sram = <&ve_sram 1>;
++		status = "okay";
++	};
++};

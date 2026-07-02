@@ -1,0 +1,10 @@
+config BR2_PACKAGE_CEDAR_DECODE_TEST
+	bool "cedar-decode-test"
+	depends on BR2_PACKAGE_LIBCEDARC
+	help
+	  Minimal standalone Allwinner Cedar (libcedarc) H.264 decode test.
+	  Validates the kernel cedar/VE driver + /dev/ion + libcedarc chain
+	  without ffmpeg. Run on target:  cedar-decode-test clip.h264
+
+comment "cedar-decode-test needs libcedarc"
+	depends on !BR2_PACKAGE_LIBCEDARC

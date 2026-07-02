@@ -1,0 +1,104 @@
+# Kernel config tweaks for the Lctech Pi F1C200s (suniv / ARMv5, 64 MiB).
+# Layered on top of the in-tree "sunxi" defconfig.
+
+# suniv is ARMv5 (ARM926). The sunxi defconfig is multi-platform; turning off
+# MULTI_V7 selects the ARMv5 (suniv) build path.
+# CONFIG_ARCH_MULTI_V7 is not set
+
+# Networking core is required: libusb's hotplug backend uses a netlink uevent
+# socket (NETLINK_KOBJECT_UEVENT) to init, and FastCarPlay's libusb_init() fails
+# with LIBUSB_ERROR_OTHER without it. Keep it minimal (net core + netlink, no IP).
+CONFIG_NET=y
+CONFIG_UEVENT_HELPER=y
+
+# 480x272 RGB LCD via the sun4i DRM driver (binds the suniv DE/TCON through
+# their sun4i-a10 fallback compatibles; panel qd43003c0-40 is in panel-simple).
+# Display nodes are added by patches/linux-lctech/0001-...-lcd-and-gt911-touch.patch
+CONFIG_DRM=y
+CONFIG_DRM_SUN4I=y
+CONFIG_DRM_SUN4I_BACKEND=y
+CONFIG_DRM_PANEL_SIMPLE=y
+CONFIG_DRM_FBDEV_EMULATION=y
+# Framebuffer present, but NO text console on the LCD: this is a CarPlay
+# appliance, the panel is owned by the video (FastCarPlay -> /dev/fb0) and the
+# console lives on the serial port. Disabling FRAMEBUFFER_CONSOLE keeps /dev/fb0
+# (from DRM fbdev emulation) while stopping the text console/cursor from
+# fighting the video. (cf. removing console=tty0 from the bootargs.)
+CONFIG_FB=y
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+# CONFIG_FRAMEBUFFER_CONSOLE is not set
+# Backlight enable on GPIO PE6 (gpio-backlight). Without this the panel is
+# driven but stays dark.
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+CONFIG_BACKLIGHT_GPIO=y
+
+# Goodix GT911 capacitive touch on I2C0 (TWI0).
+CONFIG_I2C=y
+CONFIG_I2C_MV64XXX=y
+CONFIG_INPUT_TOUCHSCREEN=y
+CONFIG_TOUCHSCREEN_GOODIX=y
+
+# Mainline cedrus (V4L2 stateless H.264) video decoder -- blob-free: no cedar_ve,
+# no ION, no libcedarc. cedrus binds the DT "video-engine" node and claims SRAM-C
+# via sunxi_sram; decode buffers come from CMA (vb2-dma-contig).
+CONFIG_STAGING=y
+CONFIG_STAGING_MEDIA=y
+CONFIG_VIDEO_SUNXI=y
+CONFIG_SUNXI_SRAM=y
+# CMA is the global pool for ION (libcedarc) and cedrus' vb2-dma-contig (mainline).
+# HARD LIMIT: on this 64 MiB part the early CMA reservation in setup_arch wedges
+# *before the console comes up* if too large -- 32 MiB hangs at "Starting kernel"
+# with no output. 16 MiB is the proven-bootable value. Paired with the ffmpeg
+# patch that right-sizes the coded buffer to ~1 MiB, 16 MiB holds the cedrus
+# H.264 pool for <=480p (~7-13 MiB). 720p (~20 MiB) needs more CMA than reliably
+# boots here -> use a dedicated VE carveout instead (see docs/ffmpeg-v4l2-request.md).
+CONFIG_CMA=y
+CONFIG_DMA_CMA=y
+CONFIG_CMA_SIZE_MBYTES=16
+# cedrus as a MODULE, loaded post-boot (autorun) -- the validated path. Built-in
+# (=y) lets the VE probe (clk_set_rate PLL_VE / VE reset / SRAM claim) run during
+# boot and wedge it before login; =m keeps the probe off the boot path so a probe
+# hiccup can never brick the board. modalias coldplug does not auto-load it here.
+CONFIG_VIDEO_SUNXI_CEDRUS=m
+CONFIG_DMA_SHARED_BUFFER=y
+CONFIG_GENERIC_ALLOCATOR=y
+
+# USB host -- needed for the CarPlay / Android Auto dongle (talked to via
+# libusb from FastCarPlay). The musb + usb-phy suniv drivers are mainline
+# since ~6.3.
+# NOTE: the in-tree lctech DT sets the OTG port to dr_mode = "peripheral".
+# A dr_mode = "host" (or "otg") DT override is still required before the
+# dongle will enumerate -- added with the FastCarPlay layer.
+CONFIG_USB=y
+CONFIG_USB_MUSB_HDRC=y
+CONFIG_USB_MUSB_SUNXI=y
+CONFIG_USB_MUSB_DUAL_ROLE=y
+CONFIG_NOP_USB_XCEIV=y
+CONFIG_USB_PHY=y
+CONFIG_PHY_SUN4I_USB=y
+
+# USB Ethernet for the SSH/SCP dev loop -- push cedrus.ko over a USB-hub NIC and
+# rmmod/insmod it instead of reflashing. 0fe6:9700 = Davicom DM9601 (full-speed);
+# the rest cover common USB NICs if the adapter is swapped. Built-in so eth0 is
+# up at boot with no module dance.
+CONFIG_USB_USBNET=y
+CONFIG_USB_NET_DM9601=y
+CONFIG_USB_NET_AX8817X=y
+CONFIG_USB_NET_AX88179_178A=y
+CONFIG_USB_NET_CDCETHER=y
+CONFIG_USB_NET_SMSC95XX=y
+
+# USB-gadget ethernet (g_ether) for the dev loop: Type-C straight to the dev host
+# = power + a deterministic usb0 link, no adapter/firmware/hub. Active only when
+# the OTG is in peripheral mode (the dev image's DTS; the CarPlay image keeps host
+# mode via patch 0004, where this gadget is simply unused). USB_GADGET is already y.
+CONFIG_USB_ETH=y
+CONFIG_USB_ETH_RNDIS=y
+
+# Cedar VE + ION (BSP path for the libcedarc blob) -- the colour-correct decoder,
+# kept alongside cedrus while the cedrus chroma bug is open. Both are MODULES; an
+# init script (S29ve-select) loads cedar OR cedrus at boot per /etc/ve-driver.
+# cedar_ve builds as cedar_dev.ko.
+CONFIG_VIDEO_SUNXI_CEDAR_VE=m
+CONFIG_VIDEO_SUNXI_CEDAR_ION=y
