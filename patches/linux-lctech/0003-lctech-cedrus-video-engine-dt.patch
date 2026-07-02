@@ -1,6 +1,6 @@
 --- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
 +++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
-@@ -276,3 +276,35 @@
+@@ -276,3 +276,36 @@
  		touchscreen-size-y = <272>;
  	};
  };
@@ -25,7 +25,8 @@
 +
 +&{/soc} {
 +	cedrus: video-codec@1c0e000 {
-+		compatible = "allwinner,suniv-f1c100s-video-engine",
++		compatible = "allwinner,suniv-f1c100s-cedar",
++			     "allwinner,suniv-f1c100s-video-engine",
 +			     "allwinner,sun8i-v3s-video-engine";
 +		reg = <0x01c0e000 0x1000>;
 +		clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>, <&ccu CLK_DRAM_VE>;
