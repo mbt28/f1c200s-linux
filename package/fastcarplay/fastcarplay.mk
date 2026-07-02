@@ -17,18 +17,22 @@ FASTCARPLAY_LICENSE_FILES = LICENSE
 FASTCARPLAY_DEPENDENCIES = \
 	ffmpeg \
 	host-pkgconf \
+	libcedarc \
 	libdrm \
 	libusb \
 	openssl \
 	sdl2 \
 	sdl2_ttf
 
-# USE_CEDRUS=1 swaps the avcodec Decoder for the mainline-cedrus CedrusDecoder
-# (ffmpeg V4L2-Request hwaccel -> tiled-NV12 dma-buf -> DEFE), blob-free.
+# Build BOTH HW decoders; the one used is chosen at runtime by the settings
+# (cedar-decode / cedrus-decode) to match /etc/ve-driver:
+#   USE_CEDAR=1  -> CedarDecoder  (libcedarc + /dev/cedar_dev) -- the working path
+#   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- research/broken
 define FASTCARPLAY_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) \
 		PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" \
 		HOST_XXD="/usr/bin/xxd" \
+		USE_CEDAR=1 \
 		USE_CEDRUS=1 \
 		BUILD_TYPE=release \
 		release
@@ -40,8 +44,11 @@ define FASTCARPLAY_INSTALL_TARGET_CMDS
 		PREFIX=/usr \
 		SYSCONFDIR=/etc \
 		install
-	# F1C200s blob-free preset: mainline cedrus (ffmpeg v4l2-request) + DEFE.
-	# The boot autorun launches this (settings_cedrus.txt, renderer=none).
+	# Ship both presets; the `carplay` alias picks the one matching /etc/ve-driver:
+	#   settings_cedar.txt  -> cedar-decode=true,  renderer=drm  (working)
+	#   settings_cedrus.txt -> cedrus-decode=true, renderer=none (research)
+	$(INSTALL) -D -m 0644 $(@D)/settings_cedar.txt \
+		$(TARGET_DIR)/etc/fastcarplay/settings_cedar.txt
 	$(INSTALL) -D -m 0644 $(@D)/settings_cedrus.txt \
 		$(TARGET_DIR)/etc/fastcarplay/settings_cedrus.txt
 endef
