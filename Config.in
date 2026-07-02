@@ -1,3 +1,4 @@
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/libudev-zero/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libcedarc/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/fastcarplay/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/cedar-decode-test/Config.in"

@@ -1,0 +1,21 @@
+config BR2_PACKAGE_LIBUDEV_ZERO
+	bool "libudev-zero"
+	depends on !BR2_STATIC_LIBS
+	help
+	  Daemonless drop-in replacement for libudev — provides the
+	  libudev API (and libudev.pc) without a udev daemon, so the
+	  device manager (mdev/devtmpfs) is unchanged.
+
+	  ffmpeg's v4l2-request hwaccel uses libudev to enumerate the
+	  /dev/mediaX decoder node.
+
+	  https://github.com/illiliti/libudev-zero
+
+comment "libudev-zero needs a toolchain w/ dynamic library"
+	depends on BR2_STATIC_LIBS
+
+# Vendored here because Buildroot <= 2026.05 predates the upstream
+# libudev-zero package (added on master afterwards). Kept standalone (no
+# BR2_PACKAGE_HAS_LIBUDEV virtual, which 2026.05 also lacks); ffmpeg depends
+# on it directly (see scripts/build.sh). Drop this when the pinned Buildroot
+# gains the package upstream.
