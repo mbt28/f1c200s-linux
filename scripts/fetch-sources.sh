@@ -10,6 +10,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../config.env
 source "$HERE/config.env"
 
+# Kernel/U-Boot versions are the defconfig's (single source of truth); read for the banner.
+def_val() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$HERE/configs/$DEFCONFIG"; }
+LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
+UBOOT_VERSION="$(def_val BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE)"
+
 # --- Buildroot ------------------------------------------------------------
 BR="$HERE/$BUILDROOT_DIR"
 if [ ! -d "$BR/.git" ]; then
@@ -20,7 +25,7 @@ fi
 echo ">>> checking out Buildroot $BUILDROOT_VERSION"
 git -C "$BR" fetch --depth 1 origin "$BUILDROOT_VERSION" 2>/dev/null || git -C "$BR" fetch --tags
 git -C "$BR" checkout -q "$BUILDROOT_VERSION" 2>/dev/null \
-	|| { echo "!! Buildroot tag $BUILDROOT_VERSION not found; staying on default branch"; }
+	|| { echo "!! Buildroot ref '$BUILDROOT_VERSION' not found -- fix BUILDROOT_VERSION in config.env"; exit 1; }
 
 # --- Cedar VE + ION driver (BSP decode path) ------------------------------
 CEDAR="$HERE/cedar/src"

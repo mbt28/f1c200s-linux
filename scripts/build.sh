@@ -14,7 +14,14 @@ source "$HERE/config.env"
 
 BR="$HERE/$BUILDROOT_DIR"
 OUT="$HERE/$OUTPUT_DIR"
+DEFCFG="$HERE/configs/$DEFCONFIG"
 [ -d "$BR" ] || { echo "!! Buildroot missing — run scripts/fetch-sources.sh first"; exit 1; }
+
+# Kernel/U-Boot versions come from the defconfig (the value Buildroot actually
+# uses) -- single source of truth, no config.env copy to drift out of sync.
+def_val() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$DEFCFG"; }
+LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
+UBOOT_VERSION="$(def_val BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE)"
 
 # Buildroot's ffmpeg.mk has no udev knob, but we force --enable-libudev (the
 # v4l2-request hwaccel enumerates /dev/mediaX via libudev). Without a declared
@@ -29,8 +36,12 @@ fi
 
 MAKE=(make -C "$BR" BR2_EXTERNAL="$HERE" O="$OUT")
 
-# First-time (or after config.env change): apply our defconfig.
-if [ ! -f "$OUT/.config" ]; then
+# (Re)apply the defconfig when .config is missing OR when the defconfig / config.env
+# is newer than it. Buildroot never regenerates .config from a defconfig on its own,
+# so without this a version bump (e.g. the 7.1.x move) would be silently ignored and
+# the stale kernel rebuilt. Applying the defconfig refreshes .config's mtime, so an
+# unchanged tree won't re-apply (and won't clobber a later `menuconfig`).
+if [ ! -f "$OUT/.config" ] || [ "$DEFCFG" -nt "$OUT/.config" ] || [ "$HERE/config.env" -nt "$OUT/.config" ]; then
 	echo ">>> applying $DEFCONFIG"
 	"${MAKE[@]}" "$DEFCONFIG"
 fi
