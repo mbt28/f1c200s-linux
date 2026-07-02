@@ -1,0 +1,26 @@
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts	2026-07-02 20:19:51.995296392 +0200
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts	2026-07-02 20:19:51.998252217 +0200
+@@ -308,3 +308,23 @@
+ 		status = "okay";
+ 	};
+ };
++
++/*
++ * ION heap for the Cedar (BSP) decode path: libcedarc allocates decode buffers
++ * via /dev/ion. The sunxi_ion driver (CONFIG_VIDEO_SUNXI_CEDAR_ION) binds this
++ * node and misc_register()s /dev/ion. Unused by mainline cedrus (which uses
++ * vb2-dma-contig / CMA directly), harmless to leave in for both.
++ */
++&{/} {
++	ion {
++		compatible = "allwinner,sunxi-ion";
++		heap_cma@0 {
++			compatible = "allwinner,cma";
++			heap-name = "cma";
++			heap-id = <0x4>;
++			heap-base = <0x0>;
++			heap-size = <0x0>;
++			heap-type = "ion_cma";
++		};
++	};
++};

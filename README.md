@@ -38,7 +38,8 @@ Config.in                  package menu
 configs/…_defconfig        the board defconfig (paths are $(BR2_EXTERNAL_CARPLAY_PATH)-relative)
 board/lctech/pi-f1c200s/   linux/uboot config fragments, genimage, post-build
 patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedrus DT ·
-                           0004 USB-OTG host · 0005 DEFE frontend · 0006 cedrus variant
+                           0004 USB-OTG host · 0005 DEFE frontend · 0006 cedrus variant ·
+                           0007 cedar ion heap (/dev/ion)
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
 package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun
