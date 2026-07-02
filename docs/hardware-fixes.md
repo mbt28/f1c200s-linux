@@ -27,8 +27,10 @@ patches/config but documented here so they are not re-discovered.
 
 ## Serial console
 - The board's USB-C serial is **UART1** (PA2/PA3, CH340). The DT aliases
-  `serial0 → uart1`, so the Linux console is `ttyS0`; U-Boot needs `CONS_INDEX=2`
-  (`patches/uboot/0001`, `uboot-sdcard.fragment`).
+  `serial0 → uart1`, so the Linux console is `ttyS0`. U-Boot's mainline
+  `lctech_pi_f1c200s` board already sets `CONS_INDEX=2` and ships the uart1 DT
+  (`suniv-f1c200s-lctech-pi`), so no U-Boot patch is needed; `uboot-sdcard.fragment`
+  only adds the SD bootargs/bootcmd.
 - Some **CH340/CH341** adapters stay **silent unless DTR/RTS are cleared** on open.
 
 ## USB (host ⇄ slave switch)
