@@ -16,6 +16,17 @@ BR="$HERE/$BUILDROOT_DIR"
 OUT="$HERE/$OUTPUT_DIR"
 [ -d "$BR" ] || { echo "!! Buildroot missing — run scripts/fetch-sources.sh first"; exit 1; }
 
+# Buildroot's ffmpeg.mk has no udev knob, but we force --enable-libudev (the
+# v4l2-request hwaccel enumerates /dev/mediaX via libudev). Without a declared
+# dependency, a clean parallel build can configure ffmpeg before libudev-zero is
+# staged -> "libudev not found using pkg-config". Inject the build-order dep.
+# (external.mk is included after package/*/*.mk, so it can't add this itself.)
+FFMK="$BR/package/ffmpeg/ffmpeg.mk"
+if [ -f "$FFMK" ] && ! grep -q 'f1c200s-udev-fix' "$FFMK"; then
+	echo ">>> patch ffmpeg.mk: add libudev-zero build-order dependency"
+	sed -i '/eval .*autotools-package/i FFMPEG_DEPENDENCIES += $(if $(BR2_PACKAGE_LIBUDEV_ZERO),libudev-zero) # f1c200s-udev-fix' "$FFMK"
+fi
+
 MAKE=(make -C "$BR" BR2_EXTERNAL="$HERE" O="$OUT")
 
 # First-time (or after config.env change): apply our defconfig.

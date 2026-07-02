@@ -46,8 +46,7 @@ BR2_PACKAGE_HOST_SUNXI_TOOLS=y
 # --- Mainline cedrus HW decode (blob-free) ---
 # libdrm: cedrus decode -> sun4i DEFE atomic NV12+tiled plane (zero-copy KMS).
 BR2_PACKAGE_LIBDRM=y
-# rz/sz (ZMODEM) for transferring files over the serial console (no SD removal).
-BR2_PACKAGE_LRZSZ=y
+
 # FastCarPlay with the mainline-cedrus integration (CedrusDecoder, USE_CEDRUS=1).
 # Enabling CXX forces a one-time full toolchain rebuild; the package pulls in
 # SDL2/openssl/libusb/ffmpeg (v4l2-request hwaccel). Needs USB host for the dongle.
