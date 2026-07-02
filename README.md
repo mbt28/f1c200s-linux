@@ -53,11 +53,11 @@ Upstream sources land in `buildroot/`, `cedar/src/`, `output/` — all git-ignor
 ## Choosing the decoder (both are built)
 
 At boot, `/etc/init.d/S20ve-select` reads `/etc/ve-driver` and modprobes the chosen
-engine:
+engine. **Default is `cedar`** (the working, colour-correct decoder):
 
 ```sh
-echo cedar  > /etc/ve-driver     # working, colour-correct
-echo cedrus > /etc/ve-driver     # research (see docs/cedrus-status.md)
+echo cedar  > /etc/ve-driver     # default — working, colour-correct (/dev/cedar_dev + /dev/ion)
+echo cedrus > /etc/ve-driver     # research, decode broken (see docs/cedrus-status.md)
 ```
 
 ## USB: host (default) ⇄ slave
