@@ -11,8 +11,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/config.env"
 
 # Kernel/U-Boot versions are the defconfig's (single source of truth); read for the banner.
-def_val() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$HERE/configs/$DEFCONFIG"; }
-LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
+DEFCFG="$HERE/configs/$DEFCONFIG"
+def_val() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$DEFCFG"; }
+# Kernel version (banner only): parse the pinned tarball URL, else CUSTOM_VERSION_VALUE.
+LINUX_VERSION="$(sed -n 's|^BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=.*/linux-\([0-9][0-9.]*\)\.tar.*|\1|p' "$DEFCFG")"
+[ -n "$LINUX_VERSION" ] || LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
 UBOOT_VERSION="$(def_val BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE)"
 
 # --- Buildroot ------------------------------------------------------------

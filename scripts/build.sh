@@ -20,7 +20,10 @@ DEFCFG="$HERE/configs/$DEFCONFIG"
 # Kernel/U-Boot versions come from the defconfig (the value Buildroot actually
 # uses) -- single source of truth, no config.env copy to drift out of sync.
 def_val() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$DEFCFG"; }
-LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
+# Kernel version (banner only): parse the pinned tarball URL (.../linux-X.Y.Z.tar.*),
+# else CUSTOM_VERSION_VALUE if the defconfig pins a plain custom version instead.
+LINUX_VERSION="$(sed -n 's|^BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=.*/linux-\([0-9][0-9.]*\)\.tar.*|\1|p' "$DEFCFG")"
+[ -n "$LINUX_VERSION" ] || LINUX_VERSION="$(def_val BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)"
 UBOOT_VERSION="$(def_val BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE)"
 
 # Buildroot's ffmpeg.mk has no udev knob, but we force --enable-libudev (the

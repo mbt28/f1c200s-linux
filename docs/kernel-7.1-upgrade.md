@@ -7,14 +7,22 @@ through FastCarPlay, runtime-selectable via `/etc/ve-driver` (default cedar).
 Work on a branch `kernel-7.1`; keep `main` at v0.1.0 (known-good) until 7.1.2 is
 validated on hardware, then merge + tag.
 
-## Phase 0 — feasibility & prep
-- [ ] Branch `kernel-7.1` from `main`.
-- [ ] Confirm the pinned Buildroot can build a 7.1 kernel: needs a matching
-      `BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_7_1` (or set headers = same as kernel).
-      If Buildroot 2026.05 doesn't know 7.1 → bump `config.env` `BUILDROOT_VERSION`
-      to a release that does. Confirm the ARM `sunxi` base defconfig still exists.
-- [ ] Bump `config.env` `LINUX_VERSION` + defconfig `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE`
-      → `7.1.2`, and the `HOST_LINUX_HEADERS_CUSTOM_*` symbol.
+## Phase 0 — feasibility & prep  ✅ DONE (config validated offline via `make defconfig`)
+- [x] Branch `kernel-7.1` from `main` (both f1c200s-linux + mbt28/cedar).
+- [x] Buildroot 2026.05 **can** build a 7.1 kernel — no Buildroot bump needed:
+      - its linux-headers choice caps at `CUSTOM_7_0` (no `_7_1`), but the **kernel** is
+        pinned via `CUSTOM_TARBALL` = a `git.kernel.org` stable-git **snapshot** URL
+        (retention-proof; any version builds).
+      - **headers = `CUSTOM_7_0`** → `BR2_TOOLCHAIN_HEADERS_AT_LEAST="7.0"`, valid for a
+        7.1.2 kernel (headers ≤ kernel). Mirrors the working v0.1.0 pattern (`CUSTOM_6_6`
+        headers + `CUSTOM_TARBALL` kernel).
+- [x] defconfig bumped to 7.1.2: `CUSTOM_TARBALL_LOCATION` → `linux-7.1.2` snapshot;
+      headers `CUSTOM_6_6` → `CUSTOM_7_0`. Removed the redundant `CUSTOM_VERSION` lines
+      (killed the "override: changes choice state" warning); the tarball URL is now the
+      **single** version source and the scripts derive the banner from it.
+- **Verify at build time** (needs kernel.org / a network): the 7.1.2 snapshot + the 7.0
+  headers download, and the ARM **`sunxi`** base defconfig still exists in 7.1.2.
+  If `sunxi` is gone/renamed, that's a Phase 1 fix (defconfig name).
 
 ## Phase 1 — kernel builds, patches rebased
 Rebase `patches/linux-lctech/*` onto 7.1.2 (expect offsets/rejects; some may be upstream):
