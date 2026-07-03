@@ -13,11 +13,15 @@ validated on hardware, then merge + tag.
       - its linux-headers choice caps at `CUSTOM_7_0` (no `_7_1`), but the **kernel** is
         pinned via `CUSTOM_TARBALL` = a `git.kernel.org` stable-git **snapshot** URL
         (retention-proof; any version builds).
-      - **headers = `CUSTOM_7_0`** → `BR2_TOOLCHAIN_HEADERS_AT_LEAST="7.0"`, valid for a
-        7.1.2 kernel (headers ≤ kernel). Mirrors the working v0.1.0 pattern (`CUSTOM_6_6`
-        headers + `CUSTOM_TARBALL` kernel).
+      - **headers = `CUSTOM_7_0`** (`AT_LEAST=7.0`) paired with **GCC 15.2.0**
+        (`BR2_GCC_VERSION_15_X`). **LESSON:** kernel headers must be a version the
+        toolchain's GCC supports — GCC 14.3.0's bundled **libsanitizer** can't compile
+        against 7.0 headers (it hardcodes kernel structs newer than itself), so 7.0
+        headers require GCC 15+. (Valid alternative, not taken: keep GCC 14.3.0 + 6.6
+        headers — fine since headers ≤ kernel is only a userspace floor.)
 - [x] defconfig bumped to 7.1.2: `CUSTOM_TARBALL_LOCATION` → `linux-7.1.2` snapshot;
-      headers `CUSTOM_6_6` → `CUSTOM_7_0`. Removed the redundant `CUSTOM_VERSION` lines
+      headers `CUSTOM_6_6` → `CUSTOM_7_0`; GCC `14.3.0` → `15.2.0`. Removed the redundant
+      `CUSTOM_VERSION` lines
       (killed the "override: changes choice state" warning); the tarball URL is now the
       **single** version source and the scripts derive the banner from it.
 - **Verify at build time** (needs kernel.org / a network): the 7.1.2 snapshot + the 7.0

@@ -1,4 +1,7 @@
 BR2_arm=y
+# GCC 15.x: its libsanitizer supports 7.x kernel headers (14.3.0's did not, which
+# is why 7.0 headers need this). Required to pair 7.0 headers with a 7.1.2 kernel.
+BR2_GCC_VERSION_15_X=y
 BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_7_0=y
 BR2_TARGET_GENERIC_HOSTNAME="lctech-f1c200s"
 BR2_TARGET_GENERIC_ISSUE="Welcome to CarPlay Linux (Lctech Pi F1C200s)"
