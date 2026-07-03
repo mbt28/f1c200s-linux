@@ -28,16 +28,20 @@ validated on hardware, then merge + tag.
   headers download, and the ARM **`sunxi`** base defconfig still exists in 7.1.2.
   If `sunxi` is gone/renamed, that's a Phase 1 fix (defconfig name).
 
-## Phase 1 — kernel builds, patches rebased
+## Phase 1 — kernel builds, patches rebased  ✅ series verified on 7.1 (2026-07-03)
 Rebase `patches/linux-lctech/*` onto 7.1.2 (expect offsets/rejects; some may be upstream):
-- [ ] DTS: 0001 (LCD/GT911), 0003 (cedar+cedrus video-codec node, **incl. the
-      `allwinner,suniv-f1c100s-cedar` compatible**), 0004 (USB dr_mode=host),
-      0007 (ion heap). Base `suniv-f1c200s-lctech-pi.dts` should still be mainline —
-      likely apply with offset; re-diff if the base structure moved.
-- [ ] 0002 VE clock → PLL_VE (`ccu-suniv-f1c100s.c`): check if fixed upstream; else rebase.
-- [ ] 0005 DEFE frontend EN bit31 (`sun4i_frontend.c`): check upstream; else rebase.
-- [ ] 0006 cedrus suniv variant (`cedrus.c`): **likely merged upstream by 7.1** — if so,
-      DROP the patch; else rebase.
+- [x] DTS: 0001 (LCD/GT911), 0003 (cedar+cedrus video-codec node, **incl. the
+      `allwinner,suniv-f1c100s-cedar` compatible**; V3s fallback DROPPED — wrong VE
+      class), 0004 (USB dr_mode=host), 0010 (ion heap, was 0007). All apply clean
+      on 7.1 (verified against the 7.1 git tree; 7.1.2 delta expected nil).
+- [x] 0002 VE clock → PLL_VE: NOT fixed upstream; replaced with a better patch
+      (pll-ve + **CLK_SET_RATE_PARENT** — fixes the VE stuck at PLL_VE's 210 MHz
+      power-on default).
+- [x] 0005 DEFE frontend: NOT upstream; applies with 1-line offsets on 7.1.
+- [x] 0006 cedrus suniv variant: NOT merged upstream. Old V3s-modelled patch
+      REPLACED by the root-cause series 0006-0009 from `../cedrus-development/`
+      (external deblk/intra-pred buffers, MB-position reset, VE_MODE DRAM quirk,
+      A10-modelled variant without UNTILED). See ANALYSIS.md there.
 - **Done when:** `make linux` builds and `suniv-f1c200s-lctech-pi.dtb` contains both
       `allwinner,suniv-f1c100s-cedar` and `allwinner,sunxi-ion`.
 

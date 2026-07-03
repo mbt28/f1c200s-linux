@@ -11,8 +11,10 @@ and selectable at boot:
 
 - **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
   working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). Builds and runs but the VE
-  reconstruction is broken on this part — research track (`docs/cedrus-status.md`).
+- **cedrus** — mainline, blob-free (V4L2 stateless). Root cause of the broken
+  reconstruction found 2026-07-03 (VE has no deblk/intra-pred SRAM; fix = patches
+  0006-0009, from `../cedrus-development/`) — **pending hardware validation**
+  (`docs/cedrus-status.md`).
 
 ## Quickstart
 
@@ -37,9 +39,11 @@ external.desc / .mk        BR2_EXTERNAL "CARPLAY"; injects cedar into the kernel
 Config.in                  package menu
 configs/…_defconfig        the board defconfig (paths are $(BR2_EXTERNAL_CARPLAY_PATH)-relative)
 board/lctech/pi-f1c200s/   linux/uboot config fragments, genimage, post-build
-patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedrus DT ·
-                           0004 USB-OTG host · 0005 DEFE frontend · 0006 cedrus variant ·
-                           0007 cedar ion heap (/dev/ion)
+patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE (+SET_RATE_PARENT) ·
+                           0003 cedar+cedrus VE DT · 0004 USB-OTG host · 0005 DEFE frontend ·
+                           0006-0009 cedrus suniv fix (ext deblk/intra-pred bufs, MB reset,
+                           VE_MODE DRAM quirk, suniv variant — see
+                           ../cedrus-development/ANALYSIS.md) · 0010 cedar ion heap
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
 package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun

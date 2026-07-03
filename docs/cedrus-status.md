@@ -1,4 +1,18 @@
-# Cedrus (mainline, blob-free) status on the F1C200s — NOT working
+# Cedrus (mainline, blob-free) status on the F1C200s — root cause found, fix pending HW test
+
+**UPDATE 2026-07-03 — the register-level diff happened (via decompiled BSP blobs)
+and the mystery below is solved.** The suniv VE (revision 0x1663) is an
+A10-generation engine with **no internal SRAM for the deblock/intra-prediction
+working data**; cedrus's `VE_BUF_CTRL = INT_SRAM` (≤2048 px) makes intra
+prediction read dead storage → reconstruction = clip(residual): sparse luma AND
+the zero-centred "signed" chroma are ONE bug. Fix + evidence:
+`../../cedrus-development/` (ANALYSIS.md + patch series), integrated here as
+`patches/linux-lctech/0006..0009` (+ new 0002 clock patch — the 210 MHz reading
+was PLL_VE's power-on default; the gate needed CLK_SET_RATE_PARENT). The old
+V3s-modelled variant patch is gone (suniv is NOT V3s-class; UNTILED removed).
+Everything below is the pre-root-cause investigation, kept for history.
+
+---
 
 **Summary:** the blob-free pipeline (mainline cedrus V4L2 stateless H.264 →
 ffmpeg v4l2-request → sun4i DEFE) **builds and runs**, but the suniv VE produces a
