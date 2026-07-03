@@ -1,5 +1,14 @@
 include $(sort $(wildcard $(BR2_EXTERNAL_CARPLAY_PATH)/package/*/*.mk))
 
+# gcc 14.3's libsanitizer unconditionally includes <linux/scc.h>, which the
+# kernel removed; with the toolchain on CUSTOM_7_0 headers (the 7.1.x move)
+# host-gcc-final dies with "linux/scc.h: No such file or directory". Nothing
+# on this ARMv5 appliance uses sanitizers -- drop the target lib entirely.
+# (external.mk is included after Buildroot's package/*.mk, so this append
+# reaches the gcc configure; same pattern Buildroot itself uses for
+# musl/sparc/thumb1.)
+HOST_GCC_COMMON_CONF_OPTS += --disable-libsanitizer
+
 # >>> CEDAR INTEGRATION (peteallenm VE + ION) >>>
 # Inject the Allwinner Cedar VideoEngine + ION driver into the kernel staging
 # tree before the kernel is configured, so its Kconfig symbols become
