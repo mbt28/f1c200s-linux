@@ -111,7 +111,9 @@ CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 #   / p (regs) / b (reboot). picocom: C-a C-\ sends BREAK; minicom: C-a f.
 # - Soft-lockup + hung-task detectors print culprits to serial on their own.
 # - DEBUG_ATOMIC_SLEEP catches sleep-in-atomic in the new decode paths.
+CONFIG_DEBUG_KERNEL=y
 CONFIG_MAGIC_SYSRQ=y
+CONFIG_LOCKUP_DETECTOR=y
 CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1
 CONFIG_MAGIC_SYSRQ_SERIAL=y
 CONFIG_SOFTLOCKUP_DETECTOR=y
