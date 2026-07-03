@@ -1,0 +1,11 @@
+0001-lctech-f1c200s-480x272-lcd-and-gt911-touch.patch
+0002-clk-sunxi-ng-suniv-reparent-ve-clock-to-pll-ve.patch
+0003-lctech-cedrus-video-engine-dt.patch
+0004-lctech-f1c200s-usb-otg-host-mode.patch
+0005-drm-sun4i-frontend-suniv-f1c200s-defe-support.patch
+0006-media-cedrus-h264-support-VEs-without-internal-deblk.patch
+0007-media-cedrus-h264-reset-macroblock-position-on-new-f.patch
+0008-media-cedrus-make-VE_MODE-DRAM-configuration-variant.patch
+0009-media-cedrus-add-suniv-F1C100s-variant.patch
+0010-lctech-cedar-ion-heap.patch
+0011-media-cedrus-h264-bound-the-VLD-busy-poll-in-skip-bi.patch
