@@ -120,3 +120,7 @@ CONFIG_SOFTLOCKUP_DETECTOR=y
 CONFIG_DETECT_HUNG_TASK=y
 CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=30
 CONFIG_DEBUG_ATOMIC_SLEEP=y
+# memtest=N bootarg: early pattern test over free DRAM (N passes). Probes the
+# suspicion that a DRAM window (e.g. top-of-RAM where CMA lands) is marginal
+# under this U-Boot's DDR init. Zero cost unless memtest= is passed.
+CONFIG_MEMTEST=y
