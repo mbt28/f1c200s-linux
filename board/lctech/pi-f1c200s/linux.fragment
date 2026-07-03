@@ -124,3 +124,15 @@ CONFIG_DEBUG_ATOMIC_SLEEP=y
 # suspicion that a DRAM window (e.g. top-of-RAM where CMA lands) is marginal
 # under this U-Boot's DDR init. Zero cost unless memtest= is passed.
 CONFIG_MEMTEST=y
+# ramoops/pstore (paired with the DTS carveout in patch 0012): console log +
+# optional function trace survive the watchdog reset. FUNCTION_TRACER is the
+# pstore-ftrace backend; zero overhead until record_ftrace is switched on.
+CONFIG_PSTORE=y
+CONFIG_PSTORE_RAM=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_FTRACE=y
+CONFIG_FUNCTION_TRACER=y
+# Watchdog: auto-recover from the silent wedges (userspace kicker in inittab
+# or run: busybox watchdog -T 16 -t 5 /dev/watchdog).
+CONFIG_WATCHDOG=y
+CONFIG_SUNXI_WATCHDOG=y
