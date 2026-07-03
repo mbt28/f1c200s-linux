@@ -45,22 +45,31 @@ Rebase `patches/linux-lctech/*` onto 7.1.2 (expect offsets/rejects; some may be 
 - **Done when:** `make linux` builds and `suniv-f1c200s-lctech-pi.dtb` contains both
       `allwinner,suniv-f1c100s-cedar` and `allwinner,sunxi-ion`.
 
-## Phase 2 — cedar BSP driver port  (HIGHEST RISK)
+## Phase 2 — cedar BSP driver port  ✅ compiles on 7.1.2 (2026-07-03; HW pending)
 BSP drivers rot fast across a major kernel jump.
-- [ ] Port `mbt28/cedar` (`ve/cedar_ve.c` + `ion/`) to 7.1 kernel APIs — expect breakage
-      in dma_buf / ion / v4l2 / misc-device / of / timer APIs. Do it on a `kernel-7.1`
-      branch of `mbt28/cedar`; the `external.mk` hook injects whatever `cedar/src` holds.
-- [ ] Verify `/dev/cedar_dev` + `/dev/ion` on 7.1. libcedarc userspace blobs are
-      ARMv5/kernel-agnostic — no change expected there.
+- [x] Port `mbt28/cedar` (`ve/cedar_ve.c` + `ion/`) to 7.1 kernel APIs — actual breakage
+      found+fixed on the `kernel-7.1` branch (all LINUX_VERSION_CODE-guarded, still
+      builds on 6.6): void platform `.remove` (≥6.11), `no_llseek` removal (≥6.12),
+      `MODULE_IMPORT_NS("string")` (≥6.13), explicit `<linux/plist.h>` (7.x header
+      cleanup), `zap_page_range_single` → `zap_vma()` (7.x), and the 6.7+ shrinker API
+      (`shrinker_alloc`/`shrinker_register`, private_data instead of container_of).
+      `config.env` now pins `CEDAR_REF="kernel-7.1"`.
+- [ ] Verify `/dev/cedar_dev` + `/dev/ion` on 7.1 **on hardware**. libcedarc userspace
+      blobs are ARMv5/kernel-agnostic — no change expected there.
 
-## Phase 3 — cedrus + ffmpeg on 7.1
-- [ ] Verify mainline cedrus decodes on 7.1 (suniv variant + V4L2 stateless uAPI). If the
-      sparse-reconstruction quirk resurfaces, see `docs/cedrus-status.md`.
-- [ ] `patches/ffmpeg/*` (v4l2-request hwaccel + buffer right-size): the stateless uAPI
-      may have shifted in 7.1 → update the hwaccel patch if the build/decoded output breaks.
+## Phase 3 — cedrus + ffmpeg on 7.1  ✅ builds (2026-07-03; HW pending)
+- [x] cedrus builds on 7.1 with the new root-cause fix series (0006-0009, see
+      `docs/cedrus-status.md` + `../cedrus-development/`); module carries the
+      `allwinner,suniv-f1c100s-video-engine` of-alias, vermagic 7.1.2 ARMv5.
+- [x] `patches/ffmpeg/*` (v4l2-request hwaccel + buffer right-size): apply clean
+      (offsets only) — stateless uAPI unchanged; ffmpeg builds.
+- [ ] **On hardware:** verify the reconstruction fix (expect sparse-luma/green gone;
+      remove the XOR-0x80 chroma workaround from any test tooling first).
 
 ## Phase 4 — integrate, build, verify, release
-- [ ] Full clean-room build → `sdcard.img`.
+- [x] Full clean-room build → `sdcard.img` (2026-07-03, `output/images/sdcard.img`,
+      kernel 7.1.2 + U-Boot 2024.01; needed `--disable-libsanitizer` for the cross
+      gcc — gcc 14.3's libsanitizer includes the removed `<linux/scc.h>`).
 - [ ] On hardware: both `/etc/ve-driver` modes; `carplay` shows video on cedar AND cedrus.
 - [ ] Tag `v0.2.0`; merge `kernel-7.1` → `main`.
 
