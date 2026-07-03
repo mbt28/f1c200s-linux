@@ -130,8 +130,10 @@ CONFIG_MEMTEST=y
 CONFIG_PSTORE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_PSTORE_CONSOLE=y
-CONFIG_PSTORE_FTRACE=y
+CONFIG_FTRACE=y
 CONFIG_FUNCTION_TRACER=y
+CONFIG_PSTORE_FTRACE=y
+CONFIG_DYNAMIC_FTRACE=y
 # Watchdog: auto-recover from the silent wedges (userspace kicker in inittab
 # or run: busybox watchdog -T 16 -t 5 /dev/watchdog).
 CONFIG_WATCHDOG=y
