@@ -19,7 +19,7 @@ and selectable at boot:
 | branch | kernel | state |
 |---|---|---|
 | `main` | 6.6.143 | **this branch** — v0.1.0 baseline; cedar validated, cedrus pre-fix (broken) |
-| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus reconstruction fix (colour-correct) — clone with `-b cedrus-6.6-backport` |
+| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus fix — **hardware-validated 2026-07-04 (colour-correct, no freezes)**; clone with `-b cedrus-6.6-backport` |
 | `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open issue: sporadic freezes — clone with `-b kernel-7.1` |
 
 ## Quickstart
