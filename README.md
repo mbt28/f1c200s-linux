@@ -11,10 +11,11 @@ and selectable at boot:
 
 - **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
   working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). Root cause of the broken
-  reconstruction found 2026-07-03 (VE has no deblk/intra-pred SRAM; fix = patches
-  0006-0009, from `../cedrus-development/`) — **pending hardware validation**
-  (`docs/cedrus-status.md`).
+- **cedrus** — mainline, blob-free (V4L2 stateless). Reconstruction root cause
+  found and fixed 2026-07-03 (VE has no deblk/intra-pred SRAM; patches 0006-0009,
+  from `../cedrus-development/`) — **colour-correct on hardware**. Open issue:
+  sporadic full-system freezes under sustained decode on 7.1.x, affecting BOTH
+  decoders (not the cedrus fix; triage notes in `docs/cedrus-status.md`).
 
 ## Quickstart
 
@@ -22,7 +23,7 @@ and selectable at boot:
 git clone https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
-scripts/build.sh                  # downloads Linux 6.6.143 + U-Boot 2024.01, builds
+scripts/build.sh                  # downloads Linux 7.1.2 + U-Boot 2024.01, builds
 sudo dd if=output/images/sdcard.img of=/dev/sdX bs=1M conv=fsync   # your SD device!
 ```
 
@@ -62,7 +63,7 @@ engine. **Default is `cedar`** (the working, colour-correct decoder):
 
 ```sh
 echo cedar  > /etc/ve-driver     # default — working, colour-correct (/dev/cedar_dev + /dev/ion)
-echo cedrus > /etc/ve-driver     # research, decode broken (see docs/cedrus-status.md)
+echo cedrus > /etc/ve-driver     # blob-free, colour-correct (freeze issue open, see docs)
 ```
 
 ## USB: host (default) ⇄ slave
@@ -111,5 +112,5 @@ board gotchas (CMA boot ceiling, DEFE EN bit31, CH340 console, ION cache).
 
 ## Versions
 
-Linux **6.6.143** (base defconfig `sunxi`) · Buildroot **2026.05** · U-Boot
-**2024.01** — all pinned in `config.env` / the defconfig.
+Linux **7.1.2** (base defconfig `sunxi`; branch `kernel-7.1`) · Buildroot
+**2026.05** · U-Boot **2024.01** — all pinned in `config.env` / the defconfig.
