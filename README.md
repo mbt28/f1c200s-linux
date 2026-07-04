@@ -17,10 +17,18 @@ and selectable at boot:
   sporadic full-system freezes under sustained decode on 7.1.x, affecting BOTH
   decoders (not the cedrus fix; triage notes in `docs/cedrus-status.md`).
 
+## Branches (pick one — the clone below already does)
+
+| branch | kernel | state |
+|---|---|---|
+| `main` | 6.6.143 | v0.1.0 baseline — cedar validated; cedrus pre-fix (broken) |
+| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus reconstruction fix (colour-correct) |
+| `kernel-7.1` | 7.1.2 | **this branch** — 7.1 port, same fix; open issue: sporadic freezes under decode |
+
 ## Quickstart
 
 ```sh
-git clone https://github.com/mbt28/f1c200s-linux.git
+git clone -b kernel-7.1 https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
 scripts/build.sh                  # downloads Linux 7.1.2 + U-Boot 2024.01, builds
