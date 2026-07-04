@@ -61,6 +61,10 @@ BR2_PACKAGE_LIBUDEV_ZERO=y
 # Dropbear SSH server for the dev loop: scp cedrus.ko + ssh-run tests over the
 # USB-hub DM9601 ethernet, no reflashing. Key auth via overlay authorized_keys.
 BR2_PACKAGE_DROPBEAR=y
+# Boot splash on the LCD: started by rootfs-overlay/etc/init.d/S00psplash as
+# early as possible, dismissed by the `carplay` launcher (psplash-write QUIT).
+# Custom art: set BR2_PACKAGE_PSPLASH_IMAGE to a PNG path.
+BR2_PACKAGE_PSPLASH=y
 BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 

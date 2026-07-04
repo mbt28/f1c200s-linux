@@ -5,4 +5,4 @@
 # `carplay` uses the settings preset matching the active VE driver: cedar ->
 # settings_cedar.txt (CedarDecoder, working), cedrus -> settings_cedrus.txt.
 # $(...) is expanded at invocation, so it tracks /etc/ve-driver at run time.
-alias carplay='SDL_AUDIODRIVER=dummy fastcarplay /etc/fastcarplay/settings_$(tr -dc a-z < /etc/ve-driver 2>/dev/null).txt'
+alias carplay='psplash-write QUIT 2>/dev/null; SDL_AUDIODRIVER=dummy fastcarplay /etc/fastcarplay/settings_$(tr -dc a-z < /etc/ve-driver 2>/dev/null).txt'

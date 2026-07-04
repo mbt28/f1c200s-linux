@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sat, 4 Jul 2026 00:00:00 +0000
+Subject: [PATCH] lctech_pi_f1c200s: enable the 480x272 LCD
+
+Enable the sunxi DE1 video console on the board's 4.3" 480x272 panel
+(QD43003C0-40 class). Timings match the Linux panel-simple entry the
+board's DT uses: 9 MHz pixel clock, H 8/4/40 (front/sync/back),
+V 8/4/40, both syncs active low (sync:0), 18-bit RGB666 bus.
+
+The backlight on PE6 is a plain enable GPIO (active high) - the same
+way the kernel drives it via gpio-backlight - so it is configured as
+VIDEO_LCD_BL_EN rather than a PWM output.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ configs/lctech_pi_f1c200s_defconfig | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/configs/lctech_pi_f1c200s_defconfig
++++ b/configs/lctech_pi_f1c200s_defconfig
+@@ -6,7 +6,9 @@
+ CONFIG_MACH_SUNIV=y
+ CONFIG_DRAM_ZQ=0
+ CONFIG_SUNXI_MINIMUM_DRAM_MB=64
+-# CONFIG_VIDEO_SUNXI is not set
++CONFIG_VIDEO_SUNXI=y
++CONFIG_VIDEO_LCD_MODE="x:480,y:272,depth:18,pclk_khz:9000,le:40,ri:8,up:40,lo:8,hs:4,vs:4,sync:0,vmode:0"
++CONFIG_VIDEO_LCD_BL_EN="PE6"
+ CONFIG_MTD=y
+ CONFIG_CONS_INDEX=2
+ CONFIG_SPI=y
+-- 
+2.43.0
