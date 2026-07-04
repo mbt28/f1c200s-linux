@@ -1,0 +1,19 @@
+#!/bin/sh
+# Boot splash on the LCD (/dev/fb0, DRM fbdev emulation) as early in rcS as
+# possible. The text console never touches the panel (FRAMEBUFFER_CONSOLE is
+# off), so the splash owns the screen until FastCarPlay takes over -- the
+# `carplay` launcher dismisses it with `psplash-write QUIT`.
+# psplash's FIFO lives in $TMPDIR (default /tmp, mounted by inittab's mount -a).
+
+case "$1" in
+start)
+	[ -e /dev/fb0 ] || exit 0
+	psplash -n &
+	;;
+stop)
+	psplash-write "QUIT" 2>/dev/null
+	;;
+*)
+	echo "Usage: $0 {start|stop}"
+	;;
+esac
