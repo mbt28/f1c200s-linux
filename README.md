@@ -21,8 +21,8 @@ and selectable at boot:
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | **this branch** — **v0.1.1**: cedar + colour-correct cedrus, both hardware-validated (cedrus fix merged 2026-07-04) |
-| `cedrus-6.6-backport` | 6.6.143 | merged into main at v0.1.1 (historical) |
+| `main` | 6.6.143 | **this branch — THE branch**: stable 6.6, cedrus default, both decoders hardware-validated |
+| `cedrus-6.6-backport` | 6.6.143 | **deprecated** — switch your checkout to `main` |
 | `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
 
 ## Quickstart
@@ -66,11 +66,11 @@ Upstream sources land in `buildroot/`, `cedar/src/`, `output/` — all git-ignor
 ## Choosing the decoder (both are built)
 
 At boot, `/etc/init.d/S20ve-select` reads `/etc/ve-driver` and modprobes the chosen
-engine. **Default is `cedar`** (the working, colour-correct decoder):
+engine. **Default is `cedrus`** (mainline, blob-free, colour-correct):
 
 ```sh
-echo cedar  > /etc/ve-driver     # default — working, colour-correct (/dev/cedar_dev + /dev/ion)
-echo cedrus > /etc/ve-driver     # blob-free, colour-correct (fix backported from kernel-7.1)
+echo cedrus > /etc/ve-driver     # default — blob-free mainline decoder (/dev/video0)
+echo cedar  > /etc/ve-driver     # Allwinner BSP fallback (/dev/cedar_dev + /dev/ion)
 ```
 
 ## USB: host (default) ⇄ slave
@@ -87,9 +87,18 @@ To use **slave/gadget** instead (peripheral + `g_ether`: one Type-C cable = powe
 a `usb0` link to a dev host, no adapter), revert patch 0004 or set
 `dr_mode = "peripheral"`/`"otg"`; `/etc/init.d/S42usb-gadget` then brings up `usb0`.
 
-## Remote access (SSH)
+## Networking & remote access (SSH) — disabled by default
 
-Dropbear (key auth) is enabled — put your public key in
+Networking is **opt-in**: nothing (USB ethernet, usb-gadget, dropbear) starts
+at boot. Enable it on the running board — the choice persists across reboots:
+
+```sh
+net on       # bring up eth0/usb0 + start dropbear (persists via /etc/network-enabled)
+net off      # stop everything and disable again
+net status
+```
+
+Dropbear uses key auth — put your public key in
 `rootfs-overlay/root/.ssh/authorized_keys` **before building**.
 
 **Host mode + USB-Ethernet adapter (default):** plug the adapter into the OTG port;
@@ -116,6 +125,21 @@ works over the serial console.
 
 See `docs/hardware-fixes.md` for the OTG `dr_mode` switch and the rest of the
 board gotchas (CMA boot ceiling, DEFE EN bit31, CH340 console, ION cache).
+
+## Boot splash (runtime-selectable)
+
+Ten themes ship in `/etc/splash/` (sources + generator in
+`board/lctech/pi-f1c200s/splash-themes/`). Pick one **on the board** — it
+persists and shows from the next boot:
+
+```sh
+ls /etc/splash/                                   # the theme list
+echo 03-tux > /etc/splash-theme                   # select (survives reboot)
+zcat /etc/splash/03-tux.fb.gz > /dev/fb0          # instant preview, no reboot
+```
+
+Themes are raw 480x272 framebuffer dumps blitted by `S00splash`; no rebuild is
+ever needed to switch.
 
 ## Versions
 
