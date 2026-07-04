@@ -11,19 +11,19 @@ and selectable at boot:
 
 - **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
   working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). **Colour-correct**: the broken
+- **cedrus** — mainline, blob-free (V4L2 stateless). **Working — hardware-validated
+  on this branch (2026-07-04): colour-correct decode, no freezes.** The broken
   reconstruction was root-caused 2026-07-03 (the suniv VE has no internal SRAM for
   the H.264 deblock/intra-pred working data; the old variant was also wrongly
-  modelled on the V3s) and fixed by patches 0006-0009, backported from the
-  `kernel-7.1` branch and hardware-validated there (`docs/cedrus-status.md`).
+  modelled on the V3s) and fixed by patches 0006-0009 (`docs/cedrus-status.md`).
 
 ## Branches (pick one — the clone below already does)
 
 | branch | kernel | state |
 |---|---|---|
 | `main` | 6.6.143 | v0.1.0 baseline — cedar validated; cedrus pre-fix (broken) |
-| `cedrus-6.6-backport` | 6.6.143 | **this branch** — main + the cedrus reconstruction fix |
-| `kernel-7.1` | 7.1.2 | 7.1 port, same fix; open issue: sporadic freezes under decode |
+| `cedrus-6.6-backport` | 6.6.143 | **this branch** — main + the cedrus fix; **hardware-validated 2026-07-04 (colour-correct, no freezes)** |
+| `kernel-7.1` | 7.1.2 | 7.1 port, same fix; open: freezes under decode — a 7.1-specific regression (this branch is freeze-free with identical patches) |
 
 ## Quickstart
 

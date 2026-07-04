@@ -1,4 +1,9 @@
-# Cedrus (mainline, blob-free) status on the F1C200s — FIXED (backport)
+# Cedrus (mainline, blob-free) status on the F1C200s — WORKING
+
+**VALIDATED 2026-07-04 on F1C200s hardware, this branch's 6.6.143 image:
+colour-correct cedrus decode, no lock-ups.** (The freezes seen on the 7.1.x
+branch do not occur here with identical cedrus patches — they are a 7.1
+base-kernel regression, tracked on the `kernel-7.1` branch.)
 
 **UPDATE 2026-07-04 — root cause found and fixed; this branch carries the
 backport.** The suniv VE (revision 0x1663, read from VE_VERSION) is an
