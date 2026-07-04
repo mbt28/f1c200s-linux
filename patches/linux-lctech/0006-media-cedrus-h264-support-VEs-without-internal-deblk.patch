@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mbt28 <btekbas@gmail.com>
-Date: Fri, 3 Jul 2026 00:00:00 +0000
-Subject: [PATCH 1/6] media: cedrus: h264: support VEs without internal
+Date: Sat, 4 Jul 2026 00:00:00 +0000
+Subject: [PATCH] media: cedrus: h264: support VEs without internal
  deblock/intra-pred SRAM
 
 The H.264 engine keeps per-row working data for the deblocking filter
@@ -34,16 +34,25 @@ the per-width term (mb_width * 0xc0 + 0x1740 for deblock, mb_width *
 0x50 + 0x13b0 for intra prediction); cedrus's per-width terms already
 match the BSP's exactly.
 
-No functional change for variants that do not set the quirk: the
-VE_BUF_CTRL selection now keys off whether the buffers were allocated,
-which remains equivalent to "width > 2048" for them.
+The per-slice VE_BUF_CTRL selection now keys off whether the buffers
+were allocated, so cedrus_h264_stop() must zero the size fields after
+freeing: left nonzero they would gate a later stream (after a >2048 ->
+<=2048 format change) into programming the freed DMA addresses, and
+into double-freeing on the following stop.  Mainline's recomputed
+"width > 2048" test hid the stale fields; the explicit zeroing also
+closes that pre-existing double-free.
+
+Note: only the suniv variant sets the new quirk in this series.  By the
+BSP evidence the A10/A13/A20 class shares the missing-SRAM property,
+but those boards were not tested here and their variants are left
+untouched.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 ---
  drivers/staging/media/sunxi/cedrus/cedrus.h      |  8 ++++
  drivers/staging/media/sunxi/cedrus/cedrus_hw.c   |  1 +
- drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 55 +++++++++++++++----
- 3 files changed, 53 insertions(+), 11 deletions(-)
+ drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 70 +++++++++++++++----
+ 3 files changed, 66 insertions(+), 13 deletions(-)
 
 --- a/drivers/staging/media/sunxi/cedrus/cedrus.h
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus.h
@@ -169,5 +178,34 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  		ctx->codec.h264.intra_pred_buf =
  			dma_alloc_attrs(dev->dev,
  					ctx->codec.h264.intra_pred_buf_size,
+@@ -680,16 +712,26 @@
+ 		       ctx->codec.h264.pic_info_buf,
+ 		       ctx->codec.h264.pic_info_buf_dma,
+ 		       DMA_ATTR_NO_KERNEL_MAPPING);
+-	if (ctx->codec.h264.deblk_buf_size)
++	if (ctx->codec.h264.deblk_buf_size) {
+ 		dma_free_attrs(dev->dev, ctx->codec.h264.deblk_buf_size,
+ 			       ctx->codec.h264.deblk_buf,
+ 			       ctx->codec.h264.deblk_buf_dma,
+ 			       DMA_ATTR_NO_KERNEL_MAPPING);
+-	if (ctx->codec.h264.intra_pred_buf_size)
++		/*
++		 * The size fields gate both reallocation and the per-slice
++		 * VE_BUF_CTRL programming; left nonzero they would make the
++		 * next stream program the freed addresses (and double-free
++		 * here) after a >2048 -> <=2048 format change.
++		 */
++		ctx->codec.h264.deblk_buf_size = 0;
++	}
++	if (ctx->codec.h264.intra_pred_buf_size) {
+ 		dma_free_attrs(dev->dev, ctx->codec.h264.intra_pred_buf_size,
+ 			       ctx->codec.h264.intra_pred_buf,
+ 			       ctx->codec.h264.intra_pred_buf_dma,
+ 			       DMA_ATTR_NO_KERNEL_MAPPING);
++		ctx->codec.h264.intra_pred_buf_size = 0;
++	}
+ }
+ 
+ static void cedrus_h264_trigger(struct cedrus_ctx *ctx)
 -- 
 2.43.0

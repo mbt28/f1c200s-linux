@@ -1,29 +1,40 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mbt28 <btekbas@gmail.com>
-Date: Fri, 3 Jul 2026 00:00:00 +0000
-Subject: [PATCH] media: cedrus: h264: bound the VLD busy poll in
- cedrus_skip_bits()
+Date: Sat, 4 Jul 2026 00:00:00 +0000
+Subject: [PATCH] media: cedrus: h264: bound the VLD busy poll and fail the
+ job on timeout
 
 cedrus_skip_bits() busy-waits on VE_H264_STATUS_VLD_BUSY with no bound.
 It runs from the m2m job setup path, BEFORE the decode watchdog is
-armed (cedrus_dec.c arms it only after setup() returns), so a wedged
-VLD spins the CPU forever. On a single-core !PREEMPT machine (the
+armed (cedrus_dec.c arms it only after setup() returns 0), so a wedged
+VLD spins the CPU forever.  On a single-core !PREEMPT machine (the
 suniv F1C200s) that is a total silent system hang: no console, no
 oops, no watchdog - observed as frequent full lockups during long
 cedrus H.264 sessions on the F1C200s.
 
-Poll with a 100 ms timeout instead. On timeout, warn (ratelimited) and
-abort the skip: the frame is lost to the error/watchdog recovery path
-and the machine stays alive.
+Poll with a 100 ms timeout instead, and propagate the failure:
+cedrus_skip_bits() and cedrus_set_params() now return an error, and
+cedrus_h264_setup() passes it up so cedrus_device_run()'s existing
+error path returns the buffer as VB2_BUF_STATE_ERROR immediately -
+without programming the rest of the slice state or firing
+AVC_SLICE_DECODE on a wedged engine (which could otherwise complete
+and deliver a corrupted capture buffer as DONE).
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 ---
- drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 21 ++++++++++++++++---
- 1 file changed, 18 insertions(+), 3 deletions(-)
+ drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 46 +++++++++++++++----
+ 1 file changed, 37 insertions(+), 9 deletions(-)
 
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
-@@ -327,12 +327,26 @@
+@@ -321,25 +321,42 @@
+  * rare cases frame is not decoded correctly. However, setting offset to 0 and
+  * skipping appropriate amount of bits with flush bits trigger always works.
+  */
+-static void cedrus_skip_bits(struct cedrus_dev *dev, int num)
++static int cedrus_skip_bits(struct cedrus_dev *dev, int num)
+ {
+ 	int count = 0;
  
  	while (count < num) {
  		int tmp = min(num - count, 32);
@@ -36,21 +47,63 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 -			udelay(1);
 +
 +		/*
-+		 * The VLD can wedge (observed on suniv during bring-up); an
-+		 * unbounded busy-wait then silently hangs the whole machine
-+		 * on !PREEMPT single-core parts, before the decode watchdog
-+		 * is even armed. Give up after 100 ms instead: the frame is
-+		 * lost to the error/watchdog path, the system survives.
++		 * The VLD can wedge; an unbounded busy-wait here then
++		 * silently hangs the whole machine on !PREEMPT single-core
++		 * parts, before the decode watchdog is even armed. Give up
++		 * after 100 ms and fail the job instead: the error path in
++		 * cedrus_device_run() returns the buffer and the machine
++		 * stays alive.
 +		 */
 +		if (readl_poll_timeout(dev->base + VE_H264_STATUS, reg,
 +				       !(reg & VE_H264_STATUS_VLD_BUSY),
 +				       10, 100000)) {
 +			dev_err_ratelimited(dev->dev,
 +					    "H264 VLD stuck while skipping bits\n");
-+			return;
++			return -ETIMEDOUT;
 +		}
  
  		count += tmp;
  	}
++
++	return 0;
+ }
+ 
+-static void cedrus_set_params(struct cedrus_ctx *ctx,
+-			      struct cedrus_run *run)
++static int cedrus_set_params(struct cedrus_ctx *ctx,
++			     struct cedrus_run *run)
+ {
+ 	const struct v4l2_ctrl_h264_decode_params *decode = run->h264.decode_params;
+ 	const struct v4l2_ctrl_h264_slice_params *slice = run->h264.slice_params;
+@@ -411,7 +428,8 @@
+ 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+ 		     VE_H264_TRIGGER_TYPE_INIT_SWDEC);
+ 
+-	cedrus_skip_bits(dev, slice->header_bit_size);
++	if (cedrus_skip_bits(dev, slice->header_bit_size))
++		return -ETIMEDOUT;
+ 
+ 	if (V4L2_H264_CTRL_PRED_WEIGHTS_REQUIRED(pps, slice))
+ 		cedrus_write_pred_weight_table(ctx, run);
+@@ -503,6 +521,8 @@
+ 		     VE_H264_CTRL_SLICE_DECODE_INT |
+ 		     VE_H264_CTRL_DECODE_ERR_INT |
+ 		     VE_H264_CTRL_VLD_DATA_REQ_INT);
++
++	return 0;
+ }
+ 
+ static enum cedrus_irq_status
+@@ -556,9 +576,7 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	cedrus_set_params(ctx, run);
+-
+-	return 0;
++	return cedrus_set_params(ctx, run);
+ }
+ 
+ /*
 -- 
 2.43.0
