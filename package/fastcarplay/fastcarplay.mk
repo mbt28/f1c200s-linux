@@ -9,8 +9,8 @@
 #   FASTCARPLAY_VERSION = local
 #   FASTCARPLAY_SITE = /path/to/FastCarPlay
 #   FASTCARPLAY_SITE_METHOD = local
-# f1c200s-cedrus branch HEAD: CedrusDecoder/DEFE integration + the install target.
-FASTCARPLAY_VERSION = 11a0382f565f76e6884b12755e9b7dff6fafbb46
+# f1c200s-cedrus branch HEAD: + UI overlay on the DRM path (drm_display).
+FASTCARPLAY_VERSION = 16dc4cf83ca3bc597a46783d02e7bda80fbcaad3
 FASTCARPLAY_SITE = $(call github,mbt28,FastCarPlay,$(FASTCARPLAY_VERSION))
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
@@ -27,7 +27,7 @@ FASTCARPLAY_DEPENDENCIES = \
 # Build BOTH HW decoders; the one used is chosen at runtime by the settings
 # (cedar-decode / cedrus-decode) to match /etc/ve-driver:
 #   USE_CEDAR=1  -> CedarDecoder  (libcedarc + /dev/cedar_dev) -- the working path
-#   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- research/broken
+#   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- working
 define FASTCARPLAY_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) \
 		PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" \
@@ -46,7 +46,7 @@ define FASTCARPLAY_INSTALL_TARGET_CMDS
 		install
 	# Ship both presets; the `carplay` alias picks the one matching /etc/ve-driver:
 	#   settings_cedar.txt  -> cedar-decode=true,  renderer=drm  (working)
-	#   settings_cedrus.txt -> cedrus-decode=true, renderer=none (research)
+	#   settings_cedrus.txt -> cedrus-decode=true, renderer=drm  (working)
 	$(INSTALL) -D -m 0644 $(@D)/settings_cedar.txt \
 		$(TARGET_DIR)/etc/fastcarplay/settings_cedar.txt
 	$(INSTALL) -D -m 0644 $(@D)/settings_cedrus.txt \
