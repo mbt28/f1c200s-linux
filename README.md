@@ -11,16 +11,19 @@ and selectable at boot:
 
 - **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
   working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). Builds and runs but the VE
-  reconstruction is broken on this part — research track (`docs/cedrus-status.md`).
+- **cedrus** — mainline, blob-free (V4L2 stateless). **Working — hardware-validated
+  on this branch (2026-07-04): colour-correct decode, no freezes.** The broken
+  reconstruction was root-caused 2026-07-03 (the suniv VE has no internal SRAM for
+  the H.264 deblock/intra-pred working data; the old variant was also wrongly
+  modelled on the V3s) and fixed by patches 0006-0009 (`docs/cedrus-status.md`).
 
 ## Branches
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | **this branch** — v0.1.0 baseline; cedar validated, cedrus pre-fix (broken) |
-| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus fix — **hardware-validated 2026-07-04 (colour-correct, no freezes)**; clone with `-b cedrus-6.6-backport` |
-| `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open issue: sporadic freezes — clone with `-b kernel-7.1` |
+| `main` | 6.6.143 | **this branch** — **v0.1.1**: cedar + colour-correct cedrus, both hardware-validated (cedrus fix merged 2026-07-04) |
+| `cedrus-6.6-backport` | 6.6.143 | merged into main at v0.1.1 (historical) |
+| `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
 
 ## Quickstart
 
@@ -28,7 +31,7 @@ and selectable at boot:
 git clone https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
-scripts/build.sh                  # downloads Linux 6.6.143 + U-Boot 2024.01, builds
+scripts/build.sh                  # downloads Linux 6.6.143 + U-Boot 2026.04, builds
 sudo dd if=output/images/sdcard.img of=/dev/sdX bs=1M conv=fsync   # your SD device!
 ```
 
@@ -45,9 +48,11 @@ external.desc / .mk        BR2_EXTERNAL "CARPLAY"; injects cedar into the kernel
 Config.in                  package menu
 configs/…_defconfig        the board defconfig (paths are $(BR2_EXTERNAL_CARPLAY_PATH)-relative)
 board/lctech/pi-f1c200s/   linux/uboot config fragments, genimage, post-build
-patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedrus DT ·
-                           0004 USB-OTG host · 0005 DEFE frontend · 0006 cedrus variant ·
-                           0007 cedar ion heap (/dev/ion)
+patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedar+cedrus VE DT ·
+                           0004 USB-OTG host · 0005 DEFE frontend · 0006-0009 cedrus suniv
+                           fix (ext deblk/intra-pred bufs, MB reset, VE_MODE DRAM quirk,
+                           A10-modelled variant) · 0010 cedar ion heap (/dev/ion) ·
+                           0011 cedrus bounded VLD poll (hang hardening)
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
 package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun
@@ -65,7 +70,7 @@ engine. **Default is `cedar`** (the working, colour-correct decoder):
 
 ```sh
 echo cedar  > /etc/ve-driver     # default — working, colour-correct (/dev/cedar_dev + /dev/ion)
-echo cedrus > /etc/ve-driver     # research, decode broken (see docs/cedrus-status.md)
+echo cedrus > /etc/ve-driver     # blob-free, colour-correct (fix backported from kernel-7.1)
 ```
 
 ## USB: host (default) ⇄ slave
@@ -115,4 +120,4 @@ board gotchas (CMA boot ceiling, DEFE EN bit31, CH340 console, ION cache).
 ## Versions
 
 Linux **6.6.143** (base defconfig `sunxi`) · Buildroot **2026.05** · U-Boot
-**2024.01** — all pinned in `config.env` / the defconfig.
+**2026.04** — all pinned in `config.env` / the defconfig.

@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Fri, 3 Jul 2026 00:00:00 +0000
+Subject: [PATCH 4/6] media: cedrus: add suniv F1C100s variant
+
+The suniv F1C100s/F1C200s carries a first-generation Video Engine
+(revision 0x1663, read from VE_VERSION).  The BSP treats it exactly
+like the A10 class: libVE groups it with 0x1623 (A13) and 0x1625 (A20)
+in the enable/disable paths ((version & ~0x40) == 0x1623), and
+libawh264 pairs it with the A20 for the external prediction-buffer
+handling.  It is *not* a V3s-class engine, despite the SoC's sun8iw8
+family branding.
+
+Model the variant on the A10 generation:
+
+  - MPEG2 + H264 only.  No UNTILED: the engine writes the native
+    MB32-tiled NV12 only (which is exactly what the F1C200s DE1
+    front-end scans out); no VP8 as it is untested on this part.
+  - CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS: no internal deblock and
+    intra-prediction SRAM (see the corresponding cedrus_h264 commit).
+  - CEDRUS_QUIRK_NO_DRAM_MODE_CONFIG: in-package 16-bit DDR, the BSP
+    leaves the VE_MODE DRAM field at its power-on default.
+  - mod_rate 297 MHz: PLL_VE's validated operating point on the
+    F1C200s (PLL range is 30-600 MHz per the F1C200s user manual);
+    requires ve_clk to be parented to PLL_VE with rate propagation.
+
+Note on DMA addressing: unlike the A10 class, the suniv VE consumes
+full 32-bit physical addresses (DRAM lives at 0x80000000 on this SoC
+and decode demonstrably lands in the right buffers with unadjusted
+vb2 dma addresses; the BSP ION path likewise hands the raw CMA handle
+to the engine).  Do NOT add the compatible to the sunxi_mbus notifier
+list - a dma offset would shift every address by -0x80000000.
+
+Also document the new compatible in the DT binding.
+
+Scope note: the BSP evidence says the A10/A13/A20 class shares the
+missing-SRAM property, but only the suniv variant sets the quirks
+here - the other first-generation variants are untested on real
+boards and deliberately left untouched.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ .../bindings/media/allwinner,sun4i-a10-video-engine.yaml |  1 +
+ drivers/staging/media/sunxi/cedrus/cedrus.c              | 13 +++++++++++++
+ 2 files changed, 14 insertions(+)
+
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
+@@ -647,6 +647,14 @@
+ 	.mod_rate	= 600000000,
+ };
+ 
++static const struct cedrus_variant suniv_f1c100s_cedrus_variant = {
++	.capabilities	= CEDRUS_CAPABILITY_MPEG2_DEC |
++			  CEDRUS_CAPABILITY_H264_DEC,
++	.quirks		= CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS |
++			  CEDRUS_QUIRK_NO_DRAM_MODE_CONFIG,
++	.mod_rate	= 297000000,
++};
++
+ static const struct of_device_id cedrus_dt_match[] = {
+ 	{
+ 		.compatible = "allwinner,sun4i-a10-video-engine",
+@@ -692,6 +700,10 @@
+ 		.compatible = "allwinner,sun50i-h6-video-engine",
+ 		.data = &sun50i_h6_cedrus_variant,
+ 	},
++	{
++		.compatible = "allwinner,suniv-f1c100s-video-engine",
++		.data = &suniv_f1c100s_cedrus_variant,
++	},
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, cedrus_dt_match);
+--- a/Documentation/devicetree/bindings/media/allwinner,sun4i-a10-video-engine.yaml
++++ b/Documentation/devicetree/bindings/media/allwinner,sun4i-a10-video-engine.yaml
+@@ -24,6 +24,7 @@
+       - allwinner,sun50i-a64-video-engine
+       - allwinner,sun50i-h5-video-engine
+       - allwinner,sun50i-h6-video-engine
++      - allwinner,suniv-f1c100s-video-engine
+ 
+   reg:
+     maxItems: 1
+-- 
+2.43.0

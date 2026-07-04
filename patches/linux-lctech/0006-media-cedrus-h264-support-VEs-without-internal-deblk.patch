@@ -1,0 +1,211 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sat, 4 Jul 2026 00:00:00 +0000
+Subject: [PATCH] media: cedrus: h264: support VEs without internal
+ deblock/intra-pred SRAM
+
+The H.264 engine keeps per-row working data for the deblocking filter
+and for intra prediction.  cedrus assumes every VE has internal SRAM
+for both below 2049 pixels of width (VE_BUF_CTRL = INT_SRAM) and only
+provides DRAM buffers above that, in the mixed placement.
+
+The first-generation engines do not have that SRAM.  The Allwinner BSP
+decoder (libawh264, H264ConfigTopLeveLRegisters + H264MallocBuffer)
+allocates both DRAM buffers unconditionally for engine revisions 0x1625
+(A20) and 0x1663 (suniv F1C100s/F1C200s) at every resolution, and
+programs the *fully external* placement (0b10) rather than the mixed
+one (0b01) that cedrus uses for the >2048 case.
+
+On the F1C200s the INT_SRAM setting makes intra prediction read dead
+storage: I-frames reconstruct as clipped residuals (sparse luma, ~32%
+nonzero instead of ~99%, and zero-centred chroma - the long-standing
+"green picture" symptom), deterministically across reboots.
+
+Add a variant quirk, CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS, that
+
+  - forces allocation of the deblock and intra-pred DRAM buffers at
+    every resolution, and
+  - selects the fully external VE_BUF_CTRL placement, matching the
+    read-modify-write sequence the BSP performs (final register value
+    0xa on a freshly reset engine).
+
+The buffer size formulas gain the constant slack the BSP adds on top of
+the per-width term (mb_width * 0xc0 + 0x1740 for deblock, mb_width *
+0x50 + 0x13b0 for intra prediction); cedrus's per-width terms already
+match the BSP's exactly.
+
+The per-slice VE_BUF_CTRL selection now keys off whether the buffers
+were allocated, so cedrus_h264_stop() must zero the size fields after
+freeing: left nonzero they would gate a later stream (after a >2048 ->
+<=2048 format change) into programming the freed DMA addresses, and
+into double-freeing on the following stop.  Mainline's recomputed
+"width > 2048" test hid the stale fields; the explicit zeroing also
+closes that pre-existing double-free.
+
+Note: only the suniv variant sets the new quirk in this series.  By the
+BSP evidence the A10/A13/A20 class shares the missing-SRAM property,
+but those boards were not tested here and their variants are left
+untouched.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ drivers/staging/media/sunxi/cedrus/cedrus.h      |  8 ++++
+ drivers/staging/media/sunxi/cedrus/cedrus_hw.c   |  1 +
+ drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 70 +++++++++++++++----
+ 3 files changed, 66 insertions(+), 13 deletions(-)
+
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.h
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.h
+@@ -35,6 +35,12 @@
+ #define CEDRUS_CAPABILITY_VP8_DEC	BIT(4)
+ #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
+ 
++/*
++ * Quirks describe where a VE revision deviates from what the driver
++ * programs by default, without being tied to a decoding capability.
++ */
++#define CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS	BIT(0)
++
+ enum cedrus_irq_status {
+ 	CEDRUS_IRQ_NONE,
+ 	CEDRUS_IRQ_ERROR,
+@@ -174,6 +180,7 @@
+ 
+ struct cedrus_variant {
+ 	unsigned int	capabilities;
++	unsigned int	quirks;
+ 	unsigned int	mod_rate;
+ };
+ 
+@@ -198,6 +205,7 @@
+ 	struct reset_control	*rstc;
+ 
+ 	unsigned int		capabilities;
++	unsigned int		quirks;
+ 
+ 	struct delayed_work	watchdog_work;
+ };
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -254,6 +254,7 @@
+ 		return -EINVAL;
+ 
+ 	dev->capabilities = variant->capabilities;
++	dev->quirks = variant->quirks;
+ 
+ 	irq_dec = platform_get_irq(dev->pdev, 0);
+ 	if (irq_dec <= 0)
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
+@@ -363,10 +363,23 @@
+ 		     VE_H264_VLD_ADDR_FIRST | VE_H264_VLD_ADDR_VALID |
+ 		     VE_H264_VLD_ADDR_LAST);
+ 
+-	if (ctx->src_fmt.width > 2048) {
+-		cedrus_write(dev, VE_BUF_CTRL,
+-			     VE_BUF_CTRL_INTRAPRED_MIXED_RAM |
+-			     VE_BUF_CTRL_DBLK_MIXED_RAM);
++	if (ctx->codec.h264.deblk_buf_size) {
++		u32 reg;
++
++		/*
++		 * The BSP uses the fully external placement on the VE
++		 * revisions that have no internal SRAM for this data
++		 * (libawh264 does so for 0x1625/A20 and 0x1663/suniv),
++		 * and the mixed placement on everything newer.
++		 */
++		if (dev->quirks & CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS)
++			reg = VE_BUF_CTRL_INTRAPRED_EXT_RAM |
++			      VE_BUF_CTRL_DBLK_EXT_RAM;
++		else
++			reg = VE_BUF_CTRL_INTRAPRED_MIXED_RAM |
++			      VE_BUF_CTRL_DBLK_MIXED_RAM;
++
++		cedrus_write(dev, VE_BUF_CTRL, reg);
+ 		cedrus_write(dev, VE_DBLK_DRAM_BUF_ADDR,
+ 			     ctx->codec.h264.deblk_buf_dma);
+ 		cedrus_write(dev, VE_INTRAPRED_DRAM_BUF_ADDR,
+@@ -536,6 +549,22 @@
+ 	return 0;
+ }
+ 
++/*
++ * The first-generation VE (sun4i A10 class, which the suniv F1C100s
++ * family belongs to) has no internal SRAM for the deblocking and intra
++ * prediction working data: the BSP H.264 decoder (libawh264) places
++ * both buffers in DRAM on those engine revisions (0x1625, 0x1663) at
++ * every resolution.  Later generations only need DRAM assistance for
++ * pictures wider than 2048 pixels.
++ */
++static bool cedrus_h264_use_dram_pred_bufs(struct cedrus_ctx *ctx)
++{
++	if (ctx->dev->quirks & CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS)
++		return true;
++
++	return ctx->src_fmt.width > 2048;
++}
++
+ static int cedrus_h264_start(struct cedrus_ctx *ctx)
+ {
+ 	struct cedrus_dev *dev = ctx->dev;
+@@ -587,14 +616,17 @@
+ 		goto err_pic_buf;
+ 	}
+ 
+-	if (ctx->src_fmt.width > 2048) {
++	if (cedrus_h264_use_dram_pred_bufs(ctx)) {
+ 		/*
+ 		 * Formulas for deblock and intra prediction buffer sizes
+-		 * are taken from CedarX source.
++		 * are taken from CedarX source.  The constant tails are the
++		 * slack the BSP H.264 decoder adds on top of the per-width
++		 * term (libawh264: mb_width * 0xc0 + 0x1740 and
++		 * mb_width * 0x50 + 0x13b0).
+ 		 */
+ 
+ 		ctx->codec.h264.deblk_buf_size =
+-			ALIGN(ctx->src_fmt.width, 32) * 12;
++			ALIGN(ctx->src_fmt.width, 32) * 12 + 0x1740;
+ 		ctx->codec.h264.deblk_buf =
+ 			dma_alloc_attrs(dev->dev,
+ 					ctx->codec.h264.deblk_buf_size,
+@@ -610,7 +642,7 @@
+ 		 * is for some unknown reason needed for H264 4K decoding on H6.
+ 		 */
+ 		ctx->codec.h264.intra_pred_buf_size =
+-			ALIGN(ctx->src_fmt.width, 64) * 5 * 2;
++			ALIGN(ctx->src_fmt.width, 64) * 5 * 2 + 0x13b0;
+ 		ctx->codec.h264.intra_pred_buf =
+ 			dma_alloc_attrs(dev->dev,
+ 					ctx->codec.h264.intra_pred_buf_size,
+@@ -680,16 +712,26 @@
+ 		       ctx->codec.h264.pic_info_buf,
+ 		       ctx->codec.h264.pic_info_buf_dma,
+ 		       DMA_ATTR_NO_KERNEL_MAPPING);
+-	if (ctx->codec.h264.deblk_buf_size)
++	if (ctx->codec.h264.deblk_buf_size) {
+ 		dma_free_attrs(dev->dev, ctx->codec.h264.deblk_buf_size,
+ 			       ctx->codec.h264.deblk_buf,
+ 			       ctx->codec.h264.deblk_buf_dma,
+ 			       DMA_ATTR_NO_KERNEL_MAPPING);
+-	if (ctx->codec.h264.intra_pred_buf_size)
++		/*
++		 * The size fields gate both reallocation and the per-slice
++		 * VE_BUF_CTRL programming; left nonzero they would make the
++		 * next stream program the freed addresses (and double-free
++		 * here) after a >2048 -> <=2048 format change.
++		 */
++		ctx->codec.h264.deblk_buf_size = 0;
++	}
++	if (ctx->codec.h264.intra_pred_buf_size) {
+ 		dma_free_attrs(dev->dev, ctx->codec.h264.intra_pred_buf_size,
+ 			       ctx->codec.h264.intra_pred_buf,
+ 			       ctx->codec.h264.intra_pred_buf_dma,
+ 			       DMA_ATTR_NO_KERNEL_MAPPING);
++		ctx->codec.h264.intra_pred_buf_size = 0;
++	}
+ }
+ 
+ static void cedrus_h264_trigger(struct cedrus_ctx *ctx)
+-- 
+2.43.0

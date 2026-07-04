@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Fri, 3 Jul 2026 00:00:00 +0000
+Subject: [PATCH 2/6] media: cedrus: h264: reset macroblock position registers
+ on new frames
+
+The BSP decoder (libawh264 H264ConfigureSliceRegister) writes 0 to the
+current-macroblock counter (0x22c) and the macroblock x/y register
+(0x260) whenever it sets up the first slice of a picture.  cedrus never
+touches either register and relies on the engine reloading the position
+from the slice header registers, leaving whatever state the previous
+picture ended with in place.
+
+Match the BSP and clear both registers when a new frame starts.  This
+is cheap, faithful to the only known-good programming sequence for the
+first-generation engines, and harmless on later revisions.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ drivers/staging/media/sunxi/cedrus/cedrus_h264.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
+@@ -391,6 +391,18 @@
+ 	}
+ 
+ 	/*
++	 * The BSP H.264 decoder clears the macroblock position
++	 * registers when it configures the first slice of a picture
++	 * (libawh264 H264ConfigureSliceRegister); the hardware
++	 * otherwise starts from whatever position the previous
++	 * picture left behind.
++	 */
++	if (ctx->fh.m2m_ctx->new_frame) {
++		cedrus_write(dev, VE_H264_CUR_MB_NUM, 0);
++		cedrus_write(dev, VE_H264_MB_ADDR, 0);
++	}
++
++	/*
+ 	 * FIXME: Since the bitstream parsing is done in software, and
+ 	 * in userspace, this shouldn't be needed anymore. But it
+ 	 * turns out that removing it breaks the decoding process,
+-- 
+2.43.0
