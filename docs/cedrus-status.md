@@ -12,6 +12,13 @@ was PLL_VE's power-on default; the gate needed CLK_SET_RATE_PARENT). The old
 V3s-modelled variant patch is gone (suniv is NOT V3s-class; UNTILED removed).
 Everything below is the pre-root-cause investigation, kept for history.
 
+**Datapoint 2026-07-04:** the `cedrus-6.6-backport` branch (identical cedrus
+patches on 6.6.143) is hardware-validated colour-correct **with no lock-ups**
+— the freeze seen on this branch is therefore a 7.1 base-kernel regression
+(display/USB/base suspects), not a video-engine or patch problem. Bisect
+leads when the hunt resumes: clk_ignore_unused soak (never run), 6.6→7.1
+diffs of sun4i DRM and musb.
+
 ---
 
 **Summary:** the blob-free pipeline (mainline cedrus V4L2 stateless H.264 →

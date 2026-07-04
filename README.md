@@ -15,15 +15,16 @@ and selectable at boot:
   found and fixed 2026-07-03 (VE has no deblk/intra-pred SRAM; patches 0006-0009,
   from `../cedrus-development/`) — **colour-correct on hardware**. Open issue:
   sporadic full-system freezes under sustained decode on 7.1.x, affecting BOTH
-  decoders (not the cedrus fix; triage notes in `docs/cedrus-status.md`).
+  decoders (not the cedrus fix — the 6.6 backport with identical patches is
+  freeze-free; triage notes in `docs/cedrus-status.md`).
 
 ## Branches (pick one — the clone below already does)
 
 | branch | kernel | state |
 |---|---|---|
 | `main` | 6.6.143 | v0.1.0 baseline — cedar validated; cedrus pre-fix (broken) |
-| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus reconstruction fix (colour-correct) |
-| `kernel-7.1` | 7.1.2 | **this branch** — 7.1 port, same fix; open issue: sporadic freezes under decode |
+| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus fix — **hardware-validated 2026-07-04 (colour-correct, no freezes)** |
+| `kernel-7.1` | 7.1.2 | **this branch** — 7.1 port, same fix; open: freezes under decode — a **7.1-specific regression** (cedrus-6.6-backport is freeze-free with identical patches) |
 
 ## Quickstart
 
