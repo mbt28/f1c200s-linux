@@ -14,6 +14,14 @@ and selectable at boot:
 - **cedrus** — mainline, blob-free (V4L2 stateless). Builds and runs but the VE
   reconstruction is broken on this part — research track (`docs/cedrus-status.md`).
 
+## Branches
+
+| branch | kernel | state |
+|---|---|---|
+| `main` | 6.6.143 | **this branch** — v0.1.0 baseline; cedar validated, cedrus pre-fix (broken) |
+| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus reconstruction fix (colour-correct) — clone with `-b cedrus-6.6-backport` |
+| `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open issue: sporadic freezes — clone with `-b kernel-7.1` |
+
 ## Quickstart
 
 ```sh
