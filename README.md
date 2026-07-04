@@ -31,7 +31,7 @@ and selectable at boot:
 git clone -b kernel-7.1 https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
-scripts/build.sh                  # downloads Linux 7.1.2 + U-Boot 2024.01, builds
+scripts/build.sh                  # downloads Linux 7.1.2 + U-Boot 2026.04, builds
 sudo dd if=output/images/sdcard.img of=/dev/sdX bs=1M conv=fsync   # your SD device!
 ```
 
@@ -121,4 +121,4 @@ board gotchas (CMA boot ceiling, DEFE EN bit31, CH340 console, ION cache).
 ## Versions
 
 Linux **7.1.2** (base defconfig `sunxi`; branch `kernel-7.1`) · Buildroot
-**2026.05** · U-Boot **2024.01** — all pinned in `config.env` / the defconfig.
+**2026.05** · U-Boot **2026.04** — all pinned in `config.env` / the defconfig.
