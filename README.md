@@ -126,6 +126,20 @@ works over the serial console.
 See `docs/hardware-fixes.md` for the OTG `dr_mode` switch and the rest of the
 board gotchas (CMA boot ceiling, DEFE EN bit31, CH340 console, ION cache).
 
+## FastCarPlay autostart
+
+FastCarPlay launches at boot (`S99carplay`, log in `/tmp/carplay.log`).
+Control it on the board — the choice persists across reboots:
+
+```sh
+autorun off      # disable the boot autostart
+autorun on       # re-enable it
+autorun status   # flag + running state
+autorun stop     # kill the running instance
+```
+
+The manual `carplay` command still works and replaces a running instance.
+
 ## Boot splash (runtime-selectable)
 
 Ten themes ship in `/etc/splash/` (sources + generator in

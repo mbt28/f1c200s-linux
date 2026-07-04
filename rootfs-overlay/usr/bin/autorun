@@ -1,0 +1,23 @@
+#!/bin/sh
+# autorun on|off|status|stop -- FastCarPlay boot-autostart control.
+# on/off persist across reboots (flag file on the ext4 rootfs).
+case "$1" in
+on)
+	echo enabled > /etc/carplay-autostart
+	echo "autostart enabled (from next boot; run 'carplay' to launch now)"
+	;;
+off)
+	rm -f /etc/carplay-autostart
+	echo "autostart disabled (running instance untouched; 'autorun stop' kills it)"
+	;;
+stop)
+	killall fastcarplay 2>/dev/null && echo "stopped" || echo "not running"
+	;;
+status)
+	if [ -f /etc/carplay-autostart ]; then echo "autostart: enabled"; else echo "autostart: disabled"; fi
+	if pidof fastcarplay > /dev/null 2>&1; then echo "fastcarplay: running (pid $(pidof fastcarplay))"; else echo "fastcarplay: not running"; fi
+	;;
+*)
+	echo "usage: autorun on|off|status|stop"
+	;;
+esac

@@ -1,0 +1,20 @@
+#!/bin/sh
+# FastCarPlay autostart (last rcS step). Opt-out at runtime with `autorun off`
+# (persists across reboots); the manual `carplay` command still works and
+# replaces a running autostarted instance. Log: /tmp/carplay.log
+
+case "$1" in
+start)
+	[ -f /etc/carplay-autostart ] || exit 0
+	preset="/etc/fastcarplay/settings_$(tr -dc a-z < /etc/ve-driver 2>/dev/null).txt"
+	[ -f "$preset" ] || preset=/etc/fastcarplay/settings.txt
+	echo "carplay: autostarting ($preset)"
+	SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1 &
+	;;
+stop)
+	killall fastcarplay 2>/dev/null
+	;;
+*)
+	echo "Usage: $0 {start|stop}"
+	;;
+esac
