@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sat, 4 Jul 2026 00:00:00 +0000
+Subject: [PATCH] video: sunxi: cap the framebuffer reservation on suniv
+
+sunxi_de_bind() reserves a 4K worst-case framebuffer (3840x2160x4 =
+~32 MiB). On the suniv F1C100s/F1C200s family - no HDMI, 32-64 MiB of
+DRAM total - that reservation eats half the memory: U-Boot relocates
+itself to ~31 MiB and its LMB no-overwrite region then covers
+everything above ~13.5 MiB, so the relocated DTB lands inside the area
+a large zImage decompresses into and the kernel dies silently right
+after "Starting kernel ..." (observed on the Lctech Pi F1C200s with a
+5.3 MiB zImage / ~14 MiB Image: DTB relocated to 0x80d79000).
+
+Cap the reservation to the largest LCD this family realistically
+drives (1024x768x4 = 3 MiB). U-Boot then relocates near the top of
+DRAM again and the default bootz flow works unmodified.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ drivers/video/sunxi/sunxi_display.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+--- a/drivers/video/sunxi/sunxi_display.c
++++ b/drivers/video/sunxi/sunxi_display.c
+@@ -1246,7 +1246,18 @@
+ {
+ 	struct video_uc_plat *plat = dev_get_uclass_plat(dev);
+ 
+-	plat->size = LCD_MAX_WIDTH * LCD_MAX_HEIGHT * VNBYTES(LCD_MAX_LOG2_BPP);
++	if (IS_ENABLED(CONFIG_MACH_SUNIV))
++		/*
++		 * suniv has no HDMI and only 32-64 MiB of DRAM: the generic
++		 * 4K worst case below would reserve half the RAM, pushing
++		 * U-Boot's relocation (and its LMB no-overwrite region) down
++		 * over the space the kernel decompresses into. Cap the
++		 * framebuffer to the largest LCD this family drives.
++		 */
++		plat->size = 1024 * 768 * VNBYTES(LCD_MAX_LOG2_BPP);
++	else
++		plat->size = LCD_MAX_WIDTH * LCD_MAX_HEIGHT *
++			     VNBYTES(LCD_MAX_LOG2_BPP);
+ 
+ 	return 0;
+ }
+-- 
+2.43.0
