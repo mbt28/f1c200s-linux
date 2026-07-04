@@ -38,9 +38,21 @@ def center(d, y, text, f, fill):
     return b[3] - b[1]
 
 
+FBDIR = os.path.join(OUT, "../../../../rootfs-overlay/etc/splash")
+
+
 def save(img, name):
     img.save(os.path.join(OUT, name), optimize=True)
-    print("saved", name)
+    # raw XRGB8888 framebuffer dump (little-endian BGRX bytes), gzipped, for
+    # the runtime-switchable boot splash: S00splash zcats the selected theme
+    # straight into /dev/fb0. ~30-60 KB per theme.
+    import gzip
+    os.makedirs(FBDIR, exist_ok=True)
+    raw = img.convert("RGB").tobytes("raw", "BGRX")
+    with gzip.open(os.path.join(FBDIR, name.replace(".png", ".fb.gz")), "wb",
+                   compresslevel=9) as f:
+        f.write(raw)
+    print("saved", name, "+ fb.gz")
 
 
 # 01 — play ring + motion lines (the original theme)

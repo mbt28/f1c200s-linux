@@ -1,0 +1,25 @@
+#!/bin/sh
+# net on|off|status -- opt-in networking (USB ethernet, usb-gadget, dropbear).
+# `on` persists across reboots (flag file on the ext4 rootfs); `off` reverts.
+case "$1" in
+on)
+	touch /etc/network-enabled
+	/etc/init.d/S41eth-dev start
+	/etc/init.d/S42usb-gadget start
+	/etc/init.d/S50dropbear start
+	;;
+off)
+	/etc/init.d/S50dropbear stop
+	/etc/init.d/S41eth-dev stop
+	/etc/init.d/S42usb-gadget stop
+	rm -f /etc/network-enabled
+	echo "networking disabled (also at boot)"
+	;;
+status)
+	if [ -f /etc/network-enabled ]; then echo "networking: enabled (persistent)"; else echo "networking: disabled"; fi
+	ip -o -4 addr show 2>/dev/null | awk '{print "  " $2 ": " $4}'
+	;;
+*)
+	echo "usage: net on|off|status"
+	;;
+esac
