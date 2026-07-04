@@ -11,8 +11,11 @@ and selectable at boot:
 
 - **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
   working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). Builds and runs but the VE
-  reconstruction is broken on this part — research track (`docs/cedrus-status.md`).
+- **cedrus** — mainline, blob-free (V4L2 stateless). **Colour-correct**: the broken
+  reconstruction was root-caused 2026-07-03 (the suniv VE has no internal SRAM for
+  the H.264 deblock/intra-pred working data; the old variant was also wrongly
+  modelled on the V3s) and fixed by patches 0006-0009, backported from the
+  `kernel-7.1` branch and hardware-validated there (`docs/cedrus-status.md`).
 
 ## Quickstart
 
@@ -37,9 +40,11 @@ external.desc / .mk        BR2_EXTERNAL "CARPLAY"; injects cedar into the kernel
 Config.in                  package menu
 configs/…_defconfig        the board defconfig (paths are $(BR2_EXTERNAL_CARPLAY_PATH)-relative)
 board/lctech/pi-f1c200s/   linux/uboot config fragments, genimage, post-build
-patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedrus DT ·
-                           0004 USB-OTG host · 0005 DEFE frontend · 0006 cedrus variant ·
-                           0007 cedar ion heap (/dev/ion)
+patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedar+cedrus VE DT ·
+                           0004 USB-OTG host · 0005 DEFE frontend · 0006-0009 cedrus suniv
+                           fix (ext deblk/intra-pred bufs, MB reset, VE_MODE DRAM quirk,
+                           A10-modelled variant) · 0010 cedar ion heap (/dev/ion) ·
+                           0011 cedrus bounded VLD poll (hang hardening)
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
 package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun
@@ -57,7 +62,7 @@ engine. **Default is `cedar`** (the working, colour-correct decoder):
 
 ```sh
 echo cedar  > /etc/ve-driver     # default — working, colour-correct (/dev/cedar_dev + /dev/ion)
-echo cedrus > /etc/ve-driver     # research, decode broken (see docs/cedrus-status.md)
+echo cedrus > /etc/ve-driver     # blob-free, colour-correct (fix backported from kernel-7.1)
 ```
 
 ## USB: host (default) ⇄ slave

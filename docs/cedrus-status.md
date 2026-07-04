@@ -1,4 +1,26 @@
-# Cedrus (mainline, blob-free) status on the F1C200s — NOT working
+# Cedrus (mainline, blob-free) status on the F1C200s — FIXED (backport)
+
+**UPDATE 2026-07-04 — root cause found and fixed; this branch carries the
+backport.** The suniv VE (revision 0x1663, read from VE_VERSION) is an
+A10-generation engine with **no internal SRAM for the H.264 deblock and
+intra-prediction working data**; cedrus's `VE_BUF_CTRL = INT_SRAM` (used for
+all pictures <=2048 px wide) made intra prediction read dead storage, so
+reconstruction degenerated to clip(residual): the sparse luma AND the
+zero-centred "signed" chroma below were ONE bug. The BSP decoder (libawh264)
+allocates both buffers in DRAM at every resolution on this engine and selects
+the fully external placement - patches 0006-0009 make cedrus do the same
+(plus: VE_MODE DRAM-config quirk for the 16-bit DDR, MB-position reset on new
+frames, and an A10-modelled variant without UNTILED replacing the old
+V3s-modelled one). 0011 additionally bounds an unbounded VLD busy-wait that
+could hang the whole machine pre-watchdog. Colour-correct decode was validated
+on F1C200s hardware on the 7.1.x branch on 2026-07-03; the evidence trail
+(decompiled libawh264/libVE) lives in the kernel-7.1 workspace
+(`cedrus-development/ANALYSIS.md`). Everything below is the historical
+pre-root-cause investigation.
+
+---
+
+# Cedrus historical status (pre-fix) — was: NOT working
 
 **Summary:** the blob-free pipeline (mainline cedrus V4L2 stateless H.264 →
 ffmpeg v4l2-request → sun4i DEFE) **builds and runs**, but the suniv VE produces a
