@@ -33,6 +33,11 @@ list - a dma offset would shift every address by -0x80000000.
 
 Also document the new compatible in the DT binding.
 
+Scope note: the BSP evidence says the A10/A13/A20 class shares the
+missing-SRAM property, but only the suniv variant sets the quirks
+here - the other first-generation variants are untested on real
+boards and deliberately left untouched.
+
 Signed-off-by: mbt28 <btekbas@gmail.com>
 ---
  .../bindings/media/allwinner,sun4i-a10-video-engine.yaml |  1 +
