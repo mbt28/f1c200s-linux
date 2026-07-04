@@ -4,9 +4,18 @@
 # off), so the splash owns the screen until FastCarPlay takes over -- the
 # `carplay` launcher dismisses it with `psplash-write QUIT`.
 # psplash's FIFO lives in $TMPDIR (default /tmp, mounted by inittab's mount -a).
+#
+# The sun4i DRM pipeline defer-probes (panel/backlight ordering), so /dev/fb0
+# may appear a moment after rcS starts -- wait for it briefly instead of
+# silently skipping the splash.
 
 case "$1" in
 start)
+	n=0
+	while [ ! -e /dev/fb0 ] && [ "$n" -lt 50 ]; do
+		usleep 100000 2>/dev/null || sleep 1
+		n=$((n + 1))
+	done
 	[ -e /dev/fb0 ] || exit 0
 	psplash -n &
 	;;
