@@ -17,10 +17,18 @@ and selectable at boot:
   modelled on the V3s) and fixed by patches 0006-0009, backported from the
   `kernel-7.1` branch and hardware-validated there (`docs/cedrus-status.md`).
 
+## Branches (pick one — the clone below already does)
+
+| branch | kernel | state |
+|---|---|---|
+| `main` | 6.6.143 | v0.1.0 baseline — cedar validated; cedrus pre-fix (broken) |
+| `cedrus-6.6-backport` | 6.6.143 | **this branch** — main + the cedrus reconstruction fix |
+| `kernel-7.1` | 7.1.2 | 7.1 port, same fix; open issue: sporadic freezes under decode |
+
 ## Quickstart
 
 ```sh
-git clone https://github.com/mbt28/f1c200s-linux.git
+git clone -b cedrus-6.6-backport https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
 scripts/build.sh                  # downloads Linux 6.6.143 + U-Boot 2024.01, builds
