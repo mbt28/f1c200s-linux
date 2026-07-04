@@ -43,7 +43,8 @@ patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE (+SET_RATE_PAR
                            0003 cedar+cedrus VE DT · 0004 USB-OTG host · 0005 DEFE frontend ·
                            0006-0009 cedrus suniv fix (ext deblk/intra-pred bufs, MB reset,
                            VE_MODE DRAM quirk, suniv variant — see
-                           ../cedrus-development/ANALYSIS.md) · 0010 cedar ion heap
+                           ../cedrus-development/ANALYSIS.md) · 0010 cedar ion heap ·
+                           0011 cedrus bounded VLD poll (hang hardening)
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
 package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun

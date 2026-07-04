@@ -9,4 +9,3 @@
 0009-media-cedrus-add-suniv-F1C100s-variant.patch
 0010-lctech-cedar-ion-heap.patch
 0011-media-cedrus-h264-bound-the-VLD-busy-poll-in-skip-bi.patch
-0012-lctech-ramoops-pstore-carveout-for-lockup-triage.patch

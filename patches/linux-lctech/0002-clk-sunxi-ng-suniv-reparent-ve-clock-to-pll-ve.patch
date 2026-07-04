@@ -1,27 +1,24 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: mbt28 <btekbas@gmail.com>
 Date: Fri, 3 Jul 2026 00:00:00 +0000
-Subject: [PATCH] clk: sunxi-ng: suniv: reparent VE clock to PLL_VE
+Subject: [PATCH 5/6] clk: sunxi-ng: suniv: reparent VE clock to PLL_VE with
+ rate propagation
 
 The suniv CCU models the VE gate as a child of pll-audio, with a TODO
-noting it should most likely be pll-ve. On F1C200s hardware the video
+noting it should most likely be pll-ve.  On F1C200s hardware the video
 engine demonstrably follows PLL_VE's rate, so make pll-ve the parent.
 
-Deliberately NO CLK_SET_RATE_PARENT: with rate propagation enabled,
-every decoder start live-reprograms PLL_VE (cedrus asks 297 MHz,
-libcedarc asks 300 MHz). Without it, those clk_set_rate() calls are
-absorbed by the gate and the engine runs at PLL_VE's power-on default
-of 210 MHz (24 MHz * 35 / 4) - the exact behaviour of the validated
-6.6 image. Hardware testing showed no stability difference between
-the two (a separate cedrus VLD-poll hang was the real lockup source),
-but 210 MHz is the long-proven operating point, so keep it. If more
-VE headroom is ever needed, set PLL_VE once at boot via DT
-assigned-clock-rates instead of re-enabling live propagation.
+Also set CLK_SET_RATE_PARENT: the VE clock is a plain gate (no
+divider, F1C200s user manual 3.2.5.26), so without rate propagation a
+clk_set_rate() from the VE driver is absorbed by the gate and the
+engine stays at PLL_VE's power-on default of 210 MHz (24 MHz * 35 / 4)
+- which is exactly the rate previously measured while the driver was
+requesting 297 MHz.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 ---
- drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c | 12 +++++++-----
- 1 file changed, 7 insertions(+), 5 deletions(-)
+ drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
 
 --- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
 +++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
@@ -32,15 +29,15 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 - * TODO: BSP says the parent is pll-audio, however common sense and experience
 - * told us it should be pll-ve. pll-ve is totally not used in BSP code.
 + * The BSP structures name pll-audio here, but on real F1C100s/F1C200s
-+ * hardware the video engine follows PLL_VE's rate, so the gate feeds
-+ * from PLL_VE. Deliberately no CLK_SET_RATE_PARENT: the VE drivers'
-+ * clk_set_rate() calls are absorbed and the engine runs at PLL_VE's
-+ * power-on default of 210 MHz (24 MHz * 35 / 4), the operating point
-+ * validated on this hardware. Use DT assigned-clock-rates on PLL_VE
-+ * if a different fixed rate is ever needed.
++ * hardware the video engine demonstrably runs at PLL_VE's rate, so the
++ * gate feeds from PLL_VE.  CLK_SET_RATE_PARENT lets the VE driver's
++ * clk_set_rate() propagate through the gate to the PLL; without it the
++ * engine is stuck at PLL_VE's power-on default (24 MHz * 35 / 4 =
++ * 210 MHz) no matter what rate is requested.
   */
 -static SUNXI_CCU_GATE(ve_clk, "ve", "pll-audio", 0x13c, BIT(31), 0);
-+static SUNXI_CCU_GATE(ve_clk, "ve", "pll-ve", 0x13c, BIT(31), 0);
++static SUNXI_CCU_GATE(ve_clk, "ve", "pll-ve", 0x13c, BIT(31),
++		      CLK_SET_RATE_PARENT);
  
  static SUNXI_CCU_GATE(codec_clk, "codec", "pll-audio", 0x140, BIT(31), 0);
  
