@@ -1,0 +1,4 @@
+# Sourced by /etc/init.d/S50dropbear. Networking (and sshd with it) is opt-in
+# on this appliance: `net on` creates /etc/network-enabled and starts the
+# services. The exit below aborts the init script when networking is off.
+[ "$1" = "stop" ] || [ -f /etc/network-enabled ] || exit 0

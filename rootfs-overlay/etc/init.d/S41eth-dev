@@ -8,6 +8,9 @@ getip() {
 		| grep -oE 'inet (addr:)?([0-9]+\.){3}[0-9]+' \
 		| grep -oE '([0-9]+\.){3}[0-9]+' | head -1
 }
+# Networking is opt-in: enabled at runtime with `net on` (creates the flag
+# below and starts the services); disabled by default for a clean appliance.
+[ "$1" != "start" ] || [ -f /etc/network-enabled ] || exit 0
 case "$1" in
 start)
 	i=0
