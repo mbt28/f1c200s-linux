@@ -13,6 +13,7 @@ getip() {
 [ "$1" != "start" ] || [ -f /etc/network-enabled ] || exit 0
 case "$1" in
 start)
+	for m in usbnet dm9601 asix ax88179_178a cdc_ether smsc95xx; do modprobe $m 2>/dev/null; done
 	i=0
 	while [ $i -lt 8 ] && [ ! -e /sys/class/net/eth0 ]; do sleep 1; i=$((i + 1)); done
 	[ -e /sys/class/net/eth0 ] || { echo "eth-dev: no eth0 (USB NIC not found)" > /dev/console; exit 0; }

@@ -47,6 +47,27 @@ Realistic total from a config diet:
 | audit DRM panels / media sub-drivers | 0.2–0.4 MiB |
 | **total** | **~3.3–4.3 MiB** (→ userspace ~37 MiB) |
 
+### Applied 2026-07-05 (`board/lctech/pi-f1c200s/linux.fragment`) — measured
+
+-Os; NFS, SOUND/SND, PERF_EVENTS, SUSPEND/PM_SLEEP, HID and VT all off; USB
+NIC drivers + g_ether to `=m` (`net on` / S41 / S42 modprobe them on demand).
+
+| vmlinux (`size`) | before | after | saved |
+|---|---:|---:|---:|
+| text | 9,494,699 | 6,783,532 | 2.59 MiB |
+| total (text+data+bss) | 12,885,551 | 9,800,492 | **2.94 MiB** |
+
+Expected on-board effect: `Memory: ... available` rises from 33516K by
+roughly 3 MB (confirm the boot line after flashing).
+
+Kconfig gotcha that cost two rebuilds: `CONFIG_VT` is declared
+`bool "Virtual terminal" if EXPERT` with `default y`, so without
+`CONFIG_EXPERT=y` the fragment's `# CONFIG_VT is not set` line is *silently
+ignored* — olddefconfig forces VT straight back on (nothing `select`s it; the
+prompt is just invisible). The fragment now sets EXPERT=y, which only unhides
+prompts (config-diff audited: no other built code changes) and selects
+DEBUG_KERNEL as a bare menu gate, neutralized by keeping DEBUG_MISC off.
+
 ## 2. CMA: 16 MiB reserved, actual use unmeasured
 
 The pool serves cedrus/cedar decode buffers, ffmpeg's right-sized coded
@@ -60,9 +81,10 @@ grep -i cma /proc/meminfo          # CmaTotal / CmaFree
 cat /sys/kernel/debug/dma_buf/bufinfo 2>/dev/null   # per-buffer, if debugfs on
 ```
 
-If CmaFree stays ≥ 5 MiB under load, `CONFIG_CMA_SIZE_MBYTES=12` frees 4 MiB
-for userspace. Keep margin for fragmentation on long runs; remember the
-hard-won ceiling in the other direction (32 MiB CMA doesn't boot).
+**Measured 2026-07-05 (streaming CarPlay): CmaTotal 16384 kB, CmaFree
+2472 kB — 13.9 MiB in active use. CMA stays at 16 MiB; do NOT reduce.**
+(The old guidance to consider 12 MiB is void; the pool is fully earning
+its keep. The opposite ceiling still holds too: 32 MiB doesn't boot.)
 
 ## 3. Userspace: mostly fine, three notes
 
@@ -85,11 +107,12 @@ Only worth it if userspace actually hits OOM after the kernel diet — check
 
 ## Recommended order
 
-1. Measure CMA + FastCarPlay RSS on the board during streaming (commands above).
-2. Kernel diet fragment: -Os, no NFS/sunrpc, no SND, no PERF/SUSPEND/VT/HID,
-   USB NICs to =m (net-on modprobes them). Expected: **+3.5–4 MiB userspace**.
-3. If step 1 shows ≥5 MiB CmaFree under worst-case load: CMA 16→12. **+4 MiB.**
-4. Cap /tmp; consider zram only if OOM is ever observed.
+1. ~~Measure CMA + FastCarPlay RSS on the board during streaming~~ — done,
+   see §2: CMA is fully used, stays 16 MiB.
+2. ~~Kernel diet fragment~~ — done, measured **2.94 MiB** off vmlinux (§1).
+3. ~~CMA 16→12~~ — ruled out by the measurement (2472 kB free while streaming).
+4. Still open: cap /tmp (`/tmp/carplay.log` grows unbounded); zram only if
+   OOM is ever observed.
 
 Combined realistic outcome: **~33 → ~41 MiB available to userspace** without
 touching functionality.

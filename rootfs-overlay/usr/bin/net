@@ -4,6 +4,10 @@
 case "$1" in
 on)
 	touch /etc/network-enabled
+	# NIC drivers are modules now (RAM diet) -- load them on demand
+	for m in usbnet dm9601 asix ax88179_178a cdc_ether smsc95xx; do
+		modprobe $m 2>/dev/null
+	done
 	/etc/init.d/S41eth-dev start
 	/etc/init.d/S42usb-gadget start
 	/etc/init.d/S50dropbear start

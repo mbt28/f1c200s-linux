@@ -25,8 +25,17 @@ CONFIG_DRM_FBDEV_EMULATION=y
 # (from DRM fbdev emulation) while stopping the text console/cursor from
 # fighting the video. (cf. removing console=tty0 from the bootargs.)
 CONFIG_FB=y
-CONFIG_VT=y
-CONFIG_VT_CONSOLE=y
+# No virtual terminals at all: the console is serial-only and the LCD belongs
+# to the splash/video (fb0 comes from DRM fbdev emulation, which needs no VT).
+# VT's prompt is `bool "Virtual terminal" if EXPERT` with `default y` — without
+# EXPERT=y the not-set line is silently ignored and olddefconfig forces VT back
+# on. EXPERT only unhides prompts (config-diff audited: no built code changes),
+# but it selects DEBUG_KERNEL as a menu gate, so keep DEBUG_MISC off to make
+# that gate inert. FRAMEBUFFER_CONSOLE must be explicitly off too: the base
+# defconfig sets it (and it would paint a text cursor on the LCD).
+CONFIG_EXPERT=y
+# CONFIG_DEBUG_MISC is not set
+# CONFIG_VT is not set
 # CONFIG_FRAMEBUFFER_CONSOLE is not set
 # Backlight enable on GPIO PE6 (gpio-backlight). Without this the panel is
 # driven but stays dark.
@@ -82,18 +91,18 @@ CONFIG_PHY_SUN4I_USB=y
 # rmmod/insmod it instead of reflashing. 0fe6:9700 = Davicom DM9601 (full-speed);
 # the rest cover common USB NICs if the adapter is swapped. Built-in so eth0 is
 # up at boot with no module dance.
-CONFIG_USB_USBNET=y
-CONFIG_USB_NET_DM9601=y
-CONFIG_USB_NET_AX8817X=y
-CONFIG_USB_NET_AX88179_178A=y
-CONFIG_USB_NET_CDCETHER=y
-CONFIG_USB_NET_SMSC95XX=y
+CONFIG_USB_USBNET=m
+CONFIG_USB_NET_DM9601=m
+CONFIG_USB_NET_AX8817X=m
+CONFIG_USB_NET_AX88179_178A=m
+CONFIG_USB_NET_CDCETHER=m
+CONFIG_USB_NET_SMSC95XX=m
 
 # USB-gadget ethernet (g_ether) for the dev loop: Type-C straight to the dev host
 # = power + a deterministic usb0 link, no adapter/firmware/hub. Active only when
 # the OTG is in peripheral mode (the dev image's DTS; the CarPlay image keeps host
 # mode via patch 0004, where this gadget is simply unused). USB_GADGET is already y.
-CONFIG_USB_ETH=y
+CONFIG_USB_ETH=m
 CONFIG_USB_ETH_RNDIS=y
 
 # Cedar VE + ION (BSP path for the libcedarc blob) -- the colour-correct decoder,
@@ -103,3 +112,20 @@ CONFIG_USB_ETH_RNDIS=y
 CONFIG_VIDEO_SUNXI_CEDAR_VE=m
 CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 
+# --- RAM diet (docs/memory.md, measured 2026-07-05) ---
+# The multi-platform sunxi base config carries ~13 MiB of resident kernel;
+# these cuts return ~3.5-4 MiB to userspace on the 64 MiB board.
+# Biggest single lever: optimize for size instead of performance (~15-20% text).
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+# NFS client (+ sunrpc): ~0.8 MiB, never used on the appliance.
+# CONFIG_NFS_FS is not set
+# Sound: FastCarPlay runs audio-driver=dummy; the ALSA stack is dead weight.
+# CONFIG_SOUND is not set
+# CONFIG_SND is not set
+# perf events / suspend / HID: unused on a fixed-function appliance.
+# CONFIG_PERF_EVENTS is not set
+# CONFIG_SUSPEND is not set
+# CONFIG_PM_SLEEP is not set
+# CONFIG_HID_SUPPORT is not set
+# CONFIG_HID is not set
+# CONFIG_USB_HID is not set
