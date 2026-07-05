@@ -22,9 +22,8 @@ and selectable at boot:
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | v0.1.0 baseline — cedar validated; cedrus pre-fix (broken) |
-| `cedrus-6.6-backport` | 6.6.143 | main + the cedrus fix — **hardware-validated 2026-07-04 (colour-correct, no freezes)** |
-| `kernel-7.1` | 7.1.2 | **this branch** — 7.1 port, same fix; open: freezes under decode — a **7.1-specific regression** (cedrus-6.6-backport is freeze-free with identical patches) |
+| `main` | 6.6.143 | canonical: stable 6.6, cedrus default — **hardware-validated 2026-07-04 (colour-correct, no freezes)** |
+| `kernel-7.1` | 7.1.2 | **this branch** — 7.1 port, same fix; open: freezes under decode — a **7.1-specific regression** (`main` is freeze-free with identical patches) |
 
 ## Quickstart
 
