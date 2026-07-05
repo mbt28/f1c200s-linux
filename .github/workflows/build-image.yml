@@ -1,0 +1,115 @@
+name: build-image
+
+# Builds the full sdcard.img with Buildroot on every push to the integration
+# and release branches. The image lands as a downloadable artifact on the run
+# page; pushes of v* tags additionally attach it to a GitHub Release.
+#
+# Times on the free ubuntu runner (4 vCPU): first (cold) build ~2.5-3.5 h;
+# later builds reuse the download + ccache caches and typically finish in
+# well under an hour. Hard job limit is 6 h (timeout below: 350 min).
+
+on:
+  push:
+    branches: [main, dev, kernel-7.1]
+    tags: ['v*']
+    paths-ignore: ['docs/**', '**.md']
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write # attach images to tagged releases
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdcard-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      # Buildroot needs ~15 GB; the stock runner root disk is tight.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - name: Install Buildroot host dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            bc cpio file libncurses-dev libssl-dev rsync unzip wget
+
+      - name: Fetch pinned sources (Buildroot + cedar)
+        run: scripts/fetch-sources.sh
+
+      - name: Restore download cache
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: dl-${{ hashFiles('config.env', 'configs/lctech_pi_f1c200s_sdcard_defconfig') }}
+          restore-keys: dl-
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: ccache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ github.ref_name }}-
+            ccache-
+
+      # ccache is a CI-only concern, so it is layered onto the generated
+      # .config here instead of polluting the board defconfig.
+      - name: Configure (defconfig + CI ccache overlay)
+        run: |
+          source config.env
+          scripts/build.sh "$DEFCONFIG"
+          echo 'BR2_CCACHE=y' >> output/.config
+          scripts/build.sh olddefconfig
+
+      - name: Build
+        run: scripts/build.sh
+
+      - name: Build report
+        run: |
+          {
+            echo '### Image contents'
+            echo '```'
+            ls -la output/images/
+            echo '```'
+            echo '### Kernel size'
+            echo '```'
+            size output/build/linux-custom/vmlinux 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - name: Compress image
+        run: |
+          SLUG="${GITHUB_REF_NAME//\//-}"
+          echo "SLUG=$SLUG" >> "$GITHUB_ENV"
+          xz -T0 -c output/images/sdcard.img > "sdcard-$SLUG-${GITHUB_SHA::8}.img.xz"
+          ls -la ./*.img.xz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdcard-${{ env.SLUG }}
+          path: '*.img.xz'
+          retention-days: 30
+          compression-level: 0 # already xz
+
+      - name: Attach image to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" ./*.img.xz --clobber

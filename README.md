@@ -1,5 +1,7 @@
 # f1c200s-linux
 
+[![build-image](https://github.com/mbt28/f1c200s-linux/actions/workflows/build-image.yml/badge.svg?branch=dev)](https://github.com/mbt28/f1c200s-linux/actions/workflows/build-image.yml)
+
 Custom mainline-Linux + Buildroot setup for the **Lctech Pi F1C200s** (Allwinner
 F1C200S / suniv, ARM926EJ-S / ARMv5TE soft-float, 64 MiB DDR, 480×272 LCD) used as
 a CarPlay / Android-Auto receiver.
@@ -21,8 +23,14 @@ and selectable at boot:
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | canonical: stable 6.6, cedrus default, BOTH decoders hardware-validated |
-| `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
+| `main` | 6.6.143 | **stable**: every commit hardware-validated; cedrus default, BOTH decoders working; releases are tagged here |
+| `dev` | 6.6.143 | integration — day-to-day work; CI builds a flashable image per push |
+| `feature/*` | — | short-lived experiment branches off `dev`, merged back via PR |
+| `kernel-7.1` | 7.1.2 | parallel 7.1 track, same fixes; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
+
+Workflow, CI details and release steps: `docs/development.md`. Every push to
+`dev`/`main` gets a CI-built `sdcard.img` (Actions → run → Artifacts); `v*`
+tags attach the image to a GitHub Release.
 
 The former `cedrus-6.6-backport` branch was merged into `main` and deleted —
 existing checkouts of it: `git fetch && git checkout main`.
