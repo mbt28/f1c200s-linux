@@ -58,7 +58,7 @@ package/                   fastcarplay · libcedarc · cedar-decode-test
 rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun
 cedar/                     pointer + fetch of the cedar VE+ION driver (not vendored)
 tools/cedrus_drm_test.cpp  dongle-free decode→DEFE test rig (with --dump)
-docs/                      hardware-fixes · cedrus-status · ffmpeg-v4l2-request
+docs/                      display · hardware-fixes · cedrus-status · ffmpeg-v4l2-request
 ```
 
 Upstream sources land in `buildroot/`, `cedar/src/`, `output/` — all git-ignored.
@@ -142,18 +142,13 @@ The manual `carplay` command still works and replaces a running instance.
 
 ## Boot splash (runtime-selectable)
 
-Ten themes ship in `/etc/splash/` (sources + generator in
-`board/lctech/pi-f1c200s/splash-themes/`). Pick one **on the board** — it
-persists and shows from the next boot:
-
 ```sh
-ls /etc/splash/                                   # the theme list
-echo 03-tux > /etc/splash-theme                   # select (survives reboot)
-zcat /etc/splash/03-tux.fb.gz > /dev/fb0          # instant preview, no reboot
+echo 03-tux > /etc/splash-theme              # pick a theme -- persists, shows from next boot
+zcat /etc/splash/03-tux.fb.gz > /dev/fb0     # instant preview, no reboot
 ```
 
-Themes are raw 480x272 framebuffer dumps blitted by `S00splash`; no rebuild is
-ever needed to switch.
+Ten themes ship in `/etc/splash/`. Full display documentation (pipeline,
+U-Boot splash, themes, FastCarPlay DRM rendering): `docs/display.md`.
 
 ## Versions
 
