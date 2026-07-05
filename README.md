@@ -21,14 +21,16 @@ and selectable at boot:
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | canonical: stable 6.6, cedrus default, BOTH decoders hardware-validated (identical content to cedrus-6.6-backport) |
-| `cedrus-6.6-backport` | 6.6.143 | the validated working branch — kept byte-identical with `main` (existing checkouts can keep using it) |
+| `main` | 6.6.143 | canonical: stable 6.6, cedrus default, BOTH decoders hardware-validated |
 | `kernel-7.1` | 7.1.2 | 7.1 port with the same fix; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
+
+The former `cedrus-6.6-backport` branch was merged into `main` and deleted —
+existing checkouts of it: `git fetch && git checkout main`.
 
 ## Quickstart
 
 ```sh
-git clone -b cedrus-6.6-backport https://github.com/mbt28/f1c200s-linux.git
+git clone https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
 scripts/fetch-sources.sh          # clones Buildroot (pinned) + the cedar driver
 scripts/build.sh                  # downloads Linux 6.6.143 + U-Boot 2026.04, builds
