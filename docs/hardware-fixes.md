@@ -16,14 +16,9 @@ patches/config but documented here so they are not re-discovered.
   right-sizes it to `max(1 MiB, w×h)`.
 
 ## Display
-- **Panel:** 480×272 RGB via sun4i DRM (a10 fallback compatibles) + panel-simple
-  `qd43003c0-40`; backlight enable on **GPIO PE6** (`gpio-backlight`) or it stays
-  dark. (`patches/linux-lctech/0001`, `linux.fragment`)
-- **No LCD text console:** `FRAMEBUFFER_CONSOLE` is off so the video owns `/dev/fb0`;
-  the console lives on serial. Removing `console=tty0` from bootargs matters too.
-- **DEFE zero-copy:** the sun4i **front-end** scans out black until `EN_REG` bit31
-  is cleared — the one-line fix in `patches/linux-lctech/0005` unlocks the HW plane.
-- **DEBE packed YUV422 is unusable** (wrong colours); use the front-end / fb path.
+Moved to **[display.md](display.md)** — pipeline (DEFE/DEBE/TCON), panel
+timings, U-Boot splash + the 2026.04 fb-reservation trap, DEFE EN-bit31 and
+DEBE-YUV422 quirks, runtime boot splash, FastCarPlay DRM rendering.
 
 ## Serial console
 - The board's USB-C serial is **UART1** (PA2/PA3, CH340). The DT aliases
