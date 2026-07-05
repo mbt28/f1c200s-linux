@@ -12,6 +12,7 @@ getip() {
 [ "$1" != "start" ] || [ -f /etc/network-enabled ] || exit 0
 case "$1" in
 start)
+	for m in g_ether; do modprobe $m 2>/dev/null; done
 	i=0
 	while [ $i -lt 8 ] && [ ! -e /sys/class/net/usb0 ]; do sleep 1; i=$((i + 1)); done
 	[ -e /sys/class/net/usb0 ] || { echo "usb-gadget: no usb0 (g_ether not bound)" > /dev/console; exit 0; }
