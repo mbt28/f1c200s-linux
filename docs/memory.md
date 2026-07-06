@@ -52,6 +52,11 @@ Realistic total from a config diet:
 -Os; NFS, SOUND/SND, PERF_EVENTS, SUSPEND/PM_SLEEP, HID and VT all off; USB
 NIC drivers + g_ether to `=m` (`net on` / S41 / S42 modprobe them on demand).
 
+**Amended 2026-07-06:** minimal ALSA restored (SOUND/SND/SND_SOC +
+SND_SUN4I_CODEC =y) — CarPlay audio output through the internal codec is
+planned, so dropping the whole stack was wrong. USB-audio class, I2S, SPDIF
+and the dummy/loopback drivers stay off (~half the 302 KiB still saved).
+
 | vmlinux (`size`) | before | after | saved |
 |---|---:|---:|---:|
 | text | 9,494,699 | 6,783,532 | 2.59 MiB |

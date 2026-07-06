@@ -119,9 +119,19 @@ CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 CONFIG_CC_OPTIMIZE_FOR_SIZE=y
 # NFS client (+ sunrpc): ~0.8 MiB, never used on the appliance.
 # CONFIG_NFS_FS is not set
-# Sound: FastCarPlay runs audio-driver=dummy; the ALSA stack is dead weight.
-# CONFIG_SOUND is not set
-# CONFIG_SND is not set
+# Sound: minimal ALSA for the F1C200s internal codec (CarPlay audio output is
+# planned; FastCarPlay's PcmAudio plays through SDL/ALSA once the dummy audio
+# driver is dropped). The unused transports stay off: USB-audio class, I2S,
+# SPDIF and the dummy/loopback SND_DRIVERS gate - that keeps ~half of the
+# original 302 KiB sound-stack saving.
+CONFIG_SOUND=y
+CONFIG_SND=y
+CONFIG_SND_SOC=y
+CONFIG_SND_SUN4I_CODEC=y
+# CONFIG_SND_USB is not set
+# CONFIG_SND_SUN4I_I2S is not set
+# CONFIG_SND_SUN4I_SPDIF is not set
+# CONFIG_SND_DRIVERS is not set
 # perf events / suspend / HID: unused on a fixed-function appliance.
 # CONFIG_PERF_EVENTS is not set
 # CONFIG_SUSPEND is not set
