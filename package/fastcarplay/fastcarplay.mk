@@ -9,8 +9,9 @@
 #   FASTCARPLAY_VERSION = local
 #   FASTCARPLAY_SITE = /path/to/FastCarPlay
 #   FASTCARPLAY_SITE_METHOD = local
-# f1c200s-cedrus branch HEAD: + UI overlay on the DRM path (drm_display).
-FASTCARPLAY_VERSION = 0ddd2751b698ab4b0ceb6fddd506009fe3c04f88
+# f1c200s-cedrus branch HEAD: + native wired Android Auto backend (AOAP,
+# protocol=aa-usb, no dongle) and -latomic for the arm926 target.
+FASTCARPLAY_VERSION = 48f0dc9db30f781a88ad12402ec1e662f68f3a87
 FASTCARPLAY_SITE = $(call github,mbt28,FastCarPlay,$(FASTCARPLAY_VERSION))
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
