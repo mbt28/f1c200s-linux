@@ -37,7 +37,7 @@ jobs:
           sudo docker image prune --all --force >/dev/null 2>&1 || true
           df -h /
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Buildroot host dependencies
         run: |
@@ -49,14 +49,14 @@ jobs:
         run: scripts/fetch-sources.sh
 
       - name: Restore download cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: buildroot/dl
           key: dl-${{ hashFiles('config.env', 'configs/lctech_pi_f1c200s_sdcard_defconfig') }}
           restore-keys: dl-
 
       - name: Restore compiler cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.buildroot-ccache
           key: ccache-${{ github.ref_name }}-${{ github.run_id }}
@@ -98,7 +98,7 @@ jobs:
           ls -la ./*.img.xz
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sdcard-${{ env.SLUG }}
           path: '*.img.xz'
