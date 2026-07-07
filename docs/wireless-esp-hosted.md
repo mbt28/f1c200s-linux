@@ -119,9 +119,10 @@ RTS/CTS needed — good, PA has none; exact ESP-side UART pins per setup.md
 handshake/data-ready toggling.
 
 **P2 — ESP firmware**
-Pin an esp-hosted release in `config.env` (like the cedar pin); flash the
-prebuilt NG (and FG) firmware from the Pi with esptool over the ESP's own
-USB/UART. Document in this file. Exit: firmware banner, handshake GPIO toggles.
+Pin the esp-hosted release in `config.env` (like the cedar pin) and flash the
+prebuilt NG firmware over the DevKitC's own USB — full procedure in the
+[appendix](#appendix-flashing-the-devkitc-with-esp-hosted-ng). Exit: firmware
+banner on the DevKitC serial monitor, handshake GPIO toggles.
 
 **P3 — WiFi/NG on the host**
 - Kernel fragment: `CONFIG_CFG80211=m` (+ rfkill); nothing else — fullmac.
@@ -168,3 +169,54 @@ promote dev → main + tag.
 - ARM926 @ 408 MHz interrupt latency may cap SPI throughput below the
   theoretical link rate; the iperf gate in P3 catches it early.
 - SPI-flash pads may be populated on some board revisions (P0(c)).
+
+## Appendix: flashing the DevKitC with ESP-Hosted-NG
+
+Verified against the actual `release/ng-1.0.6` artifact (2026-07-07). The
+DevKitC flashes over its **own micro-USB** (CP2102 → `/dev/ttyUSB0` on the
+PC) — the F1C200s board is not involved at all.
+
+1. **Download + unpack the release** (any Linux PC):
+
+   ```sh
+   gh release download release/ng-1.0.6 --repo espressif/esp-hosted -p "*.tgz" -O ng.tgz
+   # or: browser -> github.com/espressif/esp-hosted -> Releases -> release/ng-1.0.6
+   tar xzf ng.tgz    # -> "release:ng-1.0.6/" (Apple-xattr tar warnings are harmless)
+   ```
+
+   Each chip/transport combo is one directory with 6 files (`bootloader.bin`,
+   `partition-table.bin`, `ota_data_initial.bin`, `network_adapter.bin`,
+   `flash_cmd`, `md5sum.txt`). Ours:
+   - `release:ng-1.0.6/esp32/spi_only/` — WiFi + BT over SPI (start here)
+   - `release:ng-1.0.6/esp32/spi+uart/` — WiFi over SPI, BT on UART (the P4 upgrade; a re-flash away)
+
+2. **Install esptool**: `pip install esptool` (any recent version).
+
+3. **Flash** — plug in the DevKitC, then run the release's own command
+   (contents of `flash_cmd`) plus the port; `erase_flash` first clears any
+   previous firmware on a used devkit:
+
+   ```sh
+   cd "release:ng-1.0.6/esp32/spi_only"
+   md5sum -c md5sum.txt                       # integrity check
+   python -m esptool -p /dev/ttyUSB0 --chip esp32 erase_flash
+   python -m esptool -p /dev/ttyUSB0 --chip esp32 -b 460800 \
+       --before default_reset --after hard_reset write_flash \
+       --flash_mode dio --flash_size 4MB --flash_freq 40m \
+       0x1000 bootloader.bin 0x8000 partition-table.bin \
+       0xd000 ota_data_initial.bin 0x10000 network_adapter.bin
+   ```
+
+   If esptool loops on "Connecting...", hold the **BOOT** button until it
+   syncs (most DevKitC units auto-reset fine without it).
+
+4. **Verify**: stay on the same USB port with a serial monitor at
+   **115200** (`picocom -b 115200 /dev/ttyUSB0`), press the **EN** button —
+   the NG `network_adapter` boot banner should appear. Done; from here the
+   host side (P3) takes over.
+
+Version rule: the ESP firmware and the host kernel module must come from the
+**same release tag** — on a mismatch the transport handshake fails in
+confusing ways. Both pins live in `config.env`. (Later re-flashes can also go
+over the air via the driver's `ota_file=` module parameter — USB is simpler
+while the DevKitC is on jumpers.)
