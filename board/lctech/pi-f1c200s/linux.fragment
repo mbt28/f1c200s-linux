@@ -112,6 +112,20 @@ CONFIG_USB_ETH_RNDIS=y
 CONFIG_VIDEO_SUNXI_CEDAR_VE=m
 CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 
+# --- ESP-Hosted-NG wireless: ESP32 co-processor on SPI1 (docs/wireless-esp-hosted.md) ---
+# spi1 controller (sun8i-h3-compatible, pins PE7-PE10 via patch 0012) carries
+# the ESP32 link. The WiFi/BT stacks stay modular: `wifi on` modprobes the
+# out-of-tree esp32_spi module, which pulls cfg80211 + bluetooth in via
+# symbol dependencies -- zero resident cost while wifi is off.
+CONFIG_SPI=y
+CONFIG_SPI_SUN6I=y
+# WIRELESS is the menu gate CFG80211 lives behind -- without it =m is
+# silently dropped (same kconfig trap as VT/EXPERT). WLAN (the in-tree
+# vendor-driver menu) stays off: our driver is out-of-tree.
+CONFIG_WIRELESS=y
+CONFIG_CFG80211=m
+CONFIG_BT=m
+
 # --- RAM diet (docs/memory.md, measured 2026-07-05) ---
 # The multi-platform sunxi base config carries ~13 MiB of resident kernel;
 # these cuts return ~3.5-4 MiB to userspace on the 64 MiB board.

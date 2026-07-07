@@ -1,0 +1,18 @@
+config BR2_PACKAGE_ESP_HOSTED_NG
+	bool "esp-hosted-ng"
+	depends on BR2_LINUX_KERNEL
+	help
+	  ESP-Hosted-NG host driver: WiFi (cfg80211 fullmac, wlan0) and
+	  Bluetooth (hci0) through an ESP32 co-processor running the
+	  ESP-Hosted-NG firmware. On the Lctech Pi F1C200s the ESP32
+	  hangs off spi1 (PE7-PE10, DT patch 0012); the module is loaded
+	  on demand by `wifi on` (rootfs-overlay/usr/bin/wifi).
+
+	  The kernel needs CONFIG_CFG80211=m and CONFIG_BT=m (board
+	  fragment) and the ESP32 must run the firmware from the SAME
+	  esp-hosted release as this driver pin (docs/wireless-esp-hosted.md).
+
+	  https://github.com/espressif/esp-hosted
+
+comment "esp-hosted-ng needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL

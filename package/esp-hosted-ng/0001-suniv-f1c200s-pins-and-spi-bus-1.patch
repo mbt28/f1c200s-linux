@@ -1,0 +1,36 @@
+suniv f1c200s: handshake/data-ready on PE2/PE3, SPI bus 1
+
+The SPI glue hardcodes Raspberry-Pi wiring. On the Lctech Pi F1C200s the
+ESP32 hangs off spi1 (PE7-PE10, fixed to bus number 1 by a DT alias) with
+the handshake on PE2 (sunxi global gpio 130) and data-ready on PE3 (131).
+The reset pin stays a module parameter (resetpin=132 = PE4).
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+diff -ruN a/esp_hosted_ng/host/spi/esp_spi.c b/esp_hosted_ng/host/spi/esp_spi.c
+--- a/esp_hosted_ng/host/spi/esp_spi.c	2026-07-07 20:57:43.422661543 +0200
++++ b/esp_hosted_ng/host/spi/esp_spi.c	2026-07-07 20:57:43.427088152 +0200
+@@ -454,7 +454,7 @@
+ 	strscpy(esp_board.modalias, "esp_spi", sizeof(esp_board.modalias));
+ 	esp_board.mode = g_spi_mode;
+ 	esp_board.max_speed_hz = spi_clk_mhz * NUMBER_1M;
+-	esp_board.bus_num = 0;
++	esp_board.bus_num = 1;	/* suniv spi1 (fixed by DT alias on the lctech board) */
+ 	esp_board.chip_select = 0;
+ 
+ 	esp_info("Using SPI MODE %d\n",g_spi_mode);
+diff -ruN a/esp_hosted_ng/host/spi/esp_spi.h b/esp_hosted_ng/host/spi/esp_spi.h
+--- a/esp_hosted_ng/host/spi/esp_spi.h	2026-07-07 20:57:43.422636654 +0200
++++ b/esp_hosted_ng/host/spi/esp_spi.h	2026-07-07 20:57:43.425223016 +0200
+@@ -9,9 +9,9 @@
+ 
+ #include "esp.h"
+ 
+-#define HANDSHAKE_PIN           22
++#define HANDSHAKE_PIN           130	/* PE2 on the F1C200s (sunxi global gpio: E*32+2) */
+ #define SPI_IRQ                 gpio_to_irq(HANDSHAKE_PIN)
+-#define SPI_DATA_READY_PIN      27
++#define SPI_DATA_READY_PIN      131	/* PE3 */
+ #define SPI_DATA_READY_IRQ      gpio_to_irq(SPI_DATA_READY_PIN)
+ #define SPI_BUF_SIZE            1600
+ 

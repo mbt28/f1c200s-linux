@@ -1,0 +1,58 @@
+lctech f1c200s: enable SPI1 on PE7-PE10 for the ESP-Hosted ESP32
+
+WiFi+BT come from an ESP32-DevKitC running the ESP-Hosted-NG firmware,
+wired to header P1 (docs/wireless-esp-hosted.md): SPI1 on PE7 (CS) /
+PE8 (MOSI) / PE9 (CLK) / PE10 (MISO), plus PE2 handshake, PE3 data-ready
+and PE4 reset as plain GPIOs claimed by the out-of-tree esp32_spi module.
+
+The mainline dtsi has neither an spi1 pinctrl group nor an spi alias, so
+both are added here. The alias is load-bearing: the esp driver attaches
+its spi_board_info by fixed bus number (spi_busnum_to_master(1)); without
+the alias the controller gets a dynamic bus number and probing fails with
+"Failed to obtain SPI master handle". No child node on spi1 on purpose --
+the driver registers its own device on bus 1 / CS 0.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -17,6 +17,9 @@
+ 
+ 	aliases {
+ 		serial0 = &uart1;
++		/* Fixed bus number 1: the esp-hosted-ng driver attaches its
++		 * spi_board_info by bus number (spi_busnum_to_master(1)). */
++		spi1 = &spi1;
+ 	};
+ 
+ 	chosen {
+@@ -55,6 +58,19 @@
+ 	};
+ };
+ 
++/*
++ * ESP32 (ESP-Hosted-NG firmware) on SPI1, header P1: PE7 CS / PE8 MOSI /
++ * PE9 CLK / PE10 MISO, plus PE2 handshake, PE3 data-ready and PE4 reset as
++ * plain GPIOs claimed by the esp32_spi module (docs/wireless-esp-hosted.md).
++ * No child node on purpose: the out-of-tree driver registers its own
++ * spi_board_info on bus 1 / CS 0.
++ */
++&spi1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&spi1_pe_pins>;
++	status = "okay";
++};
++
+ &uart1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&uart1_pa_pins>;
+@@ -103,6 +119,11 @@
+ 		       "PD18", "PD19", "PD20", "PD21";
+ 		function = "lcd";
+ 	};
++
++	spi1_pe_pins: spi1-pe-pins {
++		pins = "PE7", "PE8", "PE9", "PE10";
++		function = "spi1";
++	};
+ };
+ 
+ &{/soc} {

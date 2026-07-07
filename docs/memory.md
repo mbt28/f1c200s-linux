@@ -57,6 +57,11 @@ SND_SUN4I_CODEC =y) — CarPlay audio output through the internal codec is
 planned, so dropping the whole stack was wrong. USB-audio class, I2S, SPDIF
 and the dummy/loopback drivers stay off (~half the 302 KiB still saved).
 
+**Amended 2026-07-07 (wireless):** ESP-Hosted-NG adds cfg80211 + bluetooth +
+esp32_spi as modules — ~1–1.5 MiB resident plus wpa_supplicant RSS, but ONLY
+while `wifi on`; `wifi off` unloads all three, so the diet is untouched in
+the appliance's default state. SPI core (+sun6i) is built-in (~40 KiB).
+
 | vmlinux (`size`) | before | after | saved |
 |---|---:|---:|---:|
 | text | 9,494,699 | 6,783,532 | 2.59 MiB |

@@ -73,3 +73,18 @@ BR2_PACKAGE_LIBCEDARC_ARCHLIB="toolchain-sunxi-arm9-glibc"
 BR2_PACKAGE_LIBCEDARC_DECODER=y
 BR2_PACKAGE_LIBCEDARC_DECODER_H264=y
 BR2_PACKAGE_CEDAR_DECODE_TEST=y
+
+# WiFi + Bluetooth via the ESP32 co-processor (ESP-Hosted-NG on spi1, patch
+# 0012 + docs/wireless-esp-hosted.md). The esp32_spi module is loaded on
+# demand by `wifi on` -- everything default-off, appliance-style.
+BR2_PACKAGE_ESP_HOSTED_NG=y
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
+BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_WIRELESS_REGDB=y
+# BlueZ tools for BT bring-up (hciconfig/hcitool scans need no bluetoothd);
+# pulls dbus + libglib2 (~2.5 MB) -- needed later for wireless-AA RFCOMM anyway.
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
+BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y

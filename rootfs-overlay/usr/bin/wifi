@@ -1,0 +1,38 @@
+#!/bin/sh
+# Runtime WiFi switch (ESP32 / ESP-Hosted-NG) -- same shape as `net`:
+#   wifi on      enable now + autostart on boot (flag /etc/wifi-enabled)
+#   wifi off     disable + unload the modules (frees the RAM back)
+#   wifi status  transport / association / address in one look
+# STA config lives in /etc/wpa_supplicant.conf. Bluetooth arrives with the
+# same module (hci0): hciconfig hci0 up; hcitool scan.
+case "$1" in
+on)
+	touch /etc/wifi-enabled
+	exec /etc/init.d/S43wifi start
+	;;
+off)
+	rm -f /etc/wifi-enabled
+	/etc/init.d/S43wifi stop
+	# Unload in dependency order; cfg80211/bluetooth only unload when
+	# nothing else uses them (best effort -- keeps the diet honest).
+	modprobe -r esp32_spi 2>/dev/null
+	modprobe -r bluetooth 2>/dev/null
+	modprobe -r cfg80211 2>/dev/null
+	echo "wifi: off (modules unloaded)"
+	;;
+status)
+	[ -f /etc/wifi-enabled ] && echo "flag:      enabled (autostarts)" || echo "flag:      disabled"
+	grep -q "^esp32_spi " /proc/modules && echo "module:    esp32_spi loaded" || echo "module:    not loaded"
+	if [ -d /sys/class/net/wlan0 ]; then
+		echo "wlan0:     present"
+		iw dev wlan0 link 2>/dev/null | sed 's/^/  /'
+		ip addr show wlan0 2>/dev/null | grep -oE 'inet ([0-9]+\.){3}[0-9]+[^ ]*' | sed 's/^/  /'
+	else
+		echo "wlan0:     missing"
+	fi
+	[ -d /sys/class/bluetooth/hci0 ] && echo "bluetooth: hci0 present" || echo "bluetooth: hci0 missing"
+	;;
+*)
+	echo "usage: wifi {on|off|status}"
+	;;
+esac

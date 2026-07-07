@@ -1,0 +1,37 @@
+#!/bin/sh
+# WiFi via the ESP32 co-processor (ESP-Hosted-NG driver on spi1; wiring and
+# triage in docs/wireless-esp-hosted.md). Opt-in: enabled at runtime with
+# `wifi on` (creates the flag below); disabled by default for a clean
+# appliance. Loading the module also registers hci0 (BT over the same SPI
+# link) -- BT stays manual: hciconfig hci0 up; hcitool scan.
+[ "$1" != "start" ] || [ -f /etc/wifi-enabled ] || exit 0
+case "$1" in
+start)
+	# Pulls cfg80211 + bluetooth via dependencies. resetpin=132 (PE4),
+	# conservative 10 MHz SPI clock for the jumper-wire bring-up.
+	modprobe esp32_spi resetpin=132 clockspeed=10 2>/dev/null
+	i=0
+	while [ $i -lt 10 ] && [ ! -d /sys/class/net/wlan0 ]; do sleep 1; i=$((i + 1)); done
+	[ -d /sys/class/net/wlan0 ] || {
+		echo "wifi: no wlan0 (ESP32 transport failed -- check wiring + dmesg)" > /dev/console
+		exit 0
+	}
+	ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up
+	if grep -q "YOUR_SSID" /etc/wpa_supplicant.conf 2>/dev/null; then
+		echo "wifi: wlan0 up; edit /etc/wpa_supplicant.conf (still placeholder), then: wifi off; wifi on" > /dev/console
+		exit 0
+	fi
+	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+	# -b: keep retrying in the background until association completes
+	udhcpc -i wlan0 -b -t 8 -T 1 >/dev/null 2>&1
+	echo "============ wifi: wlan0 associating -- check with \`wifi status\` ============" > /dev/console
+	;;
+stop)
+	pkill -f "wpa_supplicant.*wlan0" 2>/dev/null
+	pkill -f "udhcpc.*wlan0" 2>/dev/null
+	ip link set wlan0 down 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
