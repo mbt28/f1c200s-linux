@@ -1,0 +1,40 @@
+lctech f1c200s: enable UART0 on PE0/PE1 for the ESP32 BT HCI
+
+BT-over-SPI proved flaky on the shared link (HCI command timeouts while
+WLAN runs error-free), so Bluetooth moves to its own UART: the ESP32 runs
+the release's esp32/spi+uart firmware (HCI H4 on its UART1 @ 921600, TX
+IO5 / RX IO18; its CTS IO23 is strapped to GND since the host side has no
+flow-control pins), wired to UART0 on PE0/PE1 (header P1).
+
+The CherryPi schematic routes the CH340 USB-serial to PE0/PE1, but
+production Lctech boards demonstrably route it to PA2/PA3 (the console,
+serial0 = &uart1, works there) -- PE0/PE1 are free. The serial1 alias
+pins the device name ttyS1 for the hciattach in `bt on`.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -17,6 +17,11 @@
+ 
+ 	aliases {
+ 		serial0 = &uart1;
++		/* ttyS1: BT HCI to the ESP32 (H4 at 921600, hciattach'd by
++		 * `bt on`). The CherryPi schematic routes the CH340 to these
++		 * pins, but production boards demonstrably use PA2/PA3, so
++		 * PE0/PE1 are free on header P1. */
++		serial1 = &uart0;
+ 		/* Fixed bus number 1: the esp-hosted-ng driver attaches its
+ 		 * spi_board_info by bus number (spi_busnum_to_master(1)). */
+ 		spi1 = &spi1;
+@@ -71,6 +76,12 @@
+ 	status = "okay";
+ };
+ 
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0_pe_pins>;
++	status = "okay";
++};
++
+ &uart1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&uart1_pa_pins>;

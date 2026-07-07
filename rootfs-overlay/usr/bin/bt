@@ -1,0 +1,39 @@
+#!/bin/sh
+# Bluetooth runtime switch: HCI H4 over UART0/ttyS1 to the ESP32 running the
+# esp32/spi+uart firmware (fixed 921600 baud, its CTS strapped to GND --
+# docs/wireless-esp-hosted.md). Independent of `wifi`: the ESP just has to be
+# powered (it always is, VIN) and running the spi+uart build.
+#   bt on       attach hci0 and bring it up
+#   bt off      detach + unload
+#   bt status   adapter state in one look
+case "$1" in
+on)
+	modprobe hci_uart 2>/dev/null
+	# H4 line discipline; host side has no RTS/CTS pins -> noflow.
+	pgrep -f "hciattach.*ttyS1" >/dev/null || {
+		hciattach /dev/ttyS1 any 921600 noflow || {
+			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
+			exit 1
+		}
+	}
+	sleep 1
+	hciconfig hci0 up && hciconfig hci0 | sed -n 2,3p
+	;;
+off)
+	hciconfig hci0 down 2>/dev/null
+	pkill -f "hciattach.*ttyS1" 2>/dev/null
+	modprobe -r hci_uart 2>/dev/null
+	echo "bt: off"
+	;;
+status)
+	pgrep -f "hciattach.*ttyS1" >/dev/null && echo "hciattach:  running (ttyS1 @ 921600)" || echo "hciattach:  not running"
+	if [ -d /sys/class/bluetooth/hci0 ]; then
+		hciconfig hci0 | sed -n 1,3p
+	else
+		echo "hci0:       missing"
+	fi
+	;;
+*)
+	echo "usage: bt {on|off|status}"
+	;;
+esac

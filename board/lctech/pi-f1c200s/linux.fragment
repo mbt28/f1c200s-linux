@@ -131,6 +131,11 @@ CONFIG_CFG80211=m
 CONFIG_CFG80211_CERTIFICATION_ONUS=y
 # CONFIG_CFG80211_REQUIRE_SIGNED_REGDB is not set
 CONFIG_BT=m
+# BT rides a dedicated UART (H4 on ttyS1/PE0-PE1 to the ESP32's spi+uart
+# firmware; patch 0013) after HCI-over-SPI proved flaky. `bt on` runs
+# hciattach; hci_uart stays modular like the rest of the wireless stack.
+CONFIG_BT_HCIUART=m
+CONFIG_BT_HCIUART_H4=y
 
 # --- RAM diet (docs/memory.md, measured 2026-07-05) ---
 # The multi-platform sunxi base config carries ~13 MiB of resident kernel;
