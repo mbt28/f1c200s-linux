@@ -190,7 +190,14 @@ PC) — the F1C200s board is not involved at all.
    - `release:ng-1.0.6/esp32/spi_only/` — WiFi + BT over SPI (start here)
    - `release:ng-1.0.6/esp32/spi+uart/` — WiFi over SPI, BT on UART (the P4 upgrade; a re-flash away)
 
-2. **Install esptool**: `pip install esptool` (any recent version).
+2. **Install esptool**: `pipx install esptool`, then use the **`esptool.py`
+   command** (pipx puts it on PATH; `python -m esptool` won't find it — pipx
+   venvs aren't importable; `pipx ensurepath` + new shell if the command is
+   missing). Avoid the Debian/Ubuntu `python3-esptool` package: it strips
+   the precompiled stub-flasher blobs (DFSG), so it crashes with
+   `FileNotFoundError: ... stub_flasher_32.json` right after connecting
+   (seen 2026-07-07). If you must use it, add `--no-stub` to every esptool
+   command — works, just flashes slower.
 
 3. **Flash** — plug in the DevKitC, then run the release's own command
    (contents of `flash_cmd`) plus the port; `erase_flash` first clears any
@@ -199,13 +206,16 @@ PC) — the F1C200s board is not involved at all.
    ```sh
    cd "release:ng-1.0.6/esp32/spi_only"
    md5sum -c md5sum.txt                       # integrity check
-   python -m esptool -p /dev/ttyUSB0 --chip esp32 erase_flash
-   python -m esptool -p /dev/ttyUSB0 --chip esp32 -b 460800 \
+   esptool.py -p /dev/ttyUSB0 --chip esp32 erase_flash
+   esptool.py -p /dev/ttyUSB0 --chip esp32 -b 460800 \
        --before default_reset --after hard_reset write_flash \
        --flash_mode dio --flash_size 4MB --flash_freq 40m \
        0x1000 bootloader.bin 0x8000 partition-table.bin \
        0xd000 ota_data_initial.bin 0x10000 network_adapter.bin
    ```
+
+   (The shipped `flash_cmd` file uses the `python -m esptool` spelling — same
+   arguments, only valid for a pip/site-packages install.)
 
    If esptool loops on "Connecting...", hold the **BOOT** button until it
    syncs (most DevKitC units auto-reset fine without it).
