@@ -101,7 +101,12 @@ Exit: 2.4 GHz risk retired.
 
 Pin-to-pin (ESP32 side fixed by the NG firmware, `docs/setup.md` §2.1):
 
-All F1C200s pins below sit on the P1 header (schematic-verified):
+All F1C200s pins below sit on the P1 header (schematic-verified). The
+ESP32-side pins are from the **firmware's own boot log** (`FW_SPI: ... HS: 3
+DR: 4`) — the setup.md table upstream says IO2 for handshake and is WRONG for
+the ng-1.0.6 esp32 build; it cost a debugging round (2026-07-08: data-ready
+IRQ count 1, handshake stuck at 0 until the wire moved to IO3). When in
+doubt, trust the `FW_SPI:` line on the ESP console.
 
 | F1C200s (header P1) | dir | ESP32-DevKitC | function |
 |---|:---:|---|---|
@@ -109,7 +114,7 @@ All F1C200s pins below sit on the P1 header (schematic-verified):
 | PE7 (SPI1_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
 | PE10 (SPI1_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
 | PE8 (SPI1_MOSI) | → | IO13 | MOSI |
-| PE2 (gpio 130) | ← | IO2 | handshake |
+| PE2 (gpio 130) | ← | **IO3** | handshake (yes, the ESP console RX pin — console output still works, input doesn't) |
 | PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
 | 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
