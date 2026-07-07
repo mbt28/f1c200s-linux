@@ -28,9 +28,13 @@ gap. With BT on its own UART, the BT stack is identical under both.
 
 ## Hardware constraints (audited against our DT, 2026-07-07)
 
-- Chip: **original ESP32 (WROOM-32E)** — the only ESP with **BT Classic
-  (BR/EDR)**, which the wireless-AA RFCOMM handshake needs. C3/C6/S3/C5 are
-  BLE-only. Consequence: **2.4 GHz-only WiFi** (see Risks).
+- Chip: **original ESP32 — confirmed hardware: ESP32-WROOM-32 on an
+  ESP32-DevKitC** — the only ESP family member with **BT Classic (BR/EDR)**,
+  which the wireless-AA RFCOMM handshake needs (C3/C6/S3/C5 are BLE-only).
+  Consequence: **2.4 GHz-only WiFi** (see Risks). DevKitC bonuses: onboard
+  USB-UART (flash the NG firmware from any PC with esptool — no target-side
+  tooling) and its own 5 V→3V3 regulator (feed **5 V + GND** from the board's
+  5 V rail; the 3V3-budget risk is retired).
 - **SDIO is out**: SDC1 muxes on PA0–PA3, but PA0 is the touch reset and
   PA2/PA3 are UART1. mmc0 is the boot SD card.
 - **SPI0 on PC0–PC3** is the transport candidate — the Lctech SPI-flash pads
@@ -80,9 +84,26 @@ Still open: (c) SPI0 flash pads free on our board rev; (d) wireless AA on a
 Exit: pin map frozen, 2.4 GHz risk retired.
 
 **P1 — wiring + DT**
-Wire WROOM-32E: SPI0 (PC0–3) + handshake/data-ready/reset GPIOs (PE) + UART1
-(PA2/3) + 3V3. DT patch: enable `&spi0` with the esp32 node (`spidev` first
-for probing), `&uart1`. Exit: `spidev_test` loopback + ESP boot log on UART1.
+
+Pin-to-pin (ESP32 side fixed by the NG firmware, `docs/setup.md` §2.1):
+
+| F1C200s | dir | ESP32-DevKitC | function |
+|---|:---:|---|---|
+| PC0 (SPI0_CLK) | → | IO14 | SCLK |
+| PC1 (SPI0_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
+| PC2 (SPI0_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
+| PC3 (SPI0_MOSI) | → | IO13 | MOSI |
+| PE2 (gpio 130) | ← | IO2 | handshake |
+| PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
+| PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
+| 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
+
+Short jumpers (SPI @ ~10 MHz to start, raise later). BT initially runs over
+the same SPI (NG "SPI only" mode) — zero extra wires; UART1 (PA2/PA3) BT is
+the optional P4 upgrade (ESP32 supports 2-line HCI UART, no RTS/CTS needed —
+good, PA has none; exact ESP-side UART pins per setup.md §2.3).
+DT patch: enable `&spi0` on the PC pins (keep spidev off CS0), `&uart1`.
+Exit: ESP boot log on its USB console + handshake/data-ready toggling.
 
 **P2 — ESP firmware**
 Pin an esp-hosted release in `config.env` (like the cedar pin); flash the
