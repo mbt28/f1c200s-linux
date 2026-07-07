@@ -47,9 +47,14 @@ which is the Lctech Pi design. The board exposes two GPIO headers:
   stay unpopulated, which it is on standard Lctech units).
 - Handshake / data-ready / reset host GPIOs: **PE2 / PE3 / PE4**, also on P1
   (PE5 spare). PE0/PE1 = console UART0, PE6 = backlight EN, PE12 = touch IRQ.
-- **UART1 on PA2/PA3 (header P3)** remains the optional BT-HCI upgrade
-  (2-line, no flow control — PA0 is the touch reset, PA1 free). Using SPI1
-  costs us UART2 (same PE7/PE8 pins), which is why BT-over-SPI comes first.
+- **UART1 (PA2/PA3) is the serial console** — correction found in the DTS
+  (`serial0 = &uart1`, and the working console proves the CH340 is wired to
+  PA on production boards, not to PE0/PE1 as the CherryPi schematic's default
+  resistor population suggests). So there is **no free UART for BT HCI**:
+  UART2's pins are consumed by SPI1, UART1 is the console. BT runs over the
+  same SPI link (fully supported by NG). PE0/PE1 (UART0, on header P1, unused
+  by the DTS) are a *potential* future HCI UART, pending an electrical check
+  of what the CH340 alternate-routing resistors actually do to those pins.
 - Power: DevKitC VIN takes the board's 5 V rail; its own regulator makes the
   3V3 budget a non-issue.
 
@@ -109,14 +114,16 @@ All F1C200s pins below sit on the P1 header (schematic-verified):
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
 | 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
 
-Short jumpers (SPI @ ~10 MHz to start, raise later). BT initially runs over
-the same SPI (NG "SPI only" mode) — zero extra wires; UART1 (PA2/PA3, header
-P3) BT is the optional P4 upgrade (ESP32 supports 2-line HCI UART, no
-RTS/CTS needed — good, PA has none; exact ESP-side UART pins per setup.md
-§2.3). DT patch: enable `&spi1` with a new `spi1_pe_pins` pinctrl group
-(mainline suniv dtsi has none) — and the driver glue patch must register the
-`spi_board_info` on **bus 1**. Exit: ESP boot log on its USB console +
-handshake/data-ready toggling.
+Short jumpers (SPI @ ~10 MHz to start, raise later). BT runs over the same
+SPI (NG "SPI only" mode) — zero extra wires, and with UART1 hosting the
+console there is no free UART anyway (see constraints). DT patch: enable
+`&spi1` with a new `spi1_pe_pins` pinctrl group (mainline suniv dtsi has
+none) — and the driver glue patch must register the `spi_board_info` on
+**bus 1**. Exit: ESP boot log on its USB console + handshake/data-ready
+toggling.
+
+*Status: implemented as `patches/linux-lctech/0012` (pinctrl group + `&spi1`
++ the load-bearing `spi1` DT alias that pins bus number 1).*
 
 **P2 — ESP firmware**
 Pin the esp-hosted release in `config.env` (like the cedar pin) and flash the
@@ -124,21 +131,49 @@ prebuilt NG firmware over the DevKitC's own USB — full procedure in the
 [appendix](#appendix-flashing-the-devkitc-with-esp-hosted-ng). Exit: firmware
 banner on the DevKitC serial monitor, handshake GPIO toggles.
 
-**P3 — WiFi/NG on the host**
-- Kernel fragment: `CONFIG_CFG80211=m` (+ rfkill); nothing else — fullmac.
-- New Buildroot packages: `esp-hosted-ng` (out-of-tree kernel module, same
-  pattern as the cedar/fastcarplay packages), `wpa_supplicant`, `iw`,
-  `wireless-regdb`.
-- Runtime switch, same shape as `net`/`ve-driver`: `wifi on|off|status`
-  modprobes the module + starts wpa_supplicant from `/etc/wpa_supplicant.conf`;
-  flag file `/etc/wifi-enabled`; disabled by default.
-Exit: scan + STA associate + DHCP + **iperf3 ≥ 15 Mbit/s** (SPI @ ~30 MHz);
-`net on` dev loop works over wlan0.
+**P3 — WiFi/NG on the host** — *IMPLEMENTED 2026-07-07 (this commit)*
+- Kernel fragment: `CONFIG_SPI(_SUN6I)=y`, `CONFIG_CFG80211=m`, `CONFIG_BT=m`
+  (esp32_spi links esp_bt.o unconditionally — BT core is a modprobe dep).
+- Buildroot: `package/esp-hosted-ng/` (kernel-module infra, pinned to the
+  release/ng-1.0.6 commit, `target=spi CONFIG_AP_SUPPORT=y`, per-package
+  patch moves handshake/data-ready to PE2/PE3 and the bus to 1);
+  wpa_supplicant (nl80211) + iw + wireless-regdb; bluez5-utils incl. the
+  deprecated tools (hciconfig/hcitool work without bluetoothd).
+- Runtime switch, same shape as `net`: **`wifi on|off|status`** +
+  `/etc/init.d/S43wifi`, flag `/etc/wifi-enabled`, STA config in
+  `/etc/wpa_supplicant.conf` (placeholder shipped). `wifi off` unloads the
+  modules — zero resident cost when off.
 
-**P4 — Bluetooth**
-Kernel: `CONFIG_BT=m`, `CONFIG_BT_HCIUART(+H4)=m`. Rootfs: bluez5-utils
-(headless set). `bt on` runs `hciattach /dev/ttyS1 any 921600` + bluetoothd.
-Exit: `hciconfig up`, inquiry scan, pair a phone, open an RFCOMM socket.
+**On-board test procedure (P3 exit checklist):**
+
+```sh
+wifi on                      # modprobe esp32_spi + wpa_supplicant + udhcpc
+dmesg | tail -20             # expect transport init + fw version, wlan0 + hci0
+wifi status                  # transport / association / IP in one look
+iw dev wlan0 scan | grep SSID     # WiFi RF proof (works with placeholder conf)
+vi /etc/wpa_supplicant.conf  # real SSID/PSK, then: wifi off; wifi on
+ping -c3 8.8.8.8             # full STA path
+# Bluetooth (same module, manual for now):
+hciconfig hci0 up && hciconfig
+hcitool scan                 # BR/EDR inquiry — make a phone discoverable
+hcitool lescan               # BLE proof (ctrl-C to stop)
+```
+
+Failure triage: no dmesg activity on modprobe → wiring/handshake pins;
+`Failed to obtain SPI master handle` → DT alias/bus-number problem (patch
+0012 missing from the kernel); handshake OK but timeouts/garbage → ESP
+firmware not from release/ng-1.0.6 or SPI clock too high (`clockspeed=`);
+wlan0 up but hci0 missing → CONFIG_BT didn't land (check
+`/lib/modules/*/kernel/net/bluetooth`).
+Remaining exit gate (hardware): **iperf3 ≥ 15 Mbit/s**, then raise
+`clockspeed=` from the conservative 10 toward 30 MHz.
+
+**P4 — Bluetooth userspace**
+BlueZ tools already ship (see P3). What remains: bluetoothd-based pairing
+for the wireless-AA RFCOMM handshake (bluetoothctl needs the readline
+client — enable `BR2_PACKAGE_BLUEZ5_UTILS_CLIENT` when P6 starts). A
+dedicated HCI UART is NOT planned anymore — UART1 is the console (see
+constraints); BT stays on SPI.
 
 **P5 — SoftAP (the wireless-AA prerequisite)**
 NG path: hostapd if NG's AP mode is real; FG path: `feature/esp-hosted-fg`
