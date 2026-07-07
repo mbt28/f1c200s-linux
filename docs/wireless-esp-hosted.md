@@ -35,16 +35,23 @@ gap. With BT on its own UART, the BT stack is identical under both.
   USB-UART (flash the NG firmware from any PC with esptool — no target-side
   tooling) and its own 5 V→3V3 regulator (feed **5 V + GND** from the board's
   5 V rail; the 3V3-budget risk is retired).
-- **SDIO is out**: SDC1 muxes on PA0–PA3, but PA0 is the touch reset and
-  PA2/PA3 are UART1. mmc0 is the boot SD card.
-- **SPI0 on PC0–PC3** is the transport candidate — the Lctech SPI-flash pads
-  (we boot from SD). *Verify the flash footprint is unpopulated / liftable.*
-- **UART1 on PA2/PA3** for Bluetooth HCI (`hciattach`, 921600+ baud), keeping
-  BT off the data link. UART2 (PE7/PE8) is the alternate if PA is contended.
-- ESP-Hosted SPI needs 3 extra GPIOs (handshake, data-ready, reset): the DVP
-  port PE2–PE5 / PE7–PE11 pins are free (PE6 backlight, PE12 touch IRQ in use).
-- Power: ESP32 TX bursts ~400–500 mA @3V3 — check the board regulator budget;
-  a dedicated 3V3 LDO off 5V is the safe default.
+Verified against the CherryPi-F1C200S schematic (`~/projects/f1c200s/docs/`),
+which is the Lctech Pi design. The board exposes two GPIO headers:
+**P1 (12-pin) = PE0–PE11** and **P3 (18-pin) = PA0–PA3 + TWI0 + analog**.
+
+- **PC0–PC3 (SPI0) are NOT on any header** — they run to the SPI-flash
+  footprint only (10 k pull-ups + the boot-skip button on MISO). SPI0 is out.
+- **SDIO is out too**: SDC1 muxes on PC0–PC2 (same flash pads) — dead end.
+- **Transport: SPI1 on PE7 (CS) / PE8 (MOSI) / PE9 (CLK) / PE10 (MISO)** —
+  all four on header P1 (they double as UART2/CSI; the camera footprint must
+  stay unpopulated, which it is on standard Lctech units).
+- Handshake / data-ready / reset host GPIOs: **PE2 / PE3 / PE4**, also on P1
+  (PE5 spare). PE0/PE1 = console UART0, PE6 = backlight EN, PE12 = touch IRQ.
+- **UART1 on PA2/PA3 (header P3)** remains the optional BT-HCI upgrade
+  (2-line, no flow control — PA0 is the touch reset, PA1 free). Using SPI1
+  costs us UART2 (same PE7/PE8 pins), which is why BT-over-SPI comes first.
+- Power: DevKitC VIN takes the board's 5 V rail; its own regulator makes the
+  3V3 budget a non-issue.
 
 ## P0 findings (analyzed 2026-07-07, NG driver @ master v1.0.5, release ng-1.0.6)
 
@@ -78,32 +85,38 @@ gap. With BT on its own UART, the BT stack is identical under both.
 ## Phases
 
 **P0 — remaining decision spikes (no code)**
-Still open: (c) SPI0 flash pads free on our board rev; (d) wireless AA on a
+(c) is resolved by the schematic: PC pins aren't on headers at all — the pin
+map moved to SPI1/PE (frozen above; only sanity-check that the camera
+footprint on your unit is unpopulated). Still open: (d) wireless AA on a
 **2.4 GHz** AP with the phones we care about (test with any laptop-hosted
-2.4-only AP + head-unit emulator before buying hardware).
-Exit: pin map frozen, 2.4 GHz risk retired.
+2.4-only AP + head-unit emulator before wiring anything).
+Exit: 2.4 GHz risk retired.
 
 **P1 — wiring + DT**
 
 Pin-to-pin (ESP32 side fixed by the NG firmware, `docs/setup.md` §2.1):
 
-| F1C200s | dir | ESP32-DevKitC | function |
+All F1C200s pins below sit on the P1 header (schematic-verified):
+
+| F1C200s (header P1) | dir | ESP32-DevKitC | function |
 |---|:---:|---|---|
-| PC0 (SPI0_CLK) | → | IO14 | SCLK |
-| PC1 (SPI0_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
-| PC2 (SPI0_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
-| PC3 (SPI0_MOSI) | → | IO13 | MOSI |
+| PE9 (SPI1_CLK) | → | IO14 | SCLK |
+| PE7 (SPI1_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
+| PE10 (SPI1_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
+| PE8 (SPI1_MOSI) | → | IO13 | MOSI |
 | PE2 (gpio 130) | ← | IO2 | handshake |
 | PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
 | 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
 
 Short jumpers (SPI @ ~10 MHz to start, raise later). BT initially runs over
-the same SPI (NG "SPI only" mode) — zero extra wires; UART1 (PA2/PA3) BT is
-the optional P4 upgrade (ESP32 supports 2-line HCI UART, no RTS/CTS needed —
-good, PA has none; exact ESP-side UART pins per setup.md §2.3).
-DT patch: enable `&spi0` on the PC pins (keep spidev off CS0), `&uart1`.
-Exit: ESP boot log on its USB console + handshake/data-ready toggling.
+the same SPI (NG "SPI only" mode) — zero extra wires; UART1 (PA2/PA3, header
+P3) BT is the optional P4 upgrade (ESP32 supports 2-line HCI UART, no
+RTS/CTS needed — good, PA has none; exact ESP-side UART pins per setup.md
+§2.3). DT patch: enable `&spi1` with a new `spi1_pe_pins` pinctrl group
+(mainline suniv dtsi has none) — and the driver glue patch must register the
+`spi_board_info` on **bus 1**. Exit: ESP boot log on its USB console +
+handshake/data-ready toggling.
 
 **P2 — ESP firmware**
 Pin an esp-hosted release in `config.env` (like the cedar pin); flash the
