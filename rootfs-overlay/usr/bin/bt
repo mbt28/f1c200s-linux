@@ -10,7 +10,7 @@ case "$1" in
 on)
 	modprobe hci_uart 2>/dev/null
 	# H4 line discipline; host side has no RTS/CTS pins -> noflow.
-	pgrep -f "hciattach.*ttyS1" >/dev/null || {
+	ps | grep -v grep | grep -q hciattach || {
 		hciattach /dev/ttyS1 any 921600 noflow || {
 			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
 			exit 1
@@ -21,12 +21,12 @@ on)
 	;;
 off)
 	hciconfig hci0 down 2>/dev/null
-	pkill -f "hciattach.*ttyS1" 2>/dev/null
+	killall hciattach 2>/dev/null
 	modprobe -r hci_uart 2>/dev/null
 	echo "bt: off"
 	;;
 status)
-	pgrep -f "hciattach.*ttyS1" >/dev/null && echo "hciattach:  running (ttyS1 @ 921600)" || echo "hciattach:  not running"
+	ps | grep -v grep | grep -q hciattach && echo "hciattach:  running (ttyS1 @ 921600)" || echo "hciattach:  not running"
 	if [ -d /sys/class/bluetooth/hci0 ]; then
 		hciconfig hci0 | sed -n 1,3p
 	else

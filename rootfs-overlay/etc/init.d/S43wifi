@@ -21,14 +21,17 @@ start)
 		echo "wifi: wlan0 up; edit /etc/wpa_supplicant.conf (still placeholder), then: wifi off; wifi on" > /dev/console
 		exit 0
 	fi
-	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf >/dev/null 2>&1
+	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf \
+		-P /var/run/wpa_supplicant.wlan0.pid >/dev/null 2>&1
 	# -b: keep retrying in the background until association completes
-	udhcpc -i wlan0 -b -t 8 -T 1 >/dev/null 2>&1
+	udhcpc -i wlan0 -b -t 8 -T 1 -p /var/run/udhcpc.wlan0.pid >/dev/null 2>&1
 	echo "============ wifi: wlan0 associating -- check with \`wifi status\` ============" > /dev/console
 	;;
 stop)
-	pkill -f "wpa_supplicant.*wlan0" 2>/dev/null
-	pkill -f "udhcpc.*wlan0" 2>/dev/null
+	# busybox has no pkill; the daemons wrote pidfiles at start
+	for f in /var/run/wpa_supplicant.wlan0.pid /var/run/udhcpc.wlan0.pid; do
+		[ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && rm -f "$f"
+	done
 	ip link set wlan0 down 2>/dev/null
 	;;
 *)
