@@ -42,14 +42,42 @@ gap. With BT on its own UART, the BT stack is identical under both.
 - Power: ESP32 TX bursts ~400–500 mA @3V3 — check the board regulator budget;
   a dedicated 3V3 LDO off 5V is the safe default.
 
+## P0 findings (analyzed 2026-07-07, NG driver @ master v1.0.5, release ng-1.0.6)
+
+- **(a) SPI on classic ESP32: SUPPORTED** — the NG feature matrix lists
+  ESP32 + SPI with WiFi *and* BT, including our exact combo
+  `SPI (WiFi) + UART (BT)`.
+- **(b) SoftAP: IMPLEMENTED** — `esp_cfg80211.c` provides
+  `.start_ap/.stop_ap/.change_beacon` and advertises `NL80211_IFTYPE_AP`;
+  the README documents the hostapd flow. Needs hardware validation, but FG
+  is no longer *required* for AP mode.
+- **Compiles clean against our 6.6.143**: built `esp32_spi.ko` (88 KiB,
+  ARM ELF32) with our Buildroot toolchain — zero driver warnings. (Full
+  modpost needs the real built kernel; the Buildroot package will have it.)
+- **kernel-7.1 needs a compat patch**: 7.1 moved a batch of `cfg80211_ops`
+  from `net_device *` to `wireless_dev *` (add/del/change_station, key ops)
+  and changed `ieee80211_ptr` access; the driver's version guards stop at
+  6.17. Bounded, cedar-style work — only if we ever need WiFi on that track.
+- **SPI glue is Raspberry-Pi-hardcoded** (the real porting task): the driver
+  registers a `spi_board_info` itself (no DT match), handshake/data-ready
+  pins are compile-time defines in BCM numbering, reset pin is the
+  `resetpin=` module param, all legacy-GPIO API. Port = small patch giving
+  suniv GPIO numbers (global numbering: PE2 = 4·32+2 = 130, …) + SPI bus 0,
+  and keep spidev off CS0. Carry it as `patches/esp-hosted/`.
+- **Prebuilt firmware exists per release** (`release.ng-<ver>.tgz` asset) —
+  no ESP-IDF build needed; pin the release tag in `config.env`, flash with
+  esptool.
+- **Kernel config required**: `CONFIG_CFG80211=m` + `CONFIG_BT=m` — esp_bt.o
+  is compiled into the module unconditionally, so BT core is a load-time
+  dependency even with BT routed over UART (then + `CONFIG_BT_HCIUART=m`).
+
 ## Phases
 
-**P0 — decision spikes (no code)**
-Verify: (a) SPI-transport support for classic ESP32 in the current NG
-release; (b) NG SoftAP status; (c) SPI0 flash pads free on our board rev;
-(d) wireless AA on a **2.4 GHz** AP with the phones we care about (test with
-any laptop-hosted 2.4-only AP + head-unit emulator before buying hardware).
-Exit: FG/NG choice confirmed, pin map frozen.
+**P0 — remaining decision spikes (no code)**
+Still open: (c) SPI0 flash pads free on our board rev; (d) wireless AA on a
+**2.4 GHz** AP with the phones we care about (test with any laptop-hosted
+2.4-only AP + head-unit emulator before buying hardware).
+Exit: pin map frozen, 2.4 GHz risk retired.
 
 **P1 — wiring + DT**
 Wire WROOM-32E: SPI0 (PC0–3) + handshake/data-ready/reset GPIOs (PE) + UART1
