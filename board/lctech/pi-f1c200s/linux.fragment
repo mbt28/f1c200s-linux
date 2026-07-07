@@ -124,6 +124,12 @@ CONFIG_SPI_SUN6I=y
 # vendor-driver menu) stays off: our driver is out-of-tree.
 CONFIG_WIRELESS=y
 CONFIG_CFG80211=m
+# REQUIRE_SIGNED_REGDB defaults y and selects BUILT-IN X.509/PKCS7/ASN.1
+# (~150 KiB resident even with wifi off). Its prompt hides behind
+# CERTIFICATION_ONUS (visible thanks to EXPERT); with it off, cfg80211
+# loads the plain regulatory.db that wireless-regdb ships.
+CONFIG_CFG80211_CERTIFICATION_ONUS=y
+# CONFIG_CFG80211_REQUIRE_SIGNED_REGDB is not set
 CONFIG_BT=m
 
 # --- RAM diet (docs/memory.md, measured 2026-07-05) ---

@@ -21,3 +21,14 @@ if [ -d "${TARGET_DIR}/root/.ssh" ]; then
 	chmod 700 "${TARGET_DIR}/root/.ssh"
 	chmod 600 "${TARGET_DIR}/root/.ssh/authorized_keys" 2>/dev/null || true
 fi
+
+# WiFi/BT are default-off (wifi on / manual BT), but the bluez5-utils and
+# dbus packages install autostart scripts that would run bluetoothd +
+# dbus-daemon on every boot (~1-1.5 MiB RSS against the RAM diet). Drop
+# them; hciconfig/hcitool need neither, and the P6 pairing work will start
+# the daemons explicitly when it needs them.
+rm -f "${TARGET_DIR}/etc/init.d/S30dbus-daemon" \
+      "${TARGET_DIR}/etc/init.d/S40bluetoothd"
+
+# The overlay wpa_supplicant.conf (plaintext PSK once edited) lands 0644.
+chmod 600 "${TARGET_DIR}/etc/wpa_supplicant.conf" 2>/dev/null || true
