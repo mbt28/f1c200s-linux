@@ -57,13 +57,14 @@ define FASTCARPLAY_INSTALL_TARGET_CMDS
 		PREFIX=/usr \
 		SYSCONFDIR=/etc \
 		install
-	# Ship both presets; the `carplay` alias picks the one matching /etc/ve-driver:
-	#   settings_cedar.txt  -> cedar-decode=true,  renderer=drm  (working)
-	#   settings_cedrus.txt -> cedrus-decode=true, renderer=drm  (working)
-	$(INSTALL) -D -m 0644 $(@D)/settings_cedar.txt \
-		$(TARGET_DIR)/etc/fastcarplay/settings_cedar.txt
-	$(INSTALL) -D -m 0644 $(@D)/settings_cedrus.txt \
-		$(TARGET_DIR)/etc/fastcarplay/settings_cedrus.txt
+	# Ship EVERY preset the app repo provides (settings_*.txt): cedar/cedrus
+	# for the `carplay` alias (picked by /etc/ve-driver), plus the wireless/AA
+	# variants (settings_cedrus_wireless.txt, settings_cedrus_aa.txt, ...).
+	# Wildcard on purpose -- the package tracks the branch tip, so new presets
+	# ship automatically without touching this file.
+	$(foreach f,$(wildcard $(@D)/settings_*.txt), \
+		$(INSTALL) -D -m 0644 $(f) \
+			$(TARGET_DIR)/etc/fastcarplay/$(notdir $(f))$(sep))
 endef
 
 $(eval $(generic-package))
