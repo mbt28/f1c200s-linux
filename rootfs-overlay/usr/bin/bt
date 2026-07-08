@@ -9,6 +9,16 @@
 case "$1" in
 on)
 	modprobe hci_uart 2>/dev/null
+	# The aa-wireless backend (and bluetoothctl) talk to BlueZ over the
+	# system D-Bus; neither daemon autostarts (RAM diet) -- start them
+	# here, stop them in `bt off`.
+	if ! ps | grep -v grep | grep -q dbus-daemon; then
+		mkdir -p /var/run/dbus
+		dbus-uuidgen --ensure 2>/dev/null
+		dbus-daemon --system
+	fi
+	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
+	ps | grep -v grep | grep -q bluetoothd || "$BTD" 2>/dev/null
 	# H4 line discipline; host side has no RTS/CTS pins -> noflow.
 	ps | grep -v grep | grep -q hciattach || {
 		hciattach /dev/ttyS1 any 921600 noflow || {
@@ -21,6 +31,8 @@ on)
 	;;
 off)
 	hciconfig hci0 down 2>/dev/null
+	killall bluetoothd 2>/dev/null
+	killall dbus-daemon 2>/dev/null
 	killall hciattach 2>/dev/null
 	modprobe -r hci_uart 2>/dev/null
 	echo "bt: off"
@@ -32,6 +44,8 @@ status)
 	else
 		echo "hci0:       missing"
 	fi
+	ps | grep -v grep | grep -q bluetoothd && echo "bluetoothd: running" || echo "bluetoothd: not running"
+	ps | grep -v grep | grep -q dbus-daemon && echo "dbus:       running" || echo "dbus:       not running"
 	;;
 *)
 	echo "usage: bt {on|off|status}"

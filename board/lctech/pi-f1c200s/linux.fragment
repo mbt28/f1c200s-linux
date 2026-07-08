@@ -123,6 +123,10 @@ CONFIG_SPI_SUN6I=y
 # silently dropped (same kconfig trap as VT/EXPERT). WLAN (the in-tree
 # vendor-driver menu) stays off: our driver is out-of-tree.
 CONFIG_WIRELESS=y
+# RFKILL: not functionally needed (no kill switch on the appliance; cfg80211
+# and BT run without it) but wpa_supplicant/hostapd probe /dev/rfkill at
+# startup and print a scary warning without it. ~20 KiB buys silence.
+CONFIG_RFKILL=y
 CONFIG_CFG80211=m
 # REQUIRE_SIGNED_REGDB defaults y and selects BUILT-IN X.509/PKCS7/ASN.1
 # (~150 KiB resident even with wifi off). Its prompt hides behind
