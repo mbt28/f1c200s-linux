@@ -1,0 +1,43 @@
+#!/bin/sh
+# SoftAP runtime switch (hostapd + dnsmasq on wlan0) -- same shape as `wifi`:
+#   ap on       become an access point now + on every boot (192.168.9.1/24)
+#   ap off      stop the AP (+ unload the modules if STA mode is off too)
+#   ap status   SSID / stations / leases in one look
+# Mutually exclusive with STA mode: `ap on` disables `wifi` and vice versa
+# (one wlan0). AP settings: /etc/hostapd.conf; DHCP: /etc/dnsmasq-ap.conf.
+case "$1" in
+on)
+	# leave STA mode: clear its flag and stop its daemons
+	rm -f /etc/wifi-enabled
+	/etc/init.d/S43wifi stop 2>/dev/null
+	touch /etc/ap-enabled
+	exec /etc/init.d/S44ap start
+	;;
+off)
+	rm -f /etc/ap-enabled
+	/etc/init.d/S44ap stop
+	if [ ! -f /etc/wifi-enabled ]; then
+		modprobe -r esp32_spi 2>/dev/null
+		modprobe -r bluetooth 2>/dev/null
+		modprobe -r cfg80211 2>/dev/null
+	fi
+	echo "ap: off"
+	;;
+status)
+	[ -f /etc/ap-enabled ] && echo "flag:      enabled (autostarts)" || echo "flag:      disabled"
+	if [ -f /var/run/hostapd.pid ] && kill -0 "$(cat /var/run/hostapd.pid)" 2>/dev/null; then
+		echo "hostapd:   running (SSID $(sed -n 's/^ssid=//p' /etc/hostapd.conf))"
+		n=$(iw dev wlan0 station dump 2>/dev/null | grep -c "^Station")
+		echo "stations:  $n associated"
+	else
+		echo "hostapd:   not running"
+	fi
+	[ -f /var/run/dnsmasq-ap.pid ] && kill -0 "$(cat /var/run/dnsmasq-ap.pid)" 2>/dev/null \
+		&& echo "dnsmasq:   running (leases: $(wc -l < /var/lib/misc/dnsmasq.leases 2>/dev/null || echo 0))" \
+		|| echo "dnsmasq:   not running"
+	ip addr show wlan0 2>/dev/null | grep -oE 'inet ([0-9]+\.){3}[0-9]+[^ ]*' | sed 's/^/wlan0:     /'
+	;;
+*)
+	echo "usage: ap {on|off|status}"
+	;;
+esac

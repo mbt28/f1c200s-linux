@@ -31,5 +31,7 @@ rm -f "${TARGET_DIR}/etc/init.d/S30dbus-daemon" \
       "${TARGET_DIR}/etc/init.d/S40bluetoothd" \
       "${TARGET_DIR}/etc/init.d/S80dnsmasq"
 
-# The overlay wpa_supplicant.conf (plaintext PSK once edited) lands 0644.
-chmod 600 "${TARGET_DIR}/etc/wpa_supplicant.conf" 2>/dev/null || true
+# The overlay wpa_supplicant.conf / hostapd.conf (plaintext PSKs once
+# edited) land 0644.
+chmod 600 "${TARGET_DIR}/etc/wpa_supplicant.conf" \
+          "${TARGET_DIR}/etc/hostapd.conf" 2>/dev/null || true

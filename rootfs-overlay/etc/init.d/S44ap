@@ -1,0 +1,39 @@
+#!/bin/sh
+# SoftAP via the ESP32 (hostapd on the NG driver's cfg80211 AP mode +
+# dnsmasq for leases; docs/wireless-esp-hosted.md P5). Opt-in: `ap on`
+# creates the flag below. Mutually exclusive with STA mode (S43wifi) --
+# both share wlan0; the `wifi`/`ap` switches clear each other's flag.
+[ "$1" != "start" ] || [ -f /etc/ap-enabled ] || exit 0
+case "$1" in
+start)
+	modprobe esp32_spi resetpin=132 clockspeed=10 2>/dev/null
+	i=0
+	while [ $i -lt 10 ] && [ ! -d /sys/class/net/wlan0 ]; do sleep 1; i=$((i + 1)); done
+	[ -d /sys/class/net/wlan0 ] || {
+		echo "ap: no wlan0 (ESP32 transport failed -- check wiring + dmesg)" > /dev/console
+		exit 0
+	}
+	if grep -q "CHANGEME_AP_PASS" /etc/hostapd.conf 2>/dev/null; then
+		echo "ap: edit /etc/hostapd.conf (placeholder passphrase), then: ap off; ap on" > /dev/console
+		exit 0
+	fi
+	ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up
+	ip addr flush dev wlan0 2>/dev/null
+	ip addr add 192.168.9.1/24 dev wlan0
+	hostapd -B -P /var/run/hostapd.pid /etc/hostapd.conf || {
+		echo "ap: hostapd failed to start (see dmesg / hostapd output)" > /dev/console
+		exit 0
+	}
+	dnsmasq -C /etc/dnsmasq-ap.conf -x /var/run/dnsmasq-ap.pid
+	echo "============ ap: SSID $(sed -n 's/^ssid=//p' /etc/hostapd.conf) up at 192.168.9.1 ============" > /dev/console
+	;;
+stop)
+	for f in /var/run/hostapd.pid /var/run/dnsmasq-ap.pid; do
+		[ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && rm -f "$f"
+	done
+	ip addr flush dev wlan0 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

@@ -203,10 +203,24 @@ What remains for P6: bluetoothd-based pairing for the wireless-AA RFCOMM
 handshake (enable `BR2_PACKAGE_BLUEZ5_UTILS_CLIENT` for bluetoothctl, start
 the daemons `bt on` deliberately leaves off).
 
-**P5 — SoftAP (the wireless-AA prerequisite)**
-NG path: hostapd if NG's AP mode is real; FG path: `feature/esp-hosted-fg`
-branch — FG module + control lib bringing up `ethap0`. Either way + udhcpd
-for DHCP. Exit: phone joins the appliance's 2.4 GHz AP and gets a lease.
+**P5 — SoftAP (the wireless-AA prerequisite)** — *IMPLEMENTED 2026-07-08,
+hardware validation pending*
+hostapd (nl80211) on the NG driver's AP mode (compiled in via
+CONFIG_AP_SUPPORT) + dnsmasq for leases. Runtime switch **`ap on|off|status`**
++ S44ap, flag `/etc/ap-enabled`, configs `/etc/hostapd.conf` (SSID
+`f1c200s-ap`, WPA2, ch6, placeholder passphrase — edit first) and
+`/etc/dnsmasq-ap.conf` (192.168.9.1/24, leases .10–.50). **STA and AP are
+mutually exclusive on the single wlan0**: `ap on` disables `wifi` mode and
+vice versa (each clears the other's flag and daemons); `wifi off`/`ap off`
+only unload the modules when the other mode is off too. The FG fallback
+plan is retired unless this fails on hardware.
+
+Test procedure (P5 exit): edit the passphrase → `ap on` → SSID visible on a
+phone → join → phone gets a 192.168.9.x lease (`ap status` shows the
+station + lease) → `ping 192.168.9.1` from the phone works. Triage:
+hostapd fails to start → `hostapd -dd /etc/hostapd.conf` in the foreground
+shows the cfg80211 conversation; ESP-side AP limits are NG-firmware
+territory (beacons/assoc handled on the ESP).
 
 **P6 — wireless AA in FastCarPlay**
 Extend `AaConnection`: BT RFCOMM advertise → send SSID/PSK/IP via the AA

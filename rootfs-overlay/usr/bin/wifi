@@ -7,6 +7,9 @@
 # same module (hci0): hciconfig hci0 up; hcitool scan.
 case "$1" in
 on)
+	# leave AP mode: the two share wlan0 (see `ap`)
+	rm -f /etc/ap-enabled
+	/etc/init.d/S44ap stop 2>/dev/null
 	touch /etc/wifi-enabled
 	exec /etc/init.d/S43wifi start
 	;;
@@ -15,10 +18,13 @@ off)
 	/etc/init.d/S43wifi stop
 	# Unload in dependency order; cfg80211/bluetooth only unload when
 	# nothing else uses them (best effort -- keeps the diet honest).
-	modprobe -r esp32_spi 2>/dev/null
-	modprobe -r bluetooth 2>/dev/null
-	modprobe -r cfg80211 2>/dev/null
-	echo "wifi: off (modules unloaded)"
+	# Skip while AP mode owns the module.
+	if [ ! -f /etc/ap-enabled ]; then
+		modprobe -r esp32_spi 2>/dev/null
+		modprobe -r bluetooth 2>/dev/null
+		modprobe -r cfg80211 2>/dev/null
+	fi
+	echo "wifi: off"
 	;;
 status)
 	[ -f /etc/wifi-enabled ] && echo "flag:      enabled (autostarts)" || echo "flag:      disabled"
