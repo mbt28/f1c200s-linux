@@ -4,6 +4,10 @@ BR2_TARGET_GENERIC_HOSTNAME="lctech-f1c200s"
 BR2_TARGET_GENERIC_ISSUE="Welcome to CarPlay Linux (Lctech Pi F1C200s)"
 BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
+# Root password (hashed into /etc/shadow at build). NOTE: this repo is
+# public, so the password is public with it -- fine for a dev appliance
+# (SSH is opt-in via `net on`; the serial console auto-logs-in anyway).
+BR2_TARGET_GENERIC_ROOT_PASSWD="carplay1234"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/genimage-sdcard.cfg"
