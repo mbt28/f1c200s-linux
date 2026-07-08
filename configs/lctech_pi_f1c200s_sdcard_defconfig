@@ -89,3 +89,12 @@ BR2_PACKAGE_WIRELESS_REGDB=y
 BR2_PACKAGE_BLUEZ5_UTILS=y
 BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
 BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
+# SoftAP userspace (roadmap P5 -> wireless Android Auto needs the head unit
+# to be the AP): hostapd drives the NG driver's cfg80211 AP mode (compiled in
+# with CONFIG_AP_SUPPORT); dnsmasq hands out the leases. Both default-off --
+# post-build.sh drops the S80dnsmasq autostart; the `ap` switch starts them.
+BR2_PACKAGE_HOSTAPD=y
+BR2_PACKAGE_HOSTAPD_DRIVER_NL80211=y
+BR2_PACKAGE_DNSMASQ=y
+# CONFIG_BR2_PACKAGE_DNSMASQ_TFTP default y -- unused here
+# BR2_PACKAGE_DNSMASQ_TFTP is not set
