@@ -176,7 +176,12 @@ wlan0 up but hci0 missing → CONFIG_BT didn't land (check
 Remaining exit gate (hardware): **iperf3 ≥ 15 Mbit/s**, then raise
 `clockspeed=` from the conservative 10 toward 30 MHz.
 
-**P4 — Bluetooth on its own UART** — *IMPLEMENTED 2026-07-08*
+**P4 — Bluetooth on its own UART** — *IMPLEMENTED + HARDWARE-VALIDATED
+2026-07-08: `bt on` → hci0 UP RUNNING, BD address over the UART, and
+`hcitool lescan` returns a full BLE neighborhood with names — the 921600
+link at −3.1% divisor error works in practice on short jumpers. (Empty
+`hcitool scan` just means no discoverable BR/EDR device nearby: phones
+only answer inquiry while their Bluetooth-settings page is open.)*
 BT-over-SPI was field-tested and is **flaky on this setup**: HCI commands
 time out at random depths (0x1005/0x0c23/0x0c03, `-110`) while WLAN runs
 error-free on the very same link — one session even delivered 40 HCI events
