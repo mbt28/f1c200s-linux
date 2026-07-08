@@ -114,9 +114,12 @@ doubt, trust the `FW_SPI:` line on the ESP console.
 | PE7 (SPI1_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
 | PE10 (SPI1_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
 | PE8 (SPI1_MOSI) | → | IO13 | MOSI |
-| PE2 (gpio 130) | ← | **IO3** | handshake (yes, the ESP console RX pin — console output still works, input doesn't) |
+| PE2 (gpio 130) | ← | **IO3** | handshake (yes, the ESP console RX pin — console output still works, input doesn't; **USB must stay unplugged in operation**: the CP2102 fights this line) |
 | PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
+| PE0 (UART0_RX, ttyS1) | ← | IO5 | BT HCI: ESP TX (spi+uart firmware, 921600) |
+| PE1 (UART0_TX, ttyS1) | → | IO18 | BT HCI: ESP RX |
+| GND | → | IO23 | ESP's HCI CTS strapped low (firmware has flow control on; host has no RTS/CTS pins). ESP RTS (IO19) stays unconnected |
 | 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
 
 Short jumpers (SPI @ ~10 MHz to start, raise later). BT runs over the same
@@ -173,12 +176,32 @@ wlan0 up but hci0 missing → CONFIG_BT didn't land (check
 Remaining exit gate (hardware): **iperf3 ≥ 15 Mbit/s**, then raise
 `clockspeed=` from the conservative 10 toward 30 MHz.
 
-**P4 — Bluetooth userspace**
-BlueZ tools already ship (see P3). What remains: bluetoothd-based pairing
-for the wireless-AA RFCOMM handshake (bluetoothctl needs the readline
-client — enable `BR2_PACKAGE_BLUEZ5_UTILS_CLIENT` when P6 starts). A
-dedicated HCI UART is NOT planned anymore — UART1 is the console (see
-constraints); BT stays on SPI.
+**P4 — Bluetooth on its own UART** — *IMPLEMENTED + HARDWARE-VALIDATED
+2026-07-08: `bt on` → hci0 UP RUNNING, BD address over the UART, and
+`hcitool lescan` returns a full BLE neighborhood with names — the 921600
+link at −3.1% divisor error works in practice on short jumpers. (Empty
+`hcitool scan` just means no discoverable BR/EDR device nearby: phones
+only answer inquiry while their Bluetooth-settings page is open.)*
+BT-over-SPI was field-tested and is **flaky on this setup**: HCI commands
+time out at random depths (0x1005/0x0c23/0x0c03, `-110`) while WLAN runs
+error-free on the very same link — one session even delivered 40 HCI events
+before stalling. Upstream has no post-1.0.6 fix. Decision: BT moves to a
+dedicated UART (the release's `esp32/spi+uart` firmware):
+
+- ESP32 side: HCI H4 on its UART1 @ **921600 fixed**, flow control ON in
+  the prebuilt sdkconfig → its CTS (IO23) is strapped to GND, RTS ignored.
+- Host side: UART0 on PE0/PE1 = `ttyS1` (patch 0013 — usable because
+  production boards route the CH340 console to PA2/PA3, not PE0/PE1);
+  `CONFIG_BT_HCIUART(+H4)=m`; **`bt on|off|status`** runs
+  `hciattach /dev/ttyS1 any 921600 noflow` + brings hci0 up.
+- Baud risk to verify on hardware: the suniv UART divides an integer from
+  the APB clock — if APB is 100 MHz the nearest rate is ~893 k (-3.1%),
+  marginal but usually workable; if hciattach yields garbage, check
+  `/sys/kernel/debug/clk/clk_summary` for the real UART clock.
+
+What remains for P6: bluetoothd-based pairing for the wireless-AA RFCOMM
+handshake (enable `BR2_PACKAGE_BLUEZ5_UTILS_CLIENT` for bluetoothctl, start
+the daemons `bt on` deliberately leaves off).
 
 **P5 — SoftAP (the wireless-AA prerequisite)**
 NG path: hostapd if NG's AP mode is real; FG path: `feature/esp-hosted-fg`
@@ -227,8 +250,10 @@ PC) — the F1C200s board is not involved at all.
    Each chip/transport combo is one directory with 6 files (`bootloader.bin`,
    `partition-table.bin`, `ota_data_initial.bin`, `network_adapter.bin`,
    `flash_cmd`, `md5sum.txt`). Ours:
-   - `release:ng-1.0.6/esp32/spi_only/` — WiFi + BT over SPI (start here)
-   - `release:ng-1.0.6/esp32/spi+uart/` — WiFi over SPI, BT on UART (the P4 upgrade; a re-flash away)
+   - `release:ng-1.0.6/esp32/spi+uart/` — WiFi over SPI, BT on UART —
+     **the production build** (BT-over-SPI proved flaky, see P4)
+   - `release:ng-1.0.6/esp32/spi_only/` — everything over SPI (first
+     bring-up used this; keep for transport debugging only)
 
 2. **Install esptool**: `pipx install esptool`, then use the **`esptool.py`
    command** (pipx puts it on PATH; `python -m esptool` won't find it — pipx
