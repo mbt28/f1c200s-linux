@@ -4,14 +4,26 @@
 #
 ################################################################################
 
-# FastCarPlay is fetched from the user's own repo (not vendored here). Pin a
-# commit for reproducible builds. For local hacking, point at a working clone:
+# FastCarPlay is fetched from the user's own repo (not vendored here) and
+# TRACKS THE BRANCH TIP (owner's choice 2026-07-08): the branch HEAD is
+# resolved to a commit sha at build time, so a moved branch = new version =
+# fresh download, while an unchanged branch reuses the cached tarball.
+# (A plain branch name as VERSION would cache the first tarball forever --
+# the classic Buildroot trap.) Needs network when the package is built; for
+# a frozen release, put a commit sha in FASTCARPLAY_VERSION instead.
+# For local hacking, point at a working clone:
 #   FASTCARPLAY_VERSION = local
 #   FASTCARPLAY_SITE = /path/to/FastCarPlay
 #   FASTCARPLAY_SITE_METHOD = local
-# f1c200s-cedrus branch HEAD: + native wired Android Auto backend (AOAP,
-# protocol=aa-usb, no dongle) and -latomic for the arm926 target.
-FASTCARPLAY_VERSION = 48f0dc9db30f781a88ad12402ec1e662f68f3a87
+FASTCARPLAY_BRANCH = f1c200s-cedrus
+FASTCARPLAY_VERSION = $(shell git ls-remote \
+	https://github.com/mbt28/FastCarPlay.git \
+	refs/heads/$(FASTCARPLAY_BRANCH) 2>/dev/null | cut -c1-40)
+ifeq ($(BR2_PACKAGE_FASTCARPLAY),y)
+ifeq ($(FASTCARPLAY_VERSION),)
+$(error fastcarplay: cannot resolve the $(FASTCARPLAY_BRANCH) branch tip -- network down?)
+endif
+endif
 FASTCARPLAY_SITE = $(call github,mbt28,FastCarPlay,$(FASTCARPLAY_VERSION))
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
