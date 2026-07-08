@@ -28,6 +28,8 @@ FASTCARPLAY_SITE = $(call github,mbt28,FastCarPlay,$(FASTCARPLAY_VERSION))
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
 FASTCARPLAY_DEPENDENCIES = \
+	bluez5_utils \
+	dbus \
 	ffmpeg \
 	host-pkgconf \
 	libcedarc \
@@ -41,12 +43,15 @@ FASTCARPLAY_DEPENDENCIES = \
 # (cedar-decode / cedrus-decode) to match /etc/ve-driver:
 #   USE_CEDAR=1  -> CedarDecoder  (libcedarc + /dev/cedar_dev) -- the working path
 #   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- working
+#   USE_AA_WIRELESS=1 -> protocol = aa-wireless (BT bootstrap via BlueZ/D-Bus
+#   + the SoftAP; needs `ap on` + bluetoothd/dbus running at runtime)
 define FASTCARPLAY_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) \
 		PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" \
 		HOST_XXD="/usr/bin/xxd" \
 		USE_CEDAR=1 \
 		USE_CEDRUS=1 \
+		USE_AA_WIRELESS=1 \
 		BUILD_TYPE=release \
 		release
 endef
