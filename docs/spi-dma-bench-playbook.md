@@ -114,6 +114,14 @@ NDMA channel n: `0x01C02100 + n*0x20`: CFG `+0x00`, SRC `+0x04`, DST
    NDMA-equivalent 0x05 first), watch whether anything moves. Expected
    outcome: nothing moves and the manual stands.
 
+Considered and rejected — DDMA via the AHB-memory endpoint (SPI FIFO as a
+plain AHB address, no DRQ): the `0x9 AHB Memory` type exists only in the
+DDMA *source* table, so the broken TX direction (write to the FIFO) has no
+endpoint at all; and without a DRQ there is no flow control — the engine
+would overflow the 64-byte FIFO at AHB speed unless paced cycle-exact via
+DDMA_PARA wait-states, which breaks on any SPI clock change. Revisit only
+as an RX-side curiosity if every DRQ-based approach is exhausted.
+
 ## Instrumentation patch (if step 2 needs more resolution)
 
 - `spi-sun6i.c sun6i_spi_transfer_one()`: dev_info FCR/FSR before start +
