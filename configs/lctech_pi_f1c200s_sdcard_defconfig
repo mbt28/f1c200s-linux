@@ -93,6 +93,11 @@ BR2_PACKAGE_WIRELESS_REGDB=y
 BR2_PACKAGE_BLUEZ5_UTILS=y
 BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
 BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
+# bluetoothctl: the management CLI for bluetoothd (power/pair/discoverable,
+# and the debug view of what the aa-wireless D-Bus calls actually did).
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+# btmon: HCI traffic sniffer -- the aa-wireless debugging microscope.
+BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
 # SoftAP userspace (roadmap P5 -> wireless Android Auto needs the head unit
 # to be the AP): hostapd drives the NG driver's cfg80211 AP mode (compiled in
 # with CONFIG_AP_SUPPORT); dnsmasq hands out the leases. Both default-off --
