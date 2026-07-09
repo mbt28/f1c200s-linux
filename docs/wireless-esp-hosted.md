@@ -89,13 +89,14 @@ which is the Lctech Pi design. The board exposes two GPIO headers:
 
 ## Phases
 
-**P0 — remaining decision spikes (no code)**
-(c) is resolved by the schematic: PC pins aren't on headers at all — the pin
-map moved to SPI1/PE (frozen above; only sanity-check that the camera
-footprint on your unit is unpopulated). Still open: (d) wireless AA on a
-**2.4 GHz** AP with the phones we care about (test with any laptop-hosted
-2.4-only AP + head-unit emulator before wiring anything).
-Exit: 2.4 GHz risk retired.
+**P0 — decision spikes: ALL RETIRED**
+(c) resolved by the schematic: PC pins aren't on headers at all — the pin
+map moved to SPI1/PE. **(d) retired 2026-07-09**: FastCarPlay's own
+aa-wireless backend ran on the Pi 5 dev box with a **2.4 GHz-only AP**
+(ch 6) and a Samsung SM-G991B connected end-to-end — BT bootstrap → AP
+join → TCP :5277 → service discovery → live video stream (~20 % CPU at
+800×480/30 sw-decode, link 72/24 Mbit/s). The ESP32's 2.4 GHz limitation
+is confirmed workable with the target phone.
 
 **P1 — wiring + DT**
 
