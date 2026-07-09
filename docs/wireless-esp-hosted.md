@@ -118,9 +118,9 @@ doubt, trust the `FW_SPI:` line on the ESP console.
 | PE2 (gpio 130) | ← | **IO3** | handshake (yes, the ESP console RX pin — console output still works, input doesn't; **USB must stay unplugged in operation**: the CP2102 fights this line) |
 | PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
-| PE0 (UART0_RX, ttyS1) | ← | IO5 | BT HCI: ESP TX (spi+uart firmware, 921600) |
+| PE0 (UART0_RX, ttyS1) | ← | IO5 | BT HCI: ESP TX (custom spi+uart firmware, 230400) |
 | PE1 (UART0_TX, ttyS1) | → | IO18 | BT HCI: ESP RX |
-| GND | → | IO23 | ESP's HCI CTS strapped low (firmware has flow control on; host has no RTS/CTS pins). ESP RTS (IO19) stays unconnected |
+| ~~GND → IO23~~ | | | CTS strap RETIRED 2026-07-09: the custom 230400/no-flow firmware makes the UART a true 2-line link — remove the strap wire |
 | 5 V rail + GND | → | VIN/5V + GND | power (DevKitC regulator) |
 
 Short jumpers (SPI @ ~10 MHz to start, raise later). BT runs over the same
@@ -194,11 +194,13 @@ dedicated UART (the release's `esp32/spi+uart` firmware):
 - Host side: UART0 on PE0/PE1 = `ttyS1` (patch 0013 — usable because
   production boards route the CH340 console to PA2/PA3, not PE0/PE1);
   `CONFIG_BT_HCIUART(+H4)=m`; **`bt on|off|status`** runs
-  `hciattach /dev/ttyS1 any 921600 noflow` + brings hci0 up.
-- Baud risk to verify on hardware: the suniv UART divides an integer from
-  the APB clock — if APB is 100 MHz the nearest rate is ~893 k (-3.1%),
-  marginal but usually workable; if hciattach yields garbage, check
-  `/sys/kernel/debug/clk/clk_summary` for the real UART clock.
+  `hciattach /dev/ttyS1 any 230400 noflow` + brings hci0 up.
+- **Baud + flow control resolved by a custom firmware build (2026-07-09)**:
+  the prebuilt spi+uart binary runs 921600 with flow control ON — on the
+  suniv that's a −3.1% integer divisor (APB 100 MHz, verified via
+  clk_summary) AND an RTS the host cannot honor (its deassertions drop
+  host→ESP bytes → the intermittent `Opcode 0x1003 -110` timeouts). The
+  custom build (appendix) sets 230400 (+0.47%) with flow control OFF.
 
 What remains for P6: bluetoothd-based pairing for the wireless-AA RFCOMM
 handshake (enable `BR2_PACKAGE_BLUEZ5_UTILS_CLIENT` for bluetoothctl, start
@@ -324,3 +326,22 @@ Version rule: the ESP firmware and the host kernel module must come from the
 confusing ways. Both pins live in `config.env`. (Later re-flashes can also go
 over the air via the driver's `ota_file=` module parameter — USB is simpler
 while the DevKitC is on jumpers.)
+
+### Custom spi+uart build (230400, no flow control) — the production BT firmware
+
+The shipped spi+uart binary fixes HCI at 921600 with flow control on; both
+hurt on this host (see P4). Reproduce the custom build:
+
+```sh
+cd esp_hosted_ng/esp/esp_driver && ./setup.sh   # pinned IDF fcae3288 + rom.patch + patched wifi blobs
+cp "release:ng-1.0.6/esp32/spi+uart/sdkconfig" network_adapter/sdkconfig
+# two changes: CONFIG_BTDM_CTRL_HCI_UART_BAUDRATE=230400
+#              CONFIG_BTDM_CTRL_HCI_UART_FLOW_CTRL_EN unset
+cd network_adapter && idf.py build              # do NOT run set-target (wipes sdkconfig)
+```
+
+The version stays NG-1.0.6.0.1 (SPI handshake unaffected). Gotcha met in
+practice: building against a stock IDF fails with undefined
+`esp_wifi_*_internal`/`ieee80211_*` symbols — the setup.sh blob/patch step
+is mandatory. Host side pairs with `hciattach ... 230400 noflow` (bt
+script) and no CTS strap.

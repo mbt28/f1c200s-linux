@@ -1,8 +1,8 @@
 #!/bin/sh
 # Bluetooth runtime switch: HCI H4 over UART0/ttyS1 to the ESP32 running the
-# esp32/spi+uart firmware (fixed 921600 baud, its CTS strapped to GND --
-# docs/wireless-esp-hosted.md). Independent of `wifi`: the ESP just has to be
-# powered (it always is, VIN) and running the spi+uart build.
+# CUSTOM spi+uart firmware (230400 baud, flow control off -- true 2-line
+# UART, no CTS strap; docs/wireless-esp-hosted.md appendix). Independent of
+# `wifi`: the ESP just has to be powered (VIN) and running that build.
 #   bt on       attach hci0 and bring it up
 #   bt off      detach + unload
 #   bt status   adapter state in one look
@@ -25,7 +25,7 @@ on)
 	modprobe cmac 2>/dev/null
 	modprobe ecdh_generic 2>/dev/null
 	ps | grep -v grep | grep -q hciattach || {
-		hciattach /dev/ttyS1 any 921600 noflow || {
+		hciattach /dev/ttyS1 any 230400 noflow || {
 			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
 			exit 1
 		}
@@ -45,7 +45,7 @@ on)
 	if ! adopted; then
 		killall hciattach 2>/dev/null
 		sleep 1
-		hciattach /dev/ttyS1 any 921600 noflow
+		hciattach /dev/ttyS1 any 230400 noflow
 		sleep 2
 	fi
 	# Power through bluetoothd (mgmt path), matching what the app does.
@@ -65,7 +65,7 @@ off)
 	echo "bt: off"
 	;;
 status)
-	ps | grep -v grep | grep -q hciattach && echo "hciattach:  running (ttyS1 @ 921600)" || echo "hciattach:  not running"
+	ps | grep -v grep | grep -q hciattach && echo "hciattach:  running (ttyS1 @ 230400)" || echo "hciattach:  not running"
 	if [ -d /sys/class/bluetooth/hci0 ]; then
 		hciconfig hci0 | sed -n 1,3p
 	else
