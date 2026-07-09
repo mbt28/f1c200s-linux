@@ -53,6 +53,31 @@ bytes, which the ESP ignores — explaining the RX-works asymmetry.)
      underruns → garbage islands on MOSI → **exactly our symptom**.
    RX_TRIG default is 1 (per-byte) — consistent with RX working either way.
 
+## Additions from the full §3.6 read (pp. 106–115, 2026-07-09)
+
+- **NEW PRIME SUSPECT — DMA auto clock gating** (`DMA_PTY_CFG` @
+  `0x01C02008`, bit 16): **default 0 = auto-gating ENABLED**, and the manual
+  itself warns it must be disabled for continuous operation. sun4i-dma
+  never touches this register. The failure fit is excellent: RX at
+  trigger=1 gets a constant DRQ stream (gate stays open, works); paced TX
+  DRQs arrive with gaps → the gated engine misses/stalls them. This is the
+  classic sunxi-DMA trap (other generations need the same bit handled).
+  **Test = one poke**: `devmem 0x01C02008` read, OR in bit 16, retry the
+  command. If it fixes: one-line sun4i-dma probe addition (suniv config
+  flag) — clean and upstreamable.
+- **NDMA requires word-aligned src+dst addresses** (§3.6.5.1). Audited:
+  esp-hosted's `esp_alloc_skb` force-aligns skb->data to 4 and transfers
+  are fixed 1600 bytes — TX buffers are aligned by construction, so this
+  is *probably* not it; keep a one-time `pr_info("%px")` of `trans.tx_buf`
+  in the instrumentation as a cheap invariant check.
+- NDMA/CPU AHB arbitration defaults to **CPU > NDMA** with NDMA priority
+  counter 3 (§3.6.7.3) — matters for throughput tuning later, not for
+  correctness (RX works under the same arbitration).
+- Channels 0–3 = NDMA, 4–7 = DDMA (matches the driver's pchan layout);
+  DDMA ch 4 has the 8×64-bit FIFO, others 8×32.
+- CCU gate + reset handling (§3.6.5.2) is already correct in the dtsi node
+  (CLK_BUS_DMA + RST_BUS_DMA).
+
 ## Bench sequence (each step ~minutes, do in order)
 
 Registers for devmem (all 32-bit): SPI1 base `0x01C06000`: FCR `+0x18` =
@@ -68,15 +93,18 @@ NDMA channel n: `0x01C02100 + n*0x20`: CFG `+0x00`, SRC `+0x04`, DST
    - `SPI_TC` (0x34) vs `SPI_BC` (0x30): has the master clocked the burst?
    - NDMA CFG/BCNT of the active channel: descriptor loaded? bytes left?
    This one dump localizes the stall: DMA-side / FIFO-side / SPI-clock-side.
-3. **H1 — TX trigger**: `devmem 0x01C06018` read, rewrite with TX_TRIG
+3. **H1 — auto clock gating (do this FIRST, one poke)**:
+   `devmem 0x01C02008` read → write value | (1<<16) → reload esp32_spi,
+   retry. Best symptom fit + known sunxi precedent.
+4. **H2 — TX trigger**: `devmem 0x01C06018` read, rewrite with TX_TRIG
    (bits 23:16) = 0x20, then 0x08, retry the command each time (reload
    esp32_spi). Two pokes decide the trigger-semantics question for good.
    If it fixes: 3-line spi-sun6i patch (program TX_TRIG = fifo_depth/2
    when DMA is used on burst-limited engines).
-4. **H2 — access size**: set FCR ACCESS_SIZE fields to `11` (bus-
+5. **H3 — access size**: set FCR ACCESS_SIZE fields to `11` (bus-
    controlled), restore 4-byte TX beats (drop the 0015 v2 width override),
-   retest — the performance-correct endgame if H1 alone is not it.
-5. **H4 — scope MOSI** if software forensics disagree with all theories:
+   retest — the performance-correct endgame if H1/H2 alone are not it.
+6. **H4 — scope MOSI** if software forensics disagree with all theories:
    valid frame header bytes vs zeros/garbage during a command transfer.
 
 ## Instrumentation patch (if step 2 needs more resolution)
