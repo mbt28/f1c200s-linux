@@ -1,18 +1,25 @@
-spi-sun6i: respect the DMA engine's burst limit (fixes suniv SPI DMA)
+spi-sun6i: adapt DMA burst and TX width to the engine (fixes suniv SPI DMA)
 
-Field-debugged on the board: with patch 0014's dmas wired, every SPI
-transfer failed ("spi1.0: prepare DMA failed, ret=-22" -> transfer
-failed -22) and the ESP-Hosted link went completely dead -- once a
-driver claims DMA for a transfer there is no PIO fallback. Cause:
-spi-sun6i hardcodes maxburst=8, while the suniv NDMA does single/INCR4
-only (convert_burst_f1c100s rejects >4). This is also why upstream
-never wired dmas on the suniv SPI nodes.
+Field-debugged in two rounds on the board:
 
-Two-sided fix: sun4i-dma exports its per-variant burst limit as
-dmaengine caps (slave.max_burst, already carried in the config struct),
-and spi-sun6i clamps its burst to dma_get_slave_caps() when the engine
-reports one -- generic, no compatible-matching, no behavior change on
-engines that do 8 (A31/H3 report no limit).
+1. maxburst: spi-sun6i hardcodes 8, the suniv NDMA does single/INCR4
+   only -> "prepare DMA failed, ret=-22", every transfer fails (DMA-
+   claimed transfers have no PIO fallback), the ESP-Hosted link is dead.
+2. TX data width: with the burst fixed, reads work (ESP boot-up event
+   and version arrive) but every host->ESP command times out. The
+   driver pushes TX DMA in 4-byte beats while the suniv SPI's TX FIFO
+   access size defaults to BYTE (SPI_FCR bits 27:26 per the F1C200s
+   manual, a field real sun6i parts do not have) -- the peripheral
+   sees a quarter of every frame and the ESP discards the garbage.
+   Interrupt counters confirmed transfers completing mechanically
+   (dma-controller: 3, handshake: 7) with no command ever answered.
+
+Fix on the engine-capability axis, no compatible matching: sun4i-dma
+exports its per-variant burst limit as dmaengine caps (slave.max_burst,
+already carried in its config struct), and spi-sun6i clamps its burst
+to dma_get_slave_caps() -- and on such burst-limited engines also drops
+the TX beat size to 1 byte. Engines that report no limit (A31/H3
+dedicated DMA) keep the original 8/4-byte behavior.
 
 --- a/drivers/dma/sun4i-dma.c
 +++ b/drivers/dma/sun4i-dma.c
@@ -46,21 +53,30 @@ engines that do 8 (A31/H3 report no limit).
  		};
  
  		dmaengine_slave_config(host->dma_rx, &rxconf);
-@@ -238,11 +245,17 @@
+@@ -238,11 +245,25 @@
  
  	txdesc = NULL;
  	if (tfr->tx_buf) {
 +		struct dma_slave_caps caps;
 +		u32 burst = 8;
++		enum dma_slave_buswidth width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 +
-+		if (!dma_get_slave_caps(host->dma_tx, &caps) && caps.max_burst)
++		if (!dma_get_slave_caps(host->dma_tx, &caps) && caps.max_burst) {
 +			burst = min_t(u32, burst, caps.max_burst);
++			/* Burst-limited old engines (suniv NDMA) also byte-
++			 * address the TX FIFO: the suniv SPI's FIFO access
++			 * size defaults to byte, so 4-byte DMA beats deliver
++			 * only every 4th byte (field 27:26 of SPI_FCR in the
++			 * F1C200s manual; absent on real sun6i parts). */
++			width = DMA_SLAVE_BUSWIDTH_1_BYTE;
++		}
 +
  		struct dma_slave_config txconf = {
  			.direction = DMA_MEM_TO_DEV,
  			.dst_addr = sspi->dma_addr_tx,
- 			.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES,
+-			.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES,
 -			.dst_maxburst = 8,
++			.dst_addr_width = width,
 +			.dst_maxburst = burst,
  		};
  
