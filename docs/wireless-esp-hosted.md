@@ -251,6 +251,16 @@ NDMA). The engine is the A10-class NDMA/DDMA design → port `sun4i-dma.c`
 on `&spi1`; spi-sun6i is already a dmaengine consumer and needs no changes.
 Exit: `sun6i-spi` IRQ rate collapses (~1/transfer), iperf CPU drops.
 
+*Status 2026-07-09: PARKED after three hardware iterations (patch 0016
+reverts the `dmas` wiring; the engine + fixes stay in-tree). Backport done
+(0014, upstream state = current master), burst clamped to INCR4 and TX beat
+dropped to byte width (0015) -- reads work with DMA (boot-up event +
+version arrive), but host→ESP command frames are never answered; irq
+counters show transfers completing mechanically. Next step is bench
+instrumentation (scope on MOSI during a command, printk of the TX
+descriptor path), not more blind CI cycles. The ESP link runs PIO, which
+is fully proven.*
+
 **P7 — productize**
 Re-measure RAM (docs/memory.md — expect ~3–5 MiB for module+supplicant+
 bluetoothd, post-diet headroom covers it); CI builds the new packages; docs;
