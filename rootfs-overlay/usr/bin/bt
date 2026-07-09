@@ -3,45 +3,53 @@
 # CUSTOM spi+uart firmware (230400 baud, flow control off -- true 2-line
 # UART, no CTS strap; docs/wireless-esp-hosted.md appendix). Independent of
 # `wifi`: the ESP just has to be powered (VIN) and running that build.
-#   bt on       attach hci0 and bring it up
-#   bt off      detach + unload
+#   bt on       system bus + bluetoothd + attach + power (idempotent)
+#   bt off      tear everything down (NOTE: kills the system dbus too --
+#               don't `bt off` under a running aa-wireless session)
 #   bt status   adapter state in one look
 case "$1" in
 on)
 	modprobe hci_uart 2>/dev/null
-	# Order matters for bluetoothd adoption: bus up -> adapter attached
-	# (registers hci0, down) -> bluetoothd (adopts via mgmt) -> power on
-	# through the MGMT path (btmgmt), never raw hciconfig alongside the
-	# daemon. SMP needs cmac/ecdh at power-on; modprobe them explicitly
-	# in case crypto autoload is slow/missing.
-	if ! ps | grep -v grep | grep -q dbus-daemon; then
-		mkdir -p /var/run/dbus
-		rm -f /var/run/dbus/pid /var/run/dbus/system_bus_socket
+	# SMP needs cmac/ecdh at power-on; modprobe explicitly in case
+	# crypto autoload is slow.
+	modprobe cmac 2>/dev/null
+	modprobe ecdh_generic 2>/dev/null
+	if ! pidof dbus-daemon >/dev/null; then
+		mkdir -p /var/run/dbus /var/lib/dbus 2>/dev/null
+		# Stale remnants block a restart: THIS build's dbus pidfile
+		# is /run/dbus-daemon.pid (not /var/run/dbus/pid), and an
+		# orphaned socket gives clients "Connection refused".
+		rm -f /run/dbus-daemon.pid /var/run/dbus/pid /var/run/dbus/system_bus_socket
 		dbus-uuidgen --ensure 2>/dev/null
 		dbus-daemon --system || echo "bt: dbus-daemon failed to start"
 	fi
 	i=0
 	while [ $i -lt 5 ] && [ ! -S /var/run/dbus/system_bus_socket ]; do sleep 1; i=$((i + 1)); done
-	modprobe cmac 2>/dev/null
-	modprobe ecdh_generic 2>/dev/null
-	ps | grep -v grep | grep -q hciattach || {
+	# Adapter attached (registers hci0, down) BEFORE bluetoothd, which
+	# adopts it via the kernel MGMT interface.
+	pidof hciattach >/dev/null || {
 		hciattach /dev/ttyS1 any 230400 noflow || {
 			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
 			exit 1
 		}
 	}
 	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
-	ps | grep -v grep | grep -q bluetoothd || "$BTD" --experimental 2>/dev/null
-	sleep 1
-	# Adoption check: a failed first power-up (marginal 921600 burst) leaves
-	# hci0 PERMANENTLY hidden from the MGMT interface -- raw HCI still works
-	# but bluetoothd manages nothing (no /org/bluez/hci0; field-debugged
-	# 2026-07-09). A fresh attach mints a clean, adoptable device.
+	# bluez 5.x bluetoothd does NOT daemonize -- background it, or this
+	# script never returns (field-hit 2026-07-10).
+	pidof bluetoothd >/dev/null || "$BTD" --experimental >/dev/null 2>&1 &
+	# Wait for org.bluez to appear on the bus (up to ~6 s) instead of a
+	# blind sleep -- a premature adoption check triggers the destructive
+	# re-attach heal against a perfectly healthy adapter.
 	adopted() {
-		dbus-send --system --reply-timeout=5000 --print-reply --dest=org.bluez / \
+		dbus-send --system --reply-timeout=3000 --print-reply --dest=org.bluez / \
 			org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null \
 			| grep -q "/org/bluez/hci0"
 	}
+	i=0
+	until adopted || [ $i -ge 3 ]; do sleep 2; i=$((i + 1)); done
+	# Self-heal: a failed first power-up leaves hci0 PERMANENTLY hidden
+	# from MGMT (raw HCI works, bluetoothd sees nothing; field-debugged
+	# 2026-07-09). A fresh attach mints a clean, adoptable device.
 	if ! adopted; then
 		killall hciattach 2>/dev/null
 		sleep 1
@@ -65,14 +73,14 @@ off)
 	echo "bt: off"
 	;;
 status)
-	ps | grep -v grep | grep -q hciattach && echo "hciattach:  running (ttyS1 @ 230400)" || echo "hciattach:  not running"
+	pidof hciattach >/dev/null && echo "hciattach:  running (ttyS1 @ 230400)" || echo "hciattach:  not running"
 	if [ -d /sys/class/bluetooth/hci0 ]; then
 		hciconfig hci0 | sed -n 1,3p
 	else
 		echo "hci0:       missing"
 	fi
-	ps | grep -v grep | grep -q bluetoothd && echo "bluetoothd: running" || echo "bluetoothd: not running"
-	ps | grep -v grep | grep -q dbus-daemon && echo "dbus:       running" || echo "dbus:       not running"
+	pidof bluetoothd >/dev/null && echo "bluetoothd: running" || echo "bluetoothd: not running"
+	pidof dbus-daemon >/dev/null && echo "dbus:       running" || echo "dbus:       not running"
 	;;
 *)
 	echo "usage: bt {on|off|status}"
