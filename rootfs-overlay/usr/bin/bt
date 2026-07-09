@@ -38,7 +38,7 @@ on)
 	# but bluetoothd manages nothing (no /org/bluez/hci0; field-debugged
 	# 2026-07-09). A fresh attach mints a clean, adoptable device.
 	adopted() {
-		dbus-send --system --print-reply --dest=org.bluez / \
+		dbus-send --system --reply-timeout=5000 --print-reply --dest=org.bluez / \
 			org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null \
 			| grep -q "/org/bluez/hci0"
 	}
@@ -49,7 +49,7 @@ on)
 		sleep 2
 	fi
 	# Power through bluetoothd (mgmt path), matching what the app does.
-	dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 \
+	dbus-send --system --reply-timeout=5000 --print-reply --dest=org.bluez /org/bluez/hci0 \
 		org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 \
 		string:Powered variant:boolean:true >/dev/null 2>&1 || hciconfig hci0 up
 	adopted && echo "bt: hci0 managed by bluetoothd" || echo "bt: WARNING hci0 not adopted (check bluetoothd)"
@@ -59,7 +59,7 @@ off)
 	hciconfig hci0 down 2>/dev/null
 	killall bluetoothd 2>/dev/null
 	killall dbus-daemon 2>/dev/null
-	rm -f /var/run/dbus/pid /var/run/dbus/system_bus_socket
+	rm -f /run/dbus-daemon.pid /var/run/dbus/pid /var/run/dbus/system_bus_socket
 	killall hciattach 2>/dev/null
 	modprobe -r hci_uart 2>/dev/null
 	echo "bt: off"
