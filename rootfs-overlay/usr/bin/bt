@@ -9,31 +9,32 @@
 case "$1" in
 on)
 	modprobe hci_uart 2>/dev/null
-	# The aa-wireless backend (and bluetoothctl) talk to BlueZ over the
-	# system D-Bus; neither daemon autostarts (RAM diet) -- start them
-	# here, stop them in `bt off`.
+	# Order matters for bluetoothd adoption: bus up -> adapter attached
+	# (registers hci0, down) -> bluetoothd (adopts via mgmt) -> power on
+	# through the MGMT path (btmgmt), never raw hciconfig alongside the
+	# daemon. SMP needs cmac/ecdh at power-on; modprobe them explicitly
+	# in case crypto autoload is slow/missing.
 	if ! ps | grep -v grep | grep -q dbus-daemon; then
 		mkdir -p /var/run/dbus
-		# killall teardown leaves the pid file + socket behind; a stale
-		# pid file makes dbus-daemon refuse to start and a stale socket
-		# gives clients "Connection refused" -- clear both first.
 		rm -f /var/run/dbus/pid /var/run/dbus/system_bus_socket
 		dbus-uuidgen --ensure 2>/dev/null
 		dbus-daemon --system || echo "bt: dbus-daemon failed to start"
 	fi
 	i=0
 	while [ $i -lt 5 ] && [ ! -S /var/run/dbus/system_bus_socket ]; do sleep 1; i=$((i + 1)); done
-	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
-	ps | grep -v grep | grep -q bluetoothd || "$BTD" 2>/dev/null
-	# H4 line discipline; host side has no RTS/CTS pins -> noflow.
+	modprobe cmac 2>/dev/null
+	modprobe ecdh_generic 2>/dev/null
 	ps | grep -v grep | grep -q hciattach || {
 		hciattach /dev/ttyS1 any 921600 noflow || {
 			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
 			exit 1
 		}
 	}
+	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
+	ps | grep -v grep | grep -q bluetoothd || "$BTD" 2>/dev/null
 	sleep 1
-	hciconfig hci0 up && hciconfig hci0 | sed -n 2,3p
+	btmgmt -i hci0 power on >/dev/null 2>&1 || hciconfig hci0 up
+	hciconfig hci0 | sed -n 2,3p
 	;;
 off)
 	hciconfig hci0 down 2>/dev/null
