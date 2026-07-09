@@ -119,6 +119,10 @@ CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 # symbol dependencies -- zero resident cost while wifi is off.
 CONFIG_SPI=y
 CONFIG_SPI_SUN6I=y
+# System DMA (A10-class NDMA/DDMA, backported by patch 0014): spi-sun6i picks
+# the channels up from the DT and stops burning ~25 FIFO IRQs per ESP frame.
+CONFIG_DMADEVICES=y
+CONFIG_DMA_SUN4I=y
 # WIRELESS is the menu gate CFG80211 lives behind -- without it =m is
 # silently dropped (same kconfig trap as VT/EXPERT). WLAN (the in-tree
 # vendor-driver menu) stays off: our driver is out-of-tree.

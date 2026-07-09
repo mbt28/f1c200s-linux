@@ -222,11 +222,25 @@ hostapd fails to start → `hostapd -dd /etc/hostapd.conf` in the foreground
 shows the cfg80211 conversation; ESP-side AP limits are NG-firmware
 territory (beacons/assoc handled on the ESP).
 
-**P6 — wireless AA in FastCarPlay**
-Extend `AaConnection`: BT RFCOMM advertise → send SSID/PSK/IP via the AA
-wifi-projection messages (`WirelessTcpConfiguration`) → accept the TCP :5277
-session → same protocol as wired from there. Exit: phone in pocket, AA on
-screen.
+**P6 — wireless AA in FastCarPlay (+ SPI DMA for the AV headroom)**
+App side (FastCarPlay `protocol = aa-wireless`, largely implemented there):
+BT RFCOMM advertise via BlueZ D-Bus → SSID/PSK/IP over the AA
+wifi-projection messages (`WirelessTcpConfiguration`) → TCP :5277 session →
+same protocol as wired. The app orchestrates its own hostapd/dnsmasq
+(`/tmp/fcp-*.conf`, 192.168.53.1/24) and bluetoothd; `bt on` provides the
+adoption-safe adapter underneath. Exit: phone in pocket, AA on screen.
+
+Repo side — **SPI DMA** (hardware-verified possible, User Manual V1.2):
+wireless AA streams the whole AV feed over the ESP SPI link, which today is
+PIO (90k+ IRQs observed; ~25 per 1600-byte transfer, no `dmas` in DT, no
+suniv support in any mainline DMA driver). The manual says the silicon is
+ready: §3.6 system DMA (4 NDMA + 4 DDMA channels @ 0x01C02000) with **NDMA
+DRQ type 0x05 = SPI1 Tx/Rx**, and §7.3.7.5 SPI FIFO Control has per-
+direction DRQ enables + trigger levels (+ NDMA/DDMA mode select, default
+NDMA). The engine is the A10-class NDMA/DDMA design → port `sun4i-dma.c`
+(suniv compatible, 4+4 channels, suniv endpoint map) + dtsi node + `dmas`
+on `&spi1`; spi-sun6i is already a dmaengine consumer and needs no changes.
+Exit: `sun6i-spi` IRQ rate collapses (~1/transfer), iperf CPU drops.
 
 **P7 — productize**
 Re-measure RAM (docs/memory.md — expect ~3–5 MiB for module+supplicant+
