@@ -195,6 +195,12 @@ dedicated UART (the release's `esp32/spi+uart` firmware):
   production boards route the CH340 console to PA2/PA3, not PE0/PE1);
   `CONFIG_BT_HCIUART(+H4)=m`; **`bt on|off|status`** runs
   `hciattach /dev/ttyS1 any 230400 noflow` + brings hci0 up.
+- **HARDWARE-VALIDATED 2026-07-09 (custom firmware)**: clean HCI init at
+  230400 (zero timeouts vs. always-within-3s at 921600), 50+ BLE
+  advertisements decoded in one lescan, and **bluetoothd adoption works**
+  (`/org/bluez/hci0`, `bluetoothctl list` shows the controller) — the
+  mgmt-hidden-adapter trap only ever triggered on failed init, which no
+  longer happens.
 - **Baud + flow control resolved by a custom firmware build (2026-07-09)**:
   the prebuilt spi+uart binary runs 921600 with flow control ON — on the
   suniv that's a −3.1% integer divisor (APB 100 MHz, verified via
