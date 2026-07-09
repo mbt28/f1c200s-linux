@@ -1,0 +1,67 @@
+spi-sun6i: respect the DMA engine's burst limit (fixes suniv SPI DMA)
+
+Field-debugged on the board: with patch 0014's dmas wired, every SPI
+transfer failed ("spi1.0: prepare DMA failed, ret=-22" -> transfer
+failed -22) and the ESP-Hosted link went completely dead -- once a
+driver claims DMA for a transfer there is no PIO fallback. Cause:
+spi-sun6i hardcodes maxburst=8, while the suniv NDMA does single/INCR4
+only (convert_burst_f1c100s rejects >4). This is also why upstream
+never wired dmas on the suniv SPI nodes.
+
+Two-sided fix: sun4i-dma exports its per-variant burst limit as
+dmaengine caps (slave.max_burst, already carried in the config struct),
+and spi-sun6i clamps its burst to dma_get_slave_caps() when the engine
+reports one -- generic, no compatible-matching, no behavior change on
+engines that do 8 (A31/H3 report no limit).
+
+--- a/drivers/dma/sun4i-dma.c
++++ b/drivers/dma/sun4i-dma.c
+@@ -1292,6 +1292,7 @@
+ 	priv->slave.dst_addr_widths		= BIT(DMA_SLAVE_BUSWIDTH_1_BYTE) |
+ 						  BIT(DMA_SLAVE_BUSWIDTH_2_BYTES) |
+ 						  BIT(DMA_SLAVE_BUSWIDTH_4_BYTES);
++	priv->slave.max_burst			= priv->cfg->max_burst;
+ 	priv->slave.directions			= BIT(DMA_DEV_TO_MEM) |
+ 						  BIT(DMA_MEM_TO_DEV);
+ 	priv->slave.residue_granularity		= DMA_RESIDUE_GRANULARITY_BURST;
+--- a/drivers/spi/spi-sun6i.c
++++ b/drivers/spi/spi-sun6i.c
+@@ -216,11 +216,18 @@
+ 
+ 	rxdesc = NULL;
+ 	if (tfr->rx_buf) {
++		struct dma_slave_caps caps;
++		u32 burst = 8;
++
++		/* e.g. the suniv NDMA does single/INCR4 only */
++		if (!dma_get_slave_caps(host->dma_rx, &caps) && caps.max_burst)
++			burst = min_t(u32, burst, caps.max_burst);
++
+ 		struct dma_slave_config rxconf = {
+ 			.direction = DMA_DEV_TO_MEM,
+ 			.src_addr = sspi->dma_addr_rx,
+ 			.src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE,
+-			.src_maxburst = 8,
++			.src_maxburst = burst,
+ 		};
+ 
+ 		dmaengine_slave_config(host->dma_rx, &rxconf);
+@@ -238,11 +245,17 @@
+ 
+ 	txdesc = NULL;
+ 	if (tfr->tx_buf) {
++		struct dma_slave_caps caps;
++		u32 burst = 8;
++
++		if (!dma_get_slave_caps(host->dma_tx, &caps) && caps.max_burst)
++			burst = min_t(u32, burst, caps.max_burst);
++
+ 		struct dma_slave_config txconf = {
+ 			.direction = DMA_MEM_TO_DEV,
+ 			.dst_addr = sspi->dma_addr_tx,
+ 			.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES,
+-			.dst_maxburst = 8,
++			.dst_maxburst = burst,
+ 		};
+ 
+ 		dmaengine_slave_config(host->dma_tx, &txconf);
