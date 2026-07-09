@@ -1,0 +1,45 @@
+spi: drain the queues in the worker (fixes lost transactions)
+
+The SPI worker serviced exactly ONE transaction per invocation, while
+queue_work() calls coalesce whenever a run is already pending. Under
+bursts (multi-frame scan results, command sequences) the worker gets
+fewer invocations than there are transactions; a queued TX then waits
+for a handshake EDGE that never comes, because the line is already
+high. Field signature on the F1C200s: first scan returns fine, second
+command times out forever with handshake high / data-ready low and the
+frame still in the queue; adding printk delays (heisenbug-style) made
+it disappear. Raspberry Pi hosts mask the race with different timing.
+
+Loop until there is nothing to send, nothing pending from the ESP, or
+the ESP deasserts ready. Validated on hardware: five consecutive scans
+(16-17 SSIDs) with zero timeouts, and cfg80211 AP mode (hostapd)
+reaches AP-ENABLED -- previously both died on the second exchange.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/esp_hosted_ng/host/spi/esp_spi.c
++++ b/esp_hosted_ng/host/spi/esp_spi.c
+@@ -293,6 +293,7 @@
+ 	int ret = 0;
+ 	volatile int trans_ready, rx_pending;
+ 
++next_transaction:
+ 	trans_ready = gpio_get_value(HANDSHAKE_PIN);
+ 	rx_pending = gpio_get_value(SPI_DATA_READY_PIN);
+ 
+@@ -390,6 +391,15 @@
+ 			dev_kfree_skb(rx_skb);
+ 
+ 		dev_kfree_skb(tx_skb);
++
++		/* Drain until idle: queue_work() calls coalesce while a run
++		 * is pending, so a single-shot worker loses transactions
++		 * under bursts -- a queued TX then waits for a handshake
++		 * EDGE that never comes (the line is already high). Loop
++		 * until there is nothing to do or the ESP is not ready. */
++		tx_skb = NULL;
++		rx_skb = NULL;
++		goto next_transaction;
+ 	}
+ }
+ 
