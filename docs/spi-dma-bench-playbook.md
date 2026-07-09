@@ -106,6 +106,13 @@ NDMA channel n: `0x01C02100 + n*0x20`: CFG `+0x00`, SRC `+0x04`, DST
    retest — the performance-correct endgame if H1/H2 alone are not it.
 6. **H4 — scope MOSI** if software forensics disagree with all theories:
    valid frame header bytes vs zeros/garbage during a command transfer.
+7. **H5 — empirical DDMA probe (last resort)**: the manual says DDMA has
+   no SPI endpoints, but the SPI block's `RX_DMA_MODE=Dedicate` bit exists
+   (IP legacy from A10-class parts, where DDMA did serve SPI). If H1–H4
+   all fail, spend 30 min disproving the manual: FCR bit 9 = 1, dmas
+   switched to `SUN4I_DMA_DEDICATED` with candidate DRQ indexes (try the
+   NDMA-equivalent 0x05 first), watch whether anything moves. Expected
+   outcome: nothing moves and the manual stands.
 
 ## Instrumentation patch (if step 2 needs more resolution)
 
