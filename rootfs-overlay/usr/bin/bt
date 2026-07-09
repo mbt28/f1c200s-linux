@@ -31,9 +31,28 @@ on)
 		}
 	}
 	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
-	ps | grep -v grep | grep -q bluetoothd || "$BTD" 2>/dev/null
+	ps | grep -v grep | grep -q bluetoothd || "$BTD" --experimental 2>/dev/null
 	sleep 1
-	btmgmt -i hci0 power on >/dev/null 2>&1 || hciconfig hci0 up
+	# Adoption check: a failed first power-up (marginal 921600 burst) leaves
+	# hci0 PERMANENTLY hidden from the MGMT interface -- raw HCI still works
+	# but bluetoothd manages nothing (no /org/bluez/hci0; field-debugged
+	# 2026-07-09). A fresh attach mints a clean, adoptable device.
+	adopted() {
+		dbus-send --system --print-reply --dest=org.bluez / \
+			org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null \
+			| grep -q "/org/bluez/hci0"
+	}
+	if ! adopted; then
+		killall hciattach 2>/dev/null
+		sleep 1
+		hciattach /dev/ttyS1 any 921600 noflow
+		sleep 2
+	fi
+	# Power through bluetoothd (mgmt path), matching what the app does.
+	dbus-send --system --print-reply --dest=org.bluez /org/bluez/hci0 \
+		org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 \
+		string:Powered variant:boolean:true >/dev/null 2>&1 || hciconfig hci0 up
+	adopted && echo "bt: hci0 managed by bluetoothd" || echo "bt: WARNING hci0 not adopted (check bluetoothd)"
 	hciconfig hci0 | sed -n 2,3p
 	;;
 off)
