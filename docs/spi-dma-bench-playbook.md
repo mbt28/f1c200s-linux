@@ -1,5 +1,17 @@
 # SPI DMA bench playbook (suniv NDMA ↔ spi-sun6i ↔ ESP-Hosted)
 
+**2026-07-10 — ROOT CAUSE FOUND AND FIXED (and it wasn't DMA-specific):**
+the vendor driver's SPI worker was single-shot while `queue_work()`
+coalesces — bursts lose transactions; a queued TX then waits for a
+handshake edge that never comes (measured live: PE2 high, PE3 low, frame
+in queue; printk delays masked it = heisenbug). Package patch 0002 makes
+the worker drain until idle. Hardware-validated over the serial console:
+5 consecutive scans with zero timeouts and **hostapd reaches AP-ENABLED**
+(P5 validated). The DMA-mode failures very likely were the same race hit
+harder (faster transactions); the FIRST bench step is now simply: re-wire
+`dmas` (revert 0016) on a kernel with patch 0002 and rerun — the
+hypothesis list below only matters if that still fails.
+
 Prepared 2026-07-09 from the User Manual V1.2 (§3.6 pp. 106–115, §7.3
 pp. 282–294) plus three hardware iterations. DMA is parked (patch 0016,
 PIO ships); this is the plan for the focused bench effort.
