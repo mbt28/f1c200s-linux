@@ -144,6 +144,17 @@ CONFIG_BT=m
 # hciattach; hci_uart stays modular like the rest of the wireless stack.
 CONFIG_BT_HCIUART=m
 CONFIG_BT_HCIUART_H4=y
+# RFCOMM: bluetoothd needs kernel RFCOMM to bind the profile listener and
+# publish the SDP channel for FastCarPlay's wireless-Android-Auto profile
+# (UUID 4de17a00-...) and HFP. Without it, RegisterProfile logs success but
+# the adapter advertises nothing, so the phone bonds then finds no AA service
+# over SDP and drops the link ("couldn't pair" -- btmon-confirmed on-target
+# 2026-07-10). =m, NOT =y: the BT core is modular (CONFIG_BT=m), so a built-in
+# RFCOMM cannot link against bluetooth.ko. kconfig does NOT catch this (the
+# intermediary BT_BREDR is a bool that launders BT's tristate), so =y survives
+# olddefconfig and then breaks the kernel link. As a module, rfcomm.ko lands
+# in modules.dep and autoloads when bluetoothd opens the RFCOMM socket.
+CONFIG_BT_RFCOMM=m
 
 # --- RAM diet (docs/memory.md, measured 2026-07-05) ---
 # The multi-platform sunxi base config carries ~13 MiB of resident kernel;
