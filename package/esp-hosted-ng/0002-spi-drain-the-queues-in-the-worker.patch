@@ -1,19 +1,28 @@
-spi: drain the queues in the worker (fixes lost transactions)
+spi: drain the queues in the worker + last-instant readiness check
 
-The SPI worker serviced exactly ONE transaction per invocation, while
-queue_work() calls coalesce whenever a run is already pending. Under
-bursts (multi-frame scan results, command sequences) the worker gets
-fewer invocations than there are transactions; a queued TX then waits
-for a handshake EDGE that never comes, because the line is already
-high. Field signature on the F1C200s: first scan returns fine, second
-command times out forever with handshake high / data-ready low and the
-frame still in the queue; adding printk delays (heisenbug-style) made
-it disappear. Raspberry Pi hosts mask the race with different timing.
+Two host-side robustness fixes for transaction loss, both field-
+debugged on an F1C200s (suniv) host where the timing differs from the
+Raspberry Pi reference:
 
-Loop until there is nothing to send, nothing pending from the ESP, or
-the ESP deasserts ready. Validated on hardware: five consecutive scans
-(16-17 SSIDs) with zero timeouts, and cfg80211 AP mode (hostapd)
-reaches AP-ENABLED -- previously both died on the second exchange.
+1. The SPI worker serviced exactly ONE transaction per invocation,
+   while queue_work() calls coalesce whenever a run is already
+   pending. Under bursts the worker gets fewer invocations than there
+   are transactions; a queued TX then waits for a handshake EDGE that
+   never comes (the line is already high). Signature: first scan fine,
+   every later command times out; handshake high / data-ready low with
+   the frame still queued; printk delays made it vanish. Fix: loop
+   until there is nothing to send, nothing pending, or not-ready.
+
+2. The ESP can deassert the handshake between the check at the top of
+   the loop and the actual transfer; transacting against a not-ready
+   slave silently loses the frame. Signature: cmd_mgmt_request/
+   cmd_set_ie timeouts exactly during assoc bursts (a phone joining
+   the SoftAP). Fix: re-check the handshake immediately before
+   spi_sync_transfer and requeue the TX at the head of its priority
+   queue instead of transmitting into the void.
+
+Validated on hardware: five consecutive scans (16-17 SSIDs, zero
+timeouts) and hostapd reaching AP-ENABLED on the NG cfg80211 AP path.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
@@ -27,7 +36,33 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  	trans_ready = gpio_get_value(HANDSHAKE_PIN);
  	rx_pending = gpio_get_value(SPI_DATA_READY_PIN);
  
-@@ -390,6 +391,15 @@
+@@ -379,6 +380,25 @@
+ 	}
+ #endif
+ 
++	/* Last-instant readiness check: the ESP may have deasserted the
++	 * handshake between the check at the top of the loop and here --
++	 * transacting against a not-ready slave silently loses the frame
++	 * (field signature: cmd_mgmt_request timeouts under assoc bursts).
++	 * Requeue and let the next handshake edge retry. */
++	if (!gpio_get_value(HANDSHAKE_PIN)) {
++		struct esp_payload_header *reh =
++			(struct esp_payload_header *)tx_skb->data;
++		if (reh->if_type == ESP_INTERNAL_IF)
++			skb_queue_head(&spi_context.tx_q[PRIO_Q_HIGH], tx_skb);
++		else if (reh->if_type == ESP_HCI_IF)
++			skb_queue_head(&spi_context.tx_q[PRIO_Q_MID], tx_skb);
++		else
++			skb_queue_head(&spi_context.tx_q[PRIO_Q_LOW], tx_skb);
++		atomic_inc(&tx_pending);
++		dev_kfree_skb(rx_skb);
++		return;
++	}
++
+ 	ret = spi_sync_transfer(spi_context.esp_spi_dev, &trans, 1);
+ 	if (ret) {
+ 		esp_err("SPI Transaction failed: %d", ret);
+@@ -390,6 +410,15 @@
  			dev_kfree_skb(rx_skb);
  
  		dev_kfree_skb(tx_skb);
