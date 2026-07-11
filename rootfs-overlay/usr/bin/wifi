@@ -1,6 +1,8 @@
 #!/bin/sh
 # Runtime WiFi switch (ESP32 / ESP-Hosted-NG) -- same shape as `net`:
-#   wifi on      enable now + autostart on boot (flag /etc/wifi-enabled)
+#   wifi on      STA mode now + autostart on boot (flag /etc/wifi-enabled)
+#   wifi up      bring up ONLY the ESP transport + wlan0 (no STA, no flag) --
+#                for AP-mode consumers (wireless-AA autostart / the app hostapd)
 #   wifi off     disable + unload the modules (frees the RAM back)
 #   wifi status  transport / association / address in one look
 # STA config lives in /etc/wpa_supplicant.conf. Bluetooth arrives with the
@@ -12,6 +14,27 @@ on)
 	/etc/init.d/S44ap stop 2>/dev/null
 	touch /etc/wifi-enabled
 	exec /etc/init.d/S43wifi start
+	;;
+up)
+	# ESP transport only -- no wpa_supplicant/STA (the app runs its own
+	# hostapd AP) and no /etc/wifi-enabled flag (so S43wifi's STA autostart
+	# stays off). Cold-boot safe: retry the module load -- each reload
+	# re-pulses the ESP PE4 reset -- until wlan0 appears or a few tries fail.
+	n=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ $n -lt 4 ]; do
+		modprobe esp32_spi resetpin=132 clockspeed=10 2>/dev/null
+		i=0
+		while [ $i -lt 8 ] && [ ! -d /sys/class/net/wlan0 ]; do sleep 1; i=$((i + 1)); done
+		[ -d /sys/class/net/wlan0 ] && break
+		modprobe -r esp32_spi 2>/dev/null; sleep 2
+		n=$((n + 1))
+	done
+	if [ -d /sys/class/net/wlan0 ]; then
+		ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up
+		echo "wifi: wlan0 up (transport ready$([ $n -gt 0 ] && echo ", $n retr$([ $n -eq 1 ] && echo y || echo ies)"))"
+	else
+		echo "wifi: no wlan0 after $n tries (ESP32 transport failed -- check wiring + dmesg)" > /dev/console
+	fi
 	;;
 off)
 	rm -f /etc/wifi-enabled
@@ -39,6 +62,6 @@ status)
 	[ -d /sys/class/bluetooth/hci0 ] && echo "bluetooth: hci0 present" || echo "bluetooth: hci0 missing"
 	;;
 *)
-	echo "usage: wifi {on|off|status}"
+	echo "usage: wifi {on|up|off|status}"
 	;;
 esac

@@ -22,7 +22,9 @@ start)
 	echo "carplay: autostarting ($preset)"
 	case "$preset" in
 	*wireless*)
-		( wifi on; bt on; net on
+		# `wifi up` = ESP transport + wlan0 only (no STA, cold-boot retry);
+		# the app runs its own hostapd AP on wlan0.
+		( wifi up; bt on; net on
 		  SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1
 		) &
 		;;
