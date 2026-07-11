@@ -1,16 +1,14 @@
 #!/bin/sh
-# FastCarPlay autostart (last rcS step). Opt-out at runtime with `autorun off`
-# (persists across reboots); the manual `carplay` command still works and
-# replaces a running autostarted instance. Log: /tmp/carplay.log
+# FastCarPlay app autostart (last rcS step). Opt-out with `autorun off` -- that
+# stops only the app; the WiFi + BT radios stay up (they come up in S45aa-stack,
+# independent of this). The manual `carplay` command replaces a running
+# instance. Log: /tmp/carplay.log
 #
-# Preset selection: an explicit /etc/carplay-preset (e.g. "cedrus_wireless",
-# set by `autorun wireless`) wins; otherwise the preset is derived from the
-# active VE driver (/etc/ve-driver -> settings_<cedar|cedrus>.txt). A *wireless*
-# preset first brings the ESP32 wireless stack up -- `wifi on` (esp32_spi +
-# wlan0; the app runs its own hostapd AP), `bt on` (dbus + bluetoothd + bluealsa
-# HFP-AG), `net on` (dev SSH/USB-eth) -- i.e. the proven manual sequence, before
-# launching the app. That bring-up is backgrounded so rcS is not blocked (the
-# ESP needs ~10-20 s to boot WiFi+BT).
+# Preset: an explicit /etc/carplay-preset (e.g. "cedrus_wireless", set by
+# `autorun wireless`) wins; else it is derived from the active VE driver
+# (/etc/ve-driver -> settings_<cedar|cedrus>.txt). For a *wireless* preset the
+# radios are brought up by S45aa-stack; here we only wait for wlan0 + hci0 to be
+# ready and then launch the app.
 
 case "$1" in
 start)
@@ -22,9 +20,12 @@ start)
 	echo "carplay: autostarting ($preset)"
 	case "$preset" in
 	*wireless*)
-		# `wifi up` = ESP transport + wlan0 only (no STA, cold-boot retry);
-		# the app runs its own hostapd AP on wlan0.
-		( wifi up; bt on; net on
+		# Wait for the radios (S45aa-stack) to be up, then launch. Backgrounded
+		# so rcS is not blocked.
+		( i=0
+		  while [ $i -lt 45 ] && { [ ! -d /sys/class/net/wlan0 ] || [ ! -d /sys/class/bluetooth/hci0 ]; }; do
+			sleep 1; i=$((i + 1))
+		  done
 		  SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1
 		) &
 		;;

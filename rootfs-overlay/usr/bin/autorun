@@ -1,34 +1,41 @@
 #!/bin/sh
 # autorun on|wireless|off|status|stop -- FastCarPlay boot-autostart control.
 # on/wireless/off persist across reboots (flag files on the ext4 rootfs).
-#   on        autostart the default preset (chosen from /etc/ve-driver)
-#   wireless  autostart wireless Android Auto (settings_cedrus_wireless.txt);
-#             S99carplay brings up wifi+bt+net first
+#   wireless  wireless Android Auto appliance: the WiFi+BT radios (S45aa-stack)
+#             AND the app (S99carplay) autostart at boot.
+#   on        autostart the app with the default preset (from /etc/ve-driver);
+#             no radios.
+#   off       stop the APP autostart only. In wireless mode the WiFi+BT radios
+#             stay up (S45aa-stack is independent) -- `bt off; wifi off` stops
+#             those.
 case "$1" in
 on)
 	rm -f /etc/carplay-preset
 	echo enabled > /etc/carplay-autostart
-	echo "autostart enabled (default preset; from next boot -- run 'carplay' to launch now)"
+	echo "app autostart enabled (default preset; from next boot -- run 'carplay' to launch now)"
 	;;
 wireless)
 	echo cedrus_wireless > /etc/carplay-preset
 	echo enabled > /etc/carplay-autostart
-	echo "wireless AA autostart enabled (wifi+bt+net then FastCarPlay, from next boot)"
+	echo "wireless AA enabled (WiFi+BT radios + FastCarPlay autostart, from next boot)"
 	;;
 off)
 	rm -f /etc/carplay-autostart
-	echo "autostart disabled (running instance untouched; 'autorun stop' kills it)"
+	echo "app autostart disabled (running instance untouched; 'autorun stop' kills it)"
+	grep -q wireless /etc/carplay-preset 2>/dev/null && \
+		echo "  note: WiFi+BT radios still autostart (wireless mode) -- 'bt off; wifi off' to stop them"
 	;;
 stop)
 	killall fastcarplay 2>/dev/null && echo "stopped" || echo "not running"
 	;;
 status)
 	if [ -f /etc/carplay-autostart ]; then
-		echo "autostart: enabled (preset: $(cat /etc/carplay-preset 2>/dev/null || echo '<ve-driver>'))"
+		echo "app autostart: enabled (preset: $(cat /etc/carplay-preset 2>/dev/null || echo '<ve-driver>'))"
 	else
-		echo "autostart: disabled"
+		echo "app autostart: disabled"
 	fi
-	if pidof fastcarplay > /dev/null 2>&1; then echo "fastcarplay: running (pid $(pidof fastcarplay))"; else echo "fastcarplay: not running"; fi
+	grep -q wireless /etc/carplay-preset 2>/dev/null && echo "radios (S45aa-stack): wireless mode ON" || echo "radios (S45aa-stack): off"
+	pidof fastcarplay > /dev/null 2>&1 && echo "fastcarplay: running (pid $(pidof fastcarplay))" || echo "fastcarplay: not running"
 	;;
 *)
 	echo "usage: autorun on|wireless|off|status|stop"

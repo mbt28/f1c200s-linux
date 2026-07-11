@@ -1,0 +1,24 @@
+#!/bin/sh
+# Wireless-AA radios: bring up the ESP32 WiFi transport (wlan0) + the Bluetooth
+# stack (dbus, bluetoothd, bluealsa HFP AG+HF, Audio+Telephony CoD) + the dev
+# network, at boot, INDEPENDENT of the FastCarPlay app autostart. WiFi already
+# had its own autostart (S43wifi); this gives Bluetooth the same independence,
+# so `autorun off` (app off) still leaves WiFi + BT up. Gated on the wireless
+# mode (/etc/carplay-preset contains "wireless", set by `autorun wireless`),
+# NOT on /etc/carplay-autostart.
+#
+# Backgrounded: the ESP needs ~10-20 s to boot and rcS must not block. Order is
+# load-bearing -- `wifi up` loads esp32_spi which pulls the ESP out of reset
+# (PE4); `bt on`'s hciattach then finds a live controller over UART.
+case "$1" in
+start)
+	grep -q wireless /etc/carplay-preset 2>/dev/null || exit 0
+	( wifi up; bt on; net on ) &
+	;;
+stop)
+	bt off 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
