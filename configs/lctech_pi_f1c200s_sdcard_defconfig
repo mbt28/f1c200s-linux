@@ -98,6 +98,18 @@ BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
 BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
 # btmon: HCI traffic sniffer -- the aa-wireless debugging microscope.
 BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
+# bluez-alsa (bluealsad): HFP Audio Gateway (UUID 0x111f) for wireless Android
+# Auto. The phone will NOT start AA unless the head unit exposes a WORKING
+# HFP-AG that completes the RFCOMM service-level connection (it opens a 2nd
+# RFCOMM channel and runs AT+BRSF / AT+CIND / AT+CMER). bluez alone does not
+# answer that AT dialog; on the reference Pi it was PipeWire's bluez5 SPA
+# plugin. bluez-alsa's native backend (ba-rfcomm.c, built with --disable-ofono)
+# implements the AG side and is the lightest option that provides the AG role
+# (adds alsa-lib + sbc, ~2 MB; PipeWire+WirePlumber would be ~15-25 MB RAM).
+# No modem or call audio is used -- only the SLC must complete. `bt on`
+# launches `bluealsa -p hfp-ag` right after bluetoothd (the daemon is named
+# `bluealsa` in v4.3.1; `bluealsad` only in later releases).
+BR2_PACKAGE_BLUEZ_ALSA=y
 # SoftAP userspace (roadmap P5 -> wireless Android Auto needs the head unit
 # to be the AP): hostapd drives the NG driver's cfg80211 AP mode (compiled in
 # with CONFIG_AP_SUPPORT); dnsmasq hands out the leases. Both default-off --

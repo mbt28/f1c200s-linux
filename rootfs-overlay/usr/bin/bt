@@ -35,8 +35,10 @@ on)
 	}
 	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
 	# bluez 5.x bluetoothd does NOT daemonize -- background it, or this
-	# script never returns (field-hit 2026-07-10).
-	pidof bluetoothd >/dev/null || "$BTD" --experimental >/dev/null 2>&1 &
+	# script never returns (field-hit 2026-07-10). --compat enables the
+	# legacy SDP interface so `sdptool browse local` can verify the HFP-AG
+	# record (harmless otherwise; the phone uses native SDP either way).
+	pidof bluetoothd >/dev/null || "$BTD" --experimental --compat >/dev/null 2>&1 &
 	# Wait for org.bluez to appear on the bus (up to ~6 s) instead of a
 	# blind sleep -- a premature adoption check triggers the destructive
 	# re-attach heal against a perfectly healthy adapter.
@@ -62,8 +64,23 @@ on)
 		string:Powered variant:boolean:true >/dev/null 2>&1 || hciconfig hci0 up
 	adopted && echo "bt: hci0 managed by bluetoothd" || echo "bt: WARNING hci0 not adopted (check bluetoothd)"
 	hciconfig hci0 | sed -n 2,3p
+	# HFP Audio Gateway: the phone gates wireless Android Auto on the head
+	# unit exposing a WORKING HFP-AG (0x111f) that completes the RFCOMM
+	# service-level connection (AT+BRSF/AT+CIND/AT+CMER). bluez does NOT
+	# answer that AT dialog; bluez-alsa's native backend does. No modem/call
+	# audio -- only the SLC must complete. Start it once bluetoothd is up so
+	# it can register the profile (on the reference Pi, PipeWire's bluez5 SPA
+	# plugin filled this role; we ship the lighter bluez-alsa).
+	# NB: the daemon is `bluealsa` in bluez-alsa v4.3.1 (Buildroot 2026.05);
+	# it is renamed `bluealsad` only in later releases.
+	if ! pidof bluealsa >/dev/null; then
+		bluealsa -p hfp-ag -i hci0 >/dev/null 2>&1 &
+	fi
 	;;
 off)
+	# Stop the HFP-AG first (it depends on bluetoothd). busybox has no
+	# pkill; pidof+kill handles one or many pids.
+	kill "$(pidof bluealsa)" 2>/dev/null
 	hciconfig hci0 down 2>/dev/null
 	killall bluetoothd 2>/dev/null
 	killall dbus-daemon 2>/dev/null
@@ -80,6 +97,7 @@ status)
 		echo "hci0:       missing"
 	fi
 	pidof bluetoothd >/dev/null && echo "bluetoothd: running" || echo "bluetoothd: not running"
+	pidof bluealsa >/dev/null && echo "bluealsa:   running (hfp-ag)" || echo "bluealsa:   not running"
 	pidof dbus-daemon >/dev/null && echo "dbus:       running" || echo "dbus:       not running"
 	;;
 *)
