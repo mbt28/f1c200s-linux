@@ -64,18 +64,28 @@ on)
 		string:Powered variant:boolean:true >/dev/null 2>&1 || hciconfig hci0 up
 	adopted && echo "bt: hci0 managed by bluetoothd" || echo "bt: WARNING hci0 not adopted (check bluetoothd)"
 	hciconfig hci0 | sed -n 2,3p
-	# HFP Audio Gateway: the phone gates wireless Android Auto on the head
-	# unit exposing a WORKING HFP-AG (0x111f) that completes the RFCOMM
-	# service-level connection (AT+BRSF/AT+CIND/AT+CMER). bluez does NOT
-	# answer that AT dialog; bluez-alsa's native backend does. No modem/call
-	# audio -- only the SLC must complete. Start it once bluetoothd is up so
-	# it can register the profile (on the reference Pi, PipeWire's bluez5 SPA
-	# plugin filled this role; we ship the lighter bluez-alsa).
+	# HFP for wireless Android Auto. The phone gates AA on the head unit
+	# exposing BOTH a working HFP Audio Gateway (0x111f) -- which completes the
+	# RFCOMM service-level connection (AT+BRSF/AT+CIND/AT+CMER) -- AND a
+	# STANDALONE Hands-Free (0x111e) record (its "is this a car?" check). bluez
+	# does NOT answer the AT dialog; bluez-alsa's native backend does. So run
+	# BOTH roles: -p hfp-ag -p hfp-hf publishes 0x111f + 0x111e. FastCarPlay
+	# >= 96be544 no longer registers 0x111e itself (it would collide with the
+	# hfp-hf role: "UUID already registered"), so bluealsa must own it.
+	# No modem/call audio is used -- only the SLC must complete.
 	# NB: the daemon is `bluealsa` in bluez-alsa v4.3.1 (Buildroot 2026.05);
 	# it is renamed `bluealsad` only in later releases.
 	if ! pidof bluealsa >/dev/null; then
-		bluealsa -p hfp-ag -i hci0 >/dev/null 2>&1 &
+		bluealsa -p hfp-ag -p hfp-hf -i hci0 >/dev/null 2>&1 &
+		sleep 2
 	fi
+	# Class of Device = Audio + Telephony (the phone treats us as a car). Set
+	# last, after bluealsa has registered its HFP records, so it wins the CoD
+	# recompute. bluez main.conf `Class` only covers major/minor, not the
+	# service bits, so set it here with hciconfig. (A later app adapter
+	# power-cycle can reset this; the phone's hard gate is the 0x111e/0x111f
+	# records + SLC, which the both-role bluealsa already provides.)
+	hciconfig hci0 class 0x600000 2>/dev/null
 	;;
 off)
 	# Stop the HFP-AG first (it depends on bluetoothd). busybox has no
@@ -97,7 +107,7 @@ status)
 		echo "hci0:       missing"
 	fi
 	pidof bluetoothd >/dev/null && echo "bluetoothd: running" || echo "bluetoothd: not running"
-	pidof bluealsa >/dev/null && echo "bluealsa:   running (hfp-ag)" || echo "bluealsa:   not running"
+	pidof bluealsa >/dev/null && echo "bluealsa:   running (hfp-ag+hf)" || echo "bluealsa:   not running"
 	pidof dbus-daemon >/dev/null && echo "dbus:       running" || echo "dbus:       not running"
 	;;
 *)
