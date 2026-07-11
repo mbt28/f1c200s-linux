@@ -2,14 +2,34 @@
 # FastCarPlay autostart (last rcS step). Opt-out at runtime with `autorun off`
 # (persists across reboots); the manual `carplay` command still works and
 # replaces a running autostarted instance. Log: /tmp/carplay.log
+#
+# Preset selection: an explicit /etc/carplay-preset (e.g. "cedrus_wireless",
+# set by `autorun wireless`) wins; otherwise the preset is derived from the
+# active VE driver (/etc/ve-driver -> settings_<cedar|cedrus>.txt). A *wireless*
+# preset first brings the ESP32 wireless stack up -- `wifi on` (esp32_spi +
+# wlan0; the app runs its own hostapd AP), `bt on` (dbus + bluetoothd + bluealsa
+# HFP-AG), `net on` (dev SSH/USB-eth) -- i.e. the proven manual sequence, before
+# launching the app. That bring-up is backgrounded so rcS is not blocked (the
+# ESP needs ~10-20 s to boot WiFi+BT).
 
 case "$1" in
 start)
 	[ -f /etc/carplay-autostart ] || exit 0
-	preset="/etc/fastcarplay/settings_$(tr -dc a-z < /etc/ve-driver 2>/dev/null).txt"
+	name="$(cat /etc/carplay-preset 2>/dev/null)"
+	[ -n "$name" ] || name="$(tr -dc a-z < /etc/ve-driver 2>/dev/null)"
+	preset="/etc/fastcarplay/settings_${name}.txt"
 	[ -f "$preset" ] || preset=/etc/fastcarplay/settings.txt
 	echo "carplay: autostarting ($preset)"
-	SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1 &
+	case "$preset" in
+	*wireless*)
+		( wifi on; bt on; net on
+		  SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1
+		) &
+		;;
+	*)
+		SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1 &
+		;;
+	esac
 	;;
 stop)
 	killall fastcarplay 2>/dev/null

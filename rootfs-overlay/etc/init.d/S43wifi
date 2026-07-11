@@ -4,6 +4,13 @@
 # `wifi on` (creates the flag below); disabled by default for a clean
 # appliance. Loading the module also registers hci0 (BT over the same SPI
 # link) -- BT stays manual: hciconfig hci0 up; hcitool scan.
+# Wireless-AA autostart drives its own AP-mode bring-up from S99carplay (the
+# app runs hostapd); skip this STA-mode autostart when it is active, to avoid a
+# station-vs-AP race on wlan0 at boot.
+if [ "$1" = "start" ] && [ -f /etc/carplay-autostart ] && \
+   grep -q wireless /etc/carplay-preset 2>/dev/null; then
+	exit 0
+fi
 [ "$1" != "start" ] || [ -f /etc/wifi-enabled ] || exit 0
 case "$1" in
 start)
