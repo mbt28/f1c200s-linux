@@ -26,13 +26,21 @@ on)
 	i=0
 	while [ $i -lt 5 ] && [ ! -S /var/run/dbus/system_bus_socket ]; do sleep 1; i=$((i + 1)); done
 	# Adapter attached (registers hci0, down) BEFORE bluetoothd, which
-	# adopts it via the kernel MGMT interface.
-	pidof hciattach >/dev/null || {
-		hciattach /dev/ttyS1 any 230400 noflow || {
-			echo "bt: hciattach failed (ESP running the spi+uart firmware? wiring?)"
-			exit 1
-		}
-	}
+	# adopts it via the kernel MGMT interface. Retry: right after a `wifi up`
+	# ESP reset the BT controller is briefly not ready and hciattach's HCI
+	# reset times out (0x1003) -- keep trying instead of bailing.
+	if ! pidof hciattach >/dev/null; then
+		i=0
+		until hciattach /dev/ttyS1 any 230400 noflow; do
+			i=$((i + 1))
+			[ $i -ge 6 ] && {
+				echo "bt: hciattach failed after $i tries (ESP spi+uart firmware? wiring?)"
+				exit 1
+			}
+			# the ESP BT controller needs a moment after an ESP reset
+			killall hciattach 2>/dev/null; sleep 2
+		done
+	fi
 	BTD="$(command -v bluetoothd || echo /usr/libexec/bluetooth/bluetoothd)"
 	# bluez 5.x bluetoothd does NOT daemonize -- background it, or this
 	# script never returns (field-hit 2026-07-10). --compat enables the

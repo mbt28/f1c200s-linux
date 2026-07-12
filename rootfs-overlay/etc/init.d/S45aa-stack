@@ -4,16 +4,31 @@
 # network, at boot, INDEPENDENT of the FastCarPlay app autostart. WiFi already
 # had its own autostart (S43wifi); this gives Bluetooth the same independence,
 # so `autorun off` (app off) still leaves WiFi + BT up. Gated on the wireless
-# mode (/etc/carplay-preset contains "wireless", set by `autorun wireless`),
-# NOT on /etc/carplay-autostart.
+# mode (/etc/carplay-preset contains "wireless", set by `autorun wireless`).
 #
 # Backgrounded: the ESP needs ~10-20 s to boot and rcS must not block. Order is
 # load-bearing -- `wifi up` loads esp32_spi which pulls the ESP out of reset
-# (PE4); `bt on`'s hciattach then finds a live controller over UART.
+# (PE4); `bt on`'s hciattach then finds a live controller over UART. The BT
+# controller is briefly not ready right after that reset, so retry `bt on`
+# until hci0 appears. Progress is logged to /tmp/aa-stack.log.
 case "$1" in
 start)
 	grep -q wireless /etc/carplay-preset 2>/dev/null || exit 0
-	( wifi up; bt on; net on ) &
+	(
+		exec >> /tmp/aa-stack.log 2>&1
+		echo "--- $(cut -d. -f1 /proc/uptime)s: start ---"
+		wifi up
+		echo "$(cut -d. -f1 /proc/uptime)s: wifi up rc=$? wlan0=$([ -d /sys/class/net/wlan0 ] && echo up || echo missing)"
+		i=0
+		while [ ! -d /sys/class/bluetooth/hci0 ] && [ $i -lt 5 ]; do
+			[ $i -gt 0 ] && { bt off; sleep 2; }
+			bt on
+			i=$((i + 1))
+			echo "$(cut -d. -f1 /proc/uptime)s: bt on try=$i hci0=$([ -d /sys/class/bluetooth/hci0 ] && echo up || echo missing)"
+		done
+		net on
+		echo "--- $(cut -d. -f1 /proc/uptime)s: done hci0=$([ -d /sys/class/bluetooth/hci0 ] && echo up || echo MISSING) ---"
+	) &
 	;;
 stop)
 	bt off 2>/dev/null
