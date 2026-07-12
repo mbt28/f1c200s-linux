@@ -4,24 +4,26 @@ Mainline sunxi MUSB is PIO-only: sunxi_musb_dma_controller_create() is a NULL
 stub, so every USB FIFO access is a CPU copy. On the F1C200s that burns the
 408 MHz ARM926 during wired Android Auto (bulk video IN).
 
-Add a dma_controller backend (drivers/usb/musb/sunxi_dma.c) that moves the USB
-endpoint FIFOs to/from SDRAM with the SoC's dedicated-DMA (DDMA) engine via the
-generic dmaengine slave API, modelled on ux500_dma.c. Per endpoint the VEND0
-register selects the DMA FIFO path (BUS_SEL) and routes the request line
-(DRQ_SEL); EP0 stays PIO. New CONFIG_USB_SUNXI_DMA gates it, and sunxi reuses
-the ux500 CSR-programming quirk. Falls back to PIO if the DT does not wire the
-"rx"/"tx" dmas, so it is a safe opt-in.
+Add a dma_controller backend (drivers/usb/musb/sunxi_dma.c) that offloads the
+USB endpoint FIFOs to the SoC dedicated-DMA (DDMA) engine via the generic
+dmaengine slave API, modelled on ux500_dma.c. Per transfer the VEND0 register
+routes the endpoint's request line onto usb_drq and switches the FIFO to the
+DMA datapath; the DDMA channel (USB DRQ) then moves the data by DRQ handshake.
 
-BRING-UP: the exact VEND0 BUS_SEL/DRQ_SEL bit positions are marked VERIFY in the
-driver and must be confirmed on hardware (UM 7.7.3 / BSP) before transfers are
-correct. Because there is a single muxed usb_drq this first cut serialises to
-one RX + one TX channel. Compiles and probes; on-hardware bring-up pending.
+VEND0 layout matches the Allwinner Sunxi USB BSP (USBC_SelectBus()):
+  BUS_SEL = bit 0 (1 = DMA, 0 = PIO); DRQ_SEL = bits[..:1],
+  field = is_tx ? ((ep-1)<<1) : ((ep<<1)-1). On this 1663-class IC BUS_SEL is
+global, so the driver toggles it per transfer (arm on program, write 0x00 to
+return to PIO on completion/abort) exactly like the vendor driver.
+
+New CONFIG_USB_SUNXI_DMA gates it; sunxi reuses the ux500 CSR quirk. Falls back
+to PIO if the DT does not wire the "rx"/"tx" dmas, so it is a safe opt-in.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,385 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -38,11 +40,10 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 + *
 + * Modelled on ux500_dma.c (also an external-dmaengine MUSB DMA backend).
 + *
-+ * BRING-UP NOTE (P1/P2): the exact BUS_SEL/DRQ_SEL bit positions inside VEND0
-+ * are marked "VERIFY" below and MUST be confirmed against the F1C200s User
-+ * Manual 7.7.3 / Allwinner BSP on hardware before transfers will be correct.
-+ * Because there is a single muxed usb_drq, this first cut serialises to one
-+ * RX + one TX channel; concurrent bidirectional DMA is a bring-up item.
++ * The VEND0 BUS_SEL/DRQ_SEL bit layout follows the Allwinner Sunxi USB BSP
++ * (USBC_SelectBus() / USBC_BP_VEND0_*); see below.  Because there is a single
++ * muxed usb_drq, this first cut serialises to one RX + one TX channel;
++ * concurrent bidirectional DMA is a bring-up item.
 + */
 +
 +#include <linux/device.h>
@@ -60,20 +61,29 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 + */
 +#define SUNXI_MUSB_VEND0		0x0043
 +#define SUNXI_MUSB_VEND0_PIO_MODE	0x00
-+/* VERIFY against UM 7.7.3 / BSP: BUS_SEL enables the dedicated-DMA FIFO path */
-+#define SUNXI_MUSB_VEND0_BUS_SEL	BIT(3)
-+#define SUNXI_MUSB_VEND0_DRQ_SEL_MASK	0x07
++/*
++ * VEND0 layout confirmed against the Allwinner Sunxi USB BSP (USBC_SelectBus()
++ * in usbc.c, USBC_BP_VEND0_* in sunxi_usb_bsp.h):
++ *   BUS_SEL = bit 0 (1 = dedicated-DMA FIFO path, 0 = CPU/PIO)
++ *   DRQ_SEL = bits [.. :1] (endpoint request-line selector)
++ * Writing 0x00 returns to PIO (clears both). On this 1663-class IC BUS_SEL is a
++ * global switch, so the driver toggles it per transfer (arm on program, clear
++ * on completion/abort), exactly like the vendor's USBC_SelectBus().
++ */
++#define SUNXI_MUSB_VEND0_BUS_SEL	BIT(0)
++#define SUNXI_MUSB_VEND0_DRQ_SEL_BP	1
 +
 +/* Only EP1-3 (TX and RX) have a DMA request line; EP0 is PIO-only. */
 +#define SUNXI_MUSB_DMA_MAX_EP		3
 +
 +/*
-+ * UM 7.7.3.1 "DMA Request Line Select": DMA_REQ[0..2] = TX EP1-3,
-+ * DMA_REQ[4..6] = RX EP1-3.  Returns the DRQ_SEL value for an endpoint.
++ * DRQ_SEL field value (pre-shift) per the vendor USBC_SelectBus():
++ *   TX: (ep - 1) << 1     RX: (ep << 1) - 1
++ * placed at bit SUNXI_MUSB_VEND0_DRQ_SEL_BP in VEND0.
 + */
 +static inline u8 sunxi_dma_drq_sel(u8 epnum, bool is_tx)
 +{
-+	return is_tx ? (epnum - 1) : (epnum + 3);
++	return is_tx ? ((epnum - 1) << 1) : ((epnum << 1) - 1);
 +}
 +
 +struct sunxi_dma_channel {
@@ -104,13 +114,15 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	u8 val;
 +
 +	if (enable)
-+		val = SUNXI_MUSB_VEND0_BUS_SEL |
-+		      (sunxi_dma_drq_sel(epnum, is_tx) &
-+		       SUNXI_MUSB_VEND0_DRQ_SEL_MASK);
++		val = (sunxi_dma_drq_sel(epnum, is_tx) <<
++		       SUNXI_MUSB_VEND0_DRQ_SEL_BP) |
++		      SUNXI_MUSB_VEND0_BUS_SEL;
 +	else
 +		val = SUNXI_MUSB_VEND0_PIO_MODE;
 +
 +	writeb(val, musb->mregs + SUNXI_MUSB_VEND0);
++	dev_dbg(musb->controller, "VEND0=0x%02x ep=%d %s %s\n", val, epnum,
++		is_tx ? "tx" : "rx", enable ? "DMA" : "PIO");
 +}
 +
 +/* DMA completion callback: hand the transfer back to the MUSB core. */
