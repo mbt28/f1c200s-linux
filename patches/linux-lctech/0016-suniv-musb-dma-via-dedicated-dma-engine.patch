@@ -23,7 +23,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,396 @@
+@@ -0,0 +1,404 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -121,8 +121,8 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +		val = SUNXI_MUSB_VEND0_PIO_MODE;
 +
 +	writeb(val, musb->mregs + SUNXI_MUSB_VEND0);
-+	dev_dbg(musb->controller, "VEND0=0x%02x ep=%d %s %s\n", val, epnum,
-+		is_tx ? "tx" : "rx", enable ? "DMA" : "PIO");
++	dev_info(musb->controller, "VEND0=0x%02x ep=%d %s %s\n", val, epnum,
++		 is_tx ? "tx" : "rx", enable ? "DMA" : "PIO");
 +}
 +
 +/* DMA completion callback: hand the transfer back to the MUSB core. */
@@ -134,8 +134,9 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	struct musb *musb = hw_ep->musb;
 +	unsigned long flags;
 +
-+	dev_dbg(musb->controller, "DMA %s done on hw_ep=%d\n",
-+		sunxi_channel->is_tx ? "tx" : "rx", hw_ep->epnum);
++	dev_info(musb->controller, "DMA %s done ep%d actual_len=%u\n",
++		 sunxi_channel->is_tx ? "tx" : "rx", hw_ep->epnum,
++		 sunxi_channel->cur_len);
 +
 +	spin_lock_irqsave(&musb->lock, flags);
 +
@@ -271,6 +272,8 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +				     u16 packet_sz, u8 mode,
 +				     dma_addr_t dma_addr, u32 len)
 +{
++	struct sunxi_dma_channel *sc = channel->private_data;
++	struct musb *musb = sc->controller->musb;
 +	int ret;
 +
 +	/*
@@ -281,8 +284,13 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	 * musb_{tx,rx}_dma_program() cleanly fall back to PIO; only word-aligned
 +	 * transfers >= 512 bytes (the bulk video path) go to DMA.
 +	 */
-+	if (len < 512 || (len & 0x3) || (dma_addr & 0x3) || (packet_sz & 0x3))
++	if (len < 512 || (len & 0x3) || (dma_addr & 0x3) || (packet_sz & 0x3)) {
++		dev_info(musb->controller, "prog ep%d %s len=%u pkt=%u -> PIO(reject)\n",
++			 sc->hw_ep->epnum, sc->is_tx ? "tx" : "rx", len, packet_sz);
 +		return 0;
++	}
++	dev_info(musb->controller, "prog ep%d %s len=%u pkt=%u mode=%u -> DMA\n",
++		 sc->hw_ep->epnum, sc->is_tx ? "tx" : "rx", len, packet_sz, mode);
 +
 +	BUG_ON(channel->status == MUSB_DMA_STATUS_UNKNOWN ||
 +	       channel->status == MUSB_DMA_STATUS_BUSY);

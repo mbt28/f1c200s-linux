@@ -188,3 +188,20 @@ CONFIG_SND_SUN4I_CODEC=y
 # CONFIG_HID_SUPPORT is not set
 # CONFIG_HID is not set
 # CONFIG_USB_HID is not set
+
+# === TEMPORARY: MUSB DMA bring-up instrumentation (REMOVE before shipping) ===
+# We are debugging why enabling sunxi_dma breaks the host PIO path. The stock
+# image has zero runtime introspection, so add it:
+#  - dynamic_debug: turn on musb_dbg()/dev_dbg() live via
+#      echo 'module musb_hdrc +p' > /sys/kernel/debug/dynamic_debug/control
+CONFIG_DYNAMIC_DEBUG=y
+#  - ftrace trace-events: musb traces EVERY register r/w ->
+#      /sys/kernel/debug/tracing/events/musb/  (the raw CSR sequence)
+CONFIG_FTRACE=y
+CONFIG_ENABLE_DEFAULT_TRACERS=y
+#  - musb debugfs regdump: dump all MUSB regs on demand ->
+#      /sys/kernel/debug/musb-hdrc.1.auto/regdump
+CONFIG_DEBUG_FS=y
+#  - /proc/config.gz to verify the running config on-target
+CONFIG_IKCONFIG=y
+CONFIG_IKCONFIG_PROC=y
