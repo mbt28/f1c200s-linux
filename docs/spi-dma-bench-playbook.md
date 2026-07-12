@@ -126,13 +126,17 @@ NDMA channel n: `0x01C02100 + n*0x20`: CFG `+0x00`, SRC `+0x04`, DST
    NDMA-equivalent 0x05 first), watch whether anything moves. Expected
    outcome: nothing moves and the manual stands.
 
-Considered and rejected — DDMA via the AHB-memory endpoint (SPI FIFO as a
-plain AHB address, no DRQ): the `0x9 AHB Memory` type exists only in the
-DDMA *source* table, so the broken TX direction (write to the FIFO) has no
-endpoint at all; and without a DRQ there is no flow control — the engine
-would overflow the 64-byte FIFO at AHB speed unless paced cycle-exact via
-DDMA_PARA wait-states, which breaks on any SPI clock change. Revisit only
-as an RX-side curiosity if every DRQ-based approach is exhausted.
+DDMA via the AHB-memory endpoint (SPI FIFO as a plain AHB address, no DRQ) —
+**this was earlier rejected on a MISREAD and is being pursued; see
+docs/spi-ddma-ahb-prep.md.** The correction: re-reading §3.6.7.8, `0x9 AHB
+Memory` is a valid DRQ type on BOTH the DDMA source (bits 4:0) AND destination
+(bits 20:16) tables — so the SPI FIFO can be a DDMA destination (TX to
+0x01C06200) as well as a source (RX from 0x01C06300). Both directions are
+feasible. The remaining issue is flow control (no DRQ handshake), a tuning
+problem via the DDMA_PAR block/comity counters + wait-state, not an
+impossibility. NDMA (DRQ 0x05) stays the simpler first choice (hardware flow
+control, clock-independent) — retest it first — with DDMA-over-AHB as the now-
+viable fallback.
 
 ## Instrumentation patch (if step 2 needs more resolution)
 
