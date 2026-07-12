@@ -86,6 +86,11 @@ CONFIG_USB_MUSB_DUAL_ROLE=y
 CONFIG_NOP_USB_XCEIV=y
 CONFIG_USB_PHY=y
 CONFIG_PHY_SUN4I_USB=y
+# MUSB DMA via the SoC dedicated-DMA engine (patches 0016/0017) -- offloads the
+# wired-AA USB bulk copy off the ARM926. DMADEVICES/DMA_SUN4I already =y (SPI DMA).
+# Opt-in: falls back to PIO if the DT dmas aren't wired. Bring-up pending (VEND0
+# BUS_SEL/DRQ_SEL bits need on-hardware verification).
+CONFIG_USB_SUNXI_DMA=y
 
 # USB Ethernet for the SSH/SCP dev loop -- push cedrus.ko over a USB-hub NIC and
 # rmmod/insmod it instead of reflashing. 0fe6:9700 = Davicom DM9601 (full-speed);

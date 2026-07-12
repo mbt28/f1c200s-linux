@@ -1,0 +1,476 @@
+suniv: MUSB DMA via the dedicated-DMA (sun4i-dma) engine
+
+Mainline sunxi MUSB is PIO-only: sunxi_musb_dma_controller_create() is a NULL
+stub, so every USB FIFO access is a CPU copy. On the F1C200s that burns the
+408 MHz ARM926 during wired Android Auto (bulk video IN).
+
+Add a dma_controller backend (drivers/usb/musb/sunxi_dma.c) that moves the USB
+endpoint FIFOs to/from SDRAM with the SoC's dedicated-DMA (DDMA) engine via the
+generic dmaengine slave API, modelled on ux500_dma.c. Per endpoint the VEND0
+register selects the DMA FIFO path (BUS_SEL) and routes the request line
+(DRQ_SEL); EP0 stays PIO. New CONFIG_USB_SUNXI_DMA gates it, and sunxi reuses
+the ux500 CSR-programming quirk. Falls back to PIO if the DT does not wire the
+"rx"/"tx" dmas, so it is a safe opt-in.
+
+BRING-UP: the exact VEND0 BUS_SEL/DRQ_SEL bit positions are marked VERIFY in the
+driver and must be confirmed on hardware (UM 7.7.3 / BSP) before transfers are
+correct. Because there is a single muxed usb_drq this first cut serialises to
+one RX + one TX channel. Compiles and probes; on-hardware bring-up pending.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- /dev/null
++++ b/drivers/usb/musb/sunxi_dma.c
+@@ -0,0 +1,375 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * drivers/usb/musb/sunxi_dma.c
++ *
++ * Allwinner suniv/sun4i MUSB DMA support, using the SoC's dedicated-DMA
++ * engine (sun4i-dma / DDMA) via the generic dmaengine slave API.
++ *
++ * The Allwinner USB-OTG FIFOs for TX EP1-3 / RX EP1-3 can be moved to/from
++ * SDRAM by the dedicated DMA engine instead of the CPU (PIO).  Selection is
++ * per endpoint via the VEND0 register (a.k.a. USB_EFR in the F1C200s UM
++ * 7.7.3): BUS_SEL switches the FIFO port from CPU/IO access to the DMA
++ * engine, and DRQ_SEL[2:0] routes that endpoint's request onto the single
++ * usb_drq line the DDMA sees.  EP0 is always PIO.
++ *
++ * Modelled on ux500_dma.c (also an external-dmaengine MUSB DMA backend).
++ *
++ * BRING-UP NOTE (P1/P2): the exact BUS_SEL/DRQ_SEL bit positions inside VEND0
++ * are marked "VERIFY" below and MUST be confirmed against the F1C200s User
++ * Manual 7.7.3 / Allwinner BSP on hardware before transfers will be correct.
++ * Because there is a single muxed usb_drq, this first cut serialises to one
++ * RX + one TX channel; concurrent bidirectional DMA is a bring-up item.
++ */
++
++#include <linux/device.h>
++#include <linux/interrupt.h>
++#include <linux/platform_device.h>
++#include <linux/dma-mapping.h>
++#include <linux/dmaengine.h>
++#include <linux/pfn.h>
++#include <linux/sizes.h>
++#include "musb_core.h"
++
++/*
++ * VEND0 / USB_EFR (offset 0x43 in the sunxi MUSB register window).
++ * Mainline sunxi.c forces PIO by writing SUNXI_MUSB_VEND0_PIO_MODE (0).
++ */
++#define SUNXI_MUSB_VEND0		0x0043
++#define SUNXI_MUSB_VEND0_PIO_MODE	0x00
++/* VERIFY against UM 7.7.3 / BSP: BUS_SEL enables the dedicated-DMA FIFO path */
++#define SUNXI_MUSB_VEND0_BUS_SEL	BIT(3)
++#define SUNXI_MUSB_VEND0_DRQ_SEL_MASK	0x07
++
++/* Only EP1-3 (TX and RX) have a DMA request line; EP0 is PIO-only. */
++#define SUNXI_MUSB_DMA_MAX_EP		3
++
++/*
++ * UM 7.7.3.1 "DMA Request Line Select": DMA_REQ[0..2] = TX EP1-3,
++ * DMA_REQ[4..6] = RX EP1-3.  Returns the DRQ_SEL value for an endpoint.
++ */
++static inline u8 sunxi_dma_drq_sel(u8 epnum, bool is_tx)
++{
++	return is_tx ? (epnum - 1) : (epnum + 3);
++}
++
++struct sunxi_dma_channel {
++	struct dma_channel	channel;
++	struct sunxi_dma_controller *controller;
++	struct musb_hw_ep	*hw_ep;
++	struct dma_chan		*dma_chan;
++	unsigned int		cur_len;
++	dma_cookie_t		cookie;
++	u8			is_tx;
++	u8			is_allocated;
++};
++
++struct sunxi_dma_controller {
++	struct dma_controller	controller;
++	/* single muxed usb_drq -> one RX + one TX channel for now */
++	struct sunxi_dma_channel rx_channel;
++	struct sunxi_dma_channel tx_channel;
++	struct musb		*musb;
++	dma_addr_t		phy_base;
++};
++
++/* Program VEND0 to route @epnum's FIFO to the dedicated DMA engine (or back). */
++static void sunxi_dma_set_ep_mode(struct sunxi_dma_controller *controller,
++				  u8 epnum, bool is_tx, bool enable)
++{
++	struct musb *musb = controller->musb;
++	u8 val;
++
++	if (enable)
++		val = SUNXI_MUSB_VEND0_BUS_SEL |
++		      (sunxi_dma_drq_sel(epnum, is_tx) &
++		       SUNXI_MUSB_VEND0_DRQ_SEL_MASK);
++	else
++		val = SUNXI_MUSB_VEND0_PIO_MODE;
++
++	writeb(val, musb->mregs + SUNXI_MUSB_VEND0);
++}
++
++/* DMA completion callback: hand the transfer back to the MUSB core. */
++static void sunxi_dma_callback(void *private_data)
++{
++	struct dma_channel *channel = private_data;
++	struct sunxi_dma_channel *sunxi_channel = channel->private_data;
++	struct musb_hw_ep *hw_ep = sunxi_channel->hw_ep;
++	struct musb *musb = hw_ep->musb;
++	unsigned long flags;
++
++	dev_dbg(musb->controller, "DMA %s done on hw_ep=%d\n",
++		sunxi_channel->is_tx ? "tx" : "rx", hw_ep->epnum);
++
++	spin_lock_irqsave(&musb->lock, flags);
++
++	/* Restore PIO FIFO access for this endpoint. */
++	sunxi_dma_set_ep_mode(sunxi_channel->controller, hw_ep->epnum,
++			      sunxi_channel->is_tx, false);
++
++	channel->actual_len = sunxi_channel->cur_len;
++	channel->status = MUSB_DMA_STATUS_FREE;
++	musb_dma_completion(musb, hw_ep->epnum, sunxi_channel->is_tx);
++
++	spin_unlock_irqrestore(&musb->lock, flags);
++}
++
++static bool sunxi_dma_configure_channel(struct dma_channel *channel,
++					u16 packet_sz, u8 mode,
++					dma_addr_t dma_addr, u32 len)
++{
++	struct sunxi_dma_channel *sunxi_channel = channel->private_data;
++	struct sunxi_dma_controller *controller = sunxi_channel->controller;
++	struct musb_hw_ep *hw_ep = sunxi_channel->hw_ep;
++	struct dma_chan *dma_chan = sunxi_channel->dma_chan;
++	struct musb *musb = controller->musb;
++	struct dma_async_tx_descriptor *dma_desc;
++	enum dma_transfer_direction direction;
++	struct scatterlist sg;
++	struct dma_slave_config slave_conf;
++	enum dma_slave_buswidth addr_width;
++	dma_addr_t usb_fifo_addr;
++
++	/* Allwinner USB EP FIFO ports live at (epnum * 4) from the USB base. */
++	usb_fifo_addr = controller->phy_base +
++			musb->io.fifo_offset(hw_ep->epnum);
++
++	dev_dbg(musb->controller,
++		"packet_sz=%d, mode=%d, dma_addr=%pad, len=%d is_tx=%d ep=%d\n",
++		packet_sz, mode, &dma_addr, len, sunxi_channel->is_tx,
++		hw_ep->epnum);
++
++	sunxi_channel->cur_len = len;
++
++	sg_init_table(&sg, 1);
++	sg_set_page(&sg, pfn_to_page(PFN_DOWN(dma_addr)), len,
++		    offset_in_page(dma_addr));
++	sg_dma_address(&sg) = dma_addr;
++	sg_dma_len(&sg) = len;
++
++	direction = sunxi_channel->is_tx ? DMA_MEM_TO_DEV : DMA_DEV_TO_MEM;
++	addr_width = (len & 0x3) ? DMA_SLAVE_BUSWIDTH_1_BYTE :
++				   DMA_SLAVE_BUSWIDTH_4_BYTES;
++
++	memset(&slave_conf, 0, sizeof(slave_conf));
++	slave_conf.direction = direction;
++	slave_conf.src_addr = usb_fifo_addr;
++	slave_conf.src_addr_width = addr_width;
++	slave_conf.src_maxburst = 16;
++	slave_conf.dst_addr = usb_fifo_addr;
++	slave_conf.dst_addr_width = addr_width;
++	slave_conf.dst_maxburst = 16;
++	slave_conf.device_fc = false;
++
++	dmaengine_slave_config(dma_chan, &slave_conf);
++
++	dma_desc = dmaengine_prep_slave_sg(dma_chan, &sg, 1, direction,
++					   DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
++	if (!dma_desc)
++		return false;
++
++	dma_desc->callback = sunxi_dma_callback;
++	dma_desc->callback_param = channel;
++
++	/* Route this endpoint's FIFO to the DMA engine, then kick it off. */
++	sunxi_dma_set_ep_mode(controller, hw_ep->epnum,
++			      sunxi_channel->is_tx, true);
++
++	sunxi_channel->cookie = dmaengine_submit(dma_desc);
++	dma_async_issue_pending(dma_chan);
++
++	return true;
++}
++
++static struct dma_channel *sunxi_dma_channel_allocate(struct dma_controller *c,
++					struct musb_hw_ep *hw_ep, u8 is_tx)
++{
++	struct sunxi_dma_controller *controller =
++		container_of(c, struct sunxi_dma_controller, controller);
++	struct sunxi_dma_channel *sunxi_channel;
++	struct musb *musb = controller->musb;
++
++	/* EP0 and EP>3 have no DMA request line -> stay on PIO. */
++	if (hw_ep->epnum < 1 || hw_ep->epnum > SUNXI_MUSB_DMA_MAX_EP)
++		return NULL;
++
++	sunxi_channel = is_tx ? &controller->tx_channel :
++				&controller->rx_channel;
++
++	/* single muxed usb_drq: one channel per direction at a time */
++	if (sunxi_channel->is_allocated)
++		return NULL;
++
++	sunxi_channel->hw_ep = hw_ep;
++	sunxi_channel->is_allocated = 1;
++
++	dev_dbg(musb->controller, "hw_ep=%d, is_tx=%d\n", hw_ep->epnum, is_tx);
++
++	return &sunxi_channel->channel;
++}
++
++static void sunxi_dma_channel_release(struct dma_channel *channel)
++{
++	struct sunxi_dma_channel *sunxi_channel = channel->private_data;
++
++	if (sunxi_channel->is_allocated) {
++		sunxi_channel->is_allocated = 0;
++		channel->status = MUSB_DMA_STATUS_FREE;
++		channel->actual_len = 0;
++	}
++}
++
++static int sunxi_dma_is_compatible(struct dma_channel *channel,
++				   u16 maxpacket, void *buf, u32 length)
++{
++	/* sun4i-dma needs word-aligned addr/len; DMA only pays off >= 512B. */
++	if ((maxpacket & 0x3) ||
++	    ((unsigned long)buf & 0x3) ||
++	    (length < 512) ||
++	    (length & 0x3))
++		return false;
++	return true;
++}
++
++static int sunxi_dma_channel_program(struct dma_channel *channel,
++				     u16 packet_sz, u8 mode,
++				     dma_addr_t dma_addr, u32 len)
++{
++	int ret;
++
++	BUG_ON(channel->status == MUSB_DMA_STATUS_UNKNOWN ||
++	       channel->status == MUSB_DMA_STATUS_BUSY);
++
++	channel->status = MUSB_DMA_STATUS_BUSY;
++	channel->actual_len = 0;
++	ret = sunxi_dma_configure_channel(channel, packet_sz, mode,
++					  dma_addr, len);
++	if (!ret)
++		channel->status = MUSB_DMA_STATUS_FREE;
++
++	return ret;
++}
++
++static int sunxi_dma_channel_abort(struct dma_channel *channel)
++{
++	struct sunxi_dma_channel *sunxi_channel = channel->private_data;
++	struct sunxi_dma_controller *controller = sunxi_channel->controller;
++	struct musb *musb = controller->musb;
++	void __iomem *epio = musb->endpoints[sunxi_channel->hw_ep->epnum].regs;
++	u16 csr;
++
++	dev_dbg(musb->controller, "abort ep=%d is_tx=%d\n",
++		sunxi_channel->hw_ep->epnum, sunxi_channel->is_tx);
++
++	if (channel->status == MUSB_DMA_STATUS_BUSY) {
++		if (sunxi_channel->is_tx) {
++			csr = musb_readw(epio, MUSB_TXCSR);
++			csr &= ~(MUSB_TXCSR_AUTOSET |
++				 MUSB_TXCSR_DMAENAB |
++				 MUSB_TXCSR_DMAMODE);
++			musb_writew(epio, MUSB_TXCSR, csr);
++		} else {
++			csr = musb_readw(epio, MUSB_RXCSR);
++			csr &= ~(MUSB_RXCSR_AUTOCLEAR |
++				 MUSB_RXCSR_DMAENAB |
++				 MUSB_RXCSR_DMAMODE);
++			musb_writew(epio, MUSB_RXCSR, csr);
++		}
++
++		dmaengine_terminate_all(sunxi_channel->dma_chan);
++		sunxi_dma_set_ep_mode(controller, sunxi_channel->hw_ep->epnum,
++				      sunxi_channel->is_tx, false);
++		channel->status = MUSB_DMA_STATUS_FREE;
++	}
++	return 0;
++}
++
++static void sunxi_dma_controller_stop(struct sunxi_dma_controller *controller)
++{
++	if (controller->rx_channel.dma_chan) {
++		dma_release_channel(controller->rx_channel.dma_chan);
++		controller->rx_channel.dma_chan = NULL;
++	}
++	if (controller->tx_channel.dma_chan) {
++		dma_release_channel(controller->tx_channel.dma_chan);
++		controller->tx_channel.dma_chan = NULL;
++	}
++}
++
++static int sunxi_dma_channel_init(struct sunxi_dma_controller *controller,
++				  struct sunxi_dma_channel *sunxi_channel,
++				  const char *name, u8 is_tx)
++{
++	struct musb *musb = controller->musb;
++	struct dma_channel *channel = &sunxi_channel->channel;
++
++	sunxi_channel->controller = controller;
++	sunxi_channel->is_tx = is_tx;
++	sunxi_channel->is_allocated = 0;
++
++	channel->private_data = sunxi_channel;
++	channel->status = MUSB_DMA_STATUS_FREE;
++	channel->max_len = SZ_16M;
++
++	sunxi_channel->dma_chan = dma_request_chan(musb->controller, name);
++	if (IS_ERR(sunxi_channel->dma_chan)) {
++		int ret = PTR_ERR(sunxi_channel->dma_chan);
++
++		sunxi_channel->dma_chan = NULL;
++		dev_err(musb->controller,
++			"failed to request DMA channel \"%s\": %d\n", name, ret);
++		return ret;
++	}
++	return 0;
++}
++
++void sunxi_dma_controller_destroy(struct dma_controller *c)
++{
++	struct sunxi_dma_controller *controller =
++		container_of(c, struct sunxi_dma_controller, controller);
++
++	sunxi_dma_controller_stop(controller);
++	kfree(controller);
++}
++
++struct dma_controller *
++sunxi_dma_controller_create(struct musb *musb, void __iomem *base)
++{
++	struct sunxi_dma_controller *controller;
++	struct platform_device *pdev = to_platform_device(musb->controller);
++	struct resource *iomem;
++
++	controller = kzalloc(sizeof(*controller), GFP_KERNEL);
++	if (!controller)
++		return NULL;
++
++	controller->musb = musb;
++
++	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!iomem) {
++		dev_err(musb->controller, "no memory resource defined\n");
++		goto err;
++	}
++	controller->phy_base = (dma_addr_t)iomem->start;
++
++	controller->controller.channel_alloc = sunxi_dma_channel_allocate;
++	controller->controller.channel_release = sunxi_dma_channel_release;
++	controller->controller.channel_program = sunxi_dma_channel_program;
++	controller->controller.channel_abort = sunxi_dma_channel_abort;
++	controller->controller.is_compatible = sunxi_dma_is_compatible;
++
++	if (sunxi_dma_channel_init(controller, &controller->rx_channel,
++				   "rx", 0))
++		goto err;
++	if (sunxi_dma_channel_init(controller, &controller->tx_channel,
++				   "tx", 1))
++		goto err_stop;
++
++	return &controller->controller;
++
++err_stop:
++	sunxi_dma_controller_stop(controller);
++err:
++	kfree(controller);
++	return NULL;
++}
+--- a/drivers/usb/musb/Kconfig
++++ b/drivers/usb/musb/Kconfig
+@@ -143,6 +143,15 @@
+ 	help
+ 	  Enable DMA transfers on UX500 platforms.
+ 
++config USB_SUNXI_DMA
++	bool 'Allwinner sunxi'
++	depends on USB_MUSB_SUNXI && DMADEVICES
++	help
++	  Enable DMA transfers for the Allwinner sunxi/suniv MUSB glue using
++	  the SoC's dedicated-DMA engine (sun4i-dma) to move the USB endpoint
++	  FIFOs to/from SDRAM, offloading the CPU (PIO) copy.  Falls back to
++	  PIO automatically if the DT does not wire the "rx"/"tx" dmas.
++
+ config USB_INVENTRA_DMA
+ 	bool 'Inventra'
+ 	depends on USB_MUSB_OMAP2PLUS || USB_MUSB_MEDIATEK || USB_MUSB_JZ4740 || USB_MUSB_POLARFIRE_SOC
+--- a/drivers/usb/musb/Makefile
++++ b/drivers/usb/musb/Makefile
+@@ -33,4 +33,5 @@
+ musb_hdrc-$(CONFIG_USB_INVENTRA_DMA)		+= musbhsdma.o
+ musb_hdrc-$(CONFIG_USB_TUSB_OMAP_DMA)		+= tusb6010_omap.o
+ musb_hdrc-$(CONFIG_USB_UX500_DMA)		+= ux500_dma.o
++musb_hdrc-$(CONFIG_USB_SUNXI_DMA)		+= sunxi_dma.o
+ musb_hdrc-$(CONFIG_USB_TI_CPPI41_DMA)		+= musb_cppi41.o
+--- a/drivers/usb/musb/sunxi.c
++++ b/drivers/usb/musb/sunxi.c
+@@ -316,6 +316,29 @@
+ 	clear_bit(SUNXI_MUSB_FL_ENABLED, &glue->flags);
+ }
+ 
++#ifdef CONFIG_USB_SUNXI_DMA
++/* Provided by sunxi_dma.c (dedicated-DMA / sun4i-dma backend). */
++extern struct dma_controller *
++sunxi_dma_controller_create(struct musb *musb, void __iomem *base);
++extern void sunxi_dma_controller_destroy(struct dma_controller *c);
++
++static struct dma_controller *
++sunxi_musb_dma_controller_create(struct musb *musb, void __iomem *base)
++{
++	return sunxi_dma_controller_create(musb, base);
++}
++
++static void sunxi_musb_dma_controller_destroy(struct dma_controller *c)
++{
++	sunxi_dma_controller_destroy(c);
++}
++
++/*
++ * sunxi drives the CSRs like the other external-dmaengine backend (ux500),
++ * so reuse its quirk to get the correct host/gadget DMA-mode programming.
++ */
++#define SUNXI_MUSB_DMA_QUIRK	MUSB_DMA_UX500
++#else
+ static struct dma_controller *
+ sunxi_musb_dma_controller_create(struct musb *musb, void __iomem *base)
+ {
+@@ -326,6 +349,9 @@
+ {
+ }
+ 
++#define SUNXI_MUSB_DMA_QUIRK	0
++#endif
++
+ static int sunxi_musb_set_mode(struct musb *musb, u8 mode)
+ {
+ 	struct sunxi_glue *glue = dev_get_drvdata(musb->controller->parent);
+@@ -605,7 +631,7 @@
+ }
+ 
+ static const struct musb_platform_ops sunxi_musb_ops = {
+-	.quirks		= MUSB_INDEXED_EP,
++	.quirks		= MUSB_INDEXED_EP | SUNXI_MUSB_DMA_QUIRK,
+ 	.init		= sunxi_musb_init,
+ 	.exit		= sunxi_musb_exit,
+ 	.enable		= sunxi_musb_enable,

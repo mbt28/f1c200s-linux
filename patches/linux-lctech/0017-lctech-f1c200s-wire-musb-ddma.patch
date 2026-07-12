@@ -1,0 +1,24 @@
+lctech f1c200s: wire the MUSB (usb_otg) node to the dedicated-DMA engine
+
+Add dmas/dma-names to usb@1c13000 so sunxi_dma.c (CONFIG_USB_SUNXI_DMA) can
+request the DDMA USB DRQ (SUN4I_DMA_DEDICATED 4) for the RX and TX endpoint
+FIFO paths. This is the DDMA bank (channels distinct from esp-hosted's SPI
+NDMA), so USB and SPI DMA do not share channels.
+
+Depends on patch 0014 (adds the &dma controller node + the sun4i-a10.h
+dt-binding include).
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi
+@@ -145,6 +145,9 @@
+ 			phy-names = "usb";
+ 			extcon = <&usbphy 0>;
+ 			allwinner,sram = <&otg_sram 1>;
++			dmas = <&dma SUN4I_DMA_DEDICATED 4>,
++			       <&dma SUN4I_DMA_DEDICATED 4>;
++			dma-names = "rx", "tx";
+ 			status = "disabled";
+ 		};
+ 
