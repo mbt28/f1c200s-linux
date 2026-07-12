@@ -10,7 +10,8 @@ Status of the DMA work so far: NDMA (DRQ 0x05) was wired (patch 0014) but
 `cmd_init_interface` timed out; DMA parked, PIO shipped (patch 0016). That NDMA
 failure predates the esp-hosted worker-race fix (patch 0002) and was very likely
 the same race hit harder — so **step 0 is still: retest NDMA on a patch-0002
-kernel** before committing to DDMA. DDMA-over-AHB is the path if NDMA still fails
+kernel** before committing to DDMA (full plan: `docs/spi-ndma-roadmap.md`).
+DDMA-over-AHB is the path if NDMA still fails
 (or if we want DDMA ch4's deeper 8×64 FIFO for throughput).
 
 ## Correction to the earlier "rejected" analysis
