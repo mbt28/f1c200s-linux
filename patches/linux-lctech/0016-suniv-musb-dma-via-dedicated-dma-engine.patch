@@ -23,7 +23,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,385 @@
+@@ -0,0 +1,396 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -272,6 +272,17 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +				     dma_addr_t dma_addr, u32 len)
 +{
 +	int ret;
++
++	/*
++	 * MUSB *host* mode never calls is_compatible() (only gadget mode does),
++	 * so gate here or the core will hand us every transfer -- including the
++	 * short AA control writes.  A tiny DMA on the USB DRQ never completes and
++	 * stalls the endpoint (LIBUSB_ERROR_TIMEOUT).  Returning 0 makes
++	 * musb_{tx,rx}_dma_program() cleanly fall back to PIO; only word-aligned
++	 * transfers >= 512 bytes (the bulk video path) go to DMA.
++	 */
++	if (len < 512 || (len & 0x3) || (dma_addr & 0x3) || (packet_sz & 0x3))
++		return 0;
 +
 +	BUG_ON(channel->status == MUSB_DMA_STATUS_UNKNOWN ||
 +	       channel->status == MUSB_DMA_STATUS_BUSY);
