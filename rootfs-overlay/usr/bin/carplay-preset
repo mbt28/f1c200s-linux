@@ -1,0 +1,34 @@
+#!/bin/sh
+# carplay-preset [name] -- show or set the FastCarPlay settings preset.
+# Selects /etc/fastcarplay/settings_<name>.txt, used by the app autostart
+# (S99carplay). A *wireless* preset (e.g. cedrus_wireless) also autostarts the
+# WiFi+BT radios (S45aa-stack); a wired one does not. Default: cedrus_wireless.
+#   carplay-preset                 show current + available presets
+#   carplay-preset cedrus_wireless set the preset (wireless AA -- the default)
+#   carplay-preset cedrus          set a wired preset (no radios)
+D=/etc/fastcarplay
+case "$1" in
+""|status|list)
+	cur="$(cat /etc/carplay-preset 2>/dev/null)"
+	echo "current preset: ${cur:-cedrus_wireless (default)}"
+	echo "available:"
+	for f in "$D"/settings_*.txt; do
+		[ -f "$f" ] || continue
+		n=${f##*/settings_}; n=${n%.txt}
+		[ "$n" = "$cur" ] && echo "  $n  <= active" || echo "  $n"
+	done
+	;;
+*)
+	if [ ! -f "$D/settings_$1.txt" ]; then
+		echo "no such preset: $D/settings_$1.txt"
+		echo "run 'carplay-preset' to list available presets"
+		exit 1
+	fi
+	printf '%s\n' "$1" > /etc/carplay-preset
+	echo "preset set to '$1' ($D/settings_$1.txt) -- effective from next boot (or restart the app)"
+	case "$1" in
+	*wireless*) echo "  wireless mode: WiFi+BT radios autostart at boot (S45aa-stack)" ;;
+	*)          echo "  wired mode: WiFi+BT radios do NOT autostart" ;;
+	esac
+	;;
+esac

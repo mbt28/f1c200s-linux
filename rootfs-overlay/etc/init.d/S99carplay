@@ -13,8 +13,10 @@
 case "$1" in
 start)
 	[ -f /etc/carplay-autostart ] || exit 0
+	# Preset from /etc/carplay-preset (set by `carplay-preset`); default is
+	# cedrus_wireless (wireless Android Auto), then settings.txt as a last resort.
 	name="$(cat /etc/carplay-preset 2>/dev/null)"
-	[ -n "$name" ] || name="$(tr -dc a-z < /etc/ve-driver 2>/dev/null)"
+	[ -n "$name" ] || name=cedrus_wireless
 	preset="/etc/fastcarplay/settings_${name}.txt"
 	[ -f "$preset" ] || preset=/etc/fastcarplay/settings.txt
 	echo "carplay: autostarting ($preset)"
