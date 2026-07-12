@@ -1,5 +1,14 @@
 # SPI NDMA implementation roadmap (suniv F1C200s, esp-hosted SPI1)
 
+> **STATUS 2026-07-12 — DONE. All gates P0–P5 passed on hardware.** NDMA is the
+> shipping path: patch 0016 dropped, spi1 re-wired to NDMA drq 5. Wireless AA
+> runs end-to-end with H.264 video over NDMA (~25 fps 800×480); SPI-controller
+> IRQs collapsed to ~1/transfer (from ~25 FIFO IRQs/frame under PIO); zero
+> command-path errors under live BT+WiFi+AA load. The historic
+> `cmd_init_interface` timeout was the esp-hosted worker race (patch 0002),
+> never a DMA bug. `docs/spi-ddma-ahb-prep.md` (DDMA-over-AHB) is retained as a
+> documented fallback only. The phase gates below are the validation record.
+
 **Goal:** move esp-hosted SPI1 traffic from PIO to **NDMA** (Normal DMA, DRQ
 0x05 = SPI1 Tx/Rx) so the WiFi SPI command path stops timing out under
 concurrent BT+WiFi+AA load — the AP-assoc-under-load blocker

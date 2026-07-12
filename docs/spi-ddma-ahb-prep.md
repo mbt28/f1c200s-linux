@@ -1,5 +1,12 @@
 # SPI DDMA over AHB — preparation & design (suniv F1C200s)
 
+> **SUPERSEDED 2026-07-12 — NDMA won; this is a fallback record only.** NDMA
+> (DRQ 0x05, hardware flow control) was un-parked and hardware-validated
+> end-to-end — wireless AA streams video over NDMA with zero SPI command-path
+> errors (see `docs/spi-ndma-roadmap.md`, all gates passed). DDMA-over-AHB is
+> **not needed**; do not implement it unless NDMA regresses. Everything below is
+> the still-valid design should that fallback ever be required.
+
 Goal: offload the esp-hosted SPI1 traffic from PIO to DMA so the WiFi command
 path (`CMD_SET_IE`, `CMD_MGMT_TX`) no longer times out under concurrent BT+WiFi
 load (the AP-assoc-under-load blocker, see docs/esp-hosted-ap-assoc-blocker /
