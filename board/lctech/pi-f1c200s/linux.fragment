@@ -120,6 +120,14 @@ CONFIG_USB_RTL8152=y
 CONFIG_USB_ETH=m
 CONFIG_USB_ETH_RNDIS=y
 
+# USB mass storage — for the phone-free MUSB RX-DMA collision reproducer:
+# `dd if=/dev/sda bs=64k` (large 4-aligned bulk-IN) drives the RX-DMA path
+# (IRQ 17 climbs), hammered by concurrent ep0 control transfers (TX-PIO) →
+# corruption we can md5-detect. SCSI core is already =y; add usb-storage + the
+# SCSI disk (sd_mod). See docs/musb-datapath-serialization-roadmap.md.
+CONFIG_USB_STORAGE=y
+CONFIG_BLK_DEV_SD=y
+
 # Cedar VE + ION (BSP path for the libcedarc blob) -- the colour-correct decoder,
 # kept alongside cedrus while the cedrus chroma bug is open. Both are MODULES; an
 # init script (S29ve-select) loads cedar OR cedrus at boot per /etc/ve-driver.
