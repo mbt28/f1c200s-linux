@@ -1,0 +1,13 @@
+config BR2_PACKAGE_MUSB_COLLISION_TEST
+	bool "musb-collision-test"
+	depends on BR2_PACKAGE_LIBUSB
+	help
+	  Deterministic reproducer for the suniv MUSB shared-FIFO datapath
+	  collision (RX-DMA vs TX-PIO). Runs on the board (USB host) against a
+	  Linux g_zero (sourcesink) gadget peer: concurrent large-aligned
+	  bulk-IN (RX-DMA) + small bulk-OUT (TX-PIO), byte-checking the IN
+	  buffer against a clean reference. A mismatch = the collision
+	  corrupting the in-flight RX. See docs/musb-datapath-serialization-roadmap.md.
+
+comment "musb-collision-test needs libusb"
+	depends on !BR2_PACKAGE_LIBUSB

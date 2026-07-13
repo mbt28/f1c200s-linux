@@ -124,3 +124,8 @@ BR2_PACKAGE_DNSMASQ=y
 # `iperf3 --bidir` drives concurrent bulk RX-DMA + TX across the shared BUS_SEL
 # datapath (the kernel's documented tx-fifo-flush repro) with no phone needed.
 BR2_PACKAGE_IPERF3=y
+
+# musb-collision-test: deterministic RX-DMA-vs-TX-PIO collision reproducer,
+# run on the board (host) against a g_zero gadget peer. Phase 0/1 of
+# docs/musb-datapath-serialization-roadmap.md.
+BR2_PACKAGE_MUSB_COLLISION_TEST=y
