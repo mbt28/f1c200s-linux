@@ -12,12 +12,17 @@ and DMA via a global VEND0 BUS_SEL bit:
    falls through to PIO, mirroring the TX fallback.
 
 2) musb_cleanup_urb(): on usb_kill_urb of a TX urb, musb_h_tx_flush_fifo() runs
-   under musb->lock (IRQs off). If the RX video DMA left BUS_SEL=1 the TX FIFO is
-   in DMA mode and FLUSHFIFO never empties it -> a 1s spin + "Could not flush host
-   TX fifo" warning whose backtrace stalls the console and trips RT throttling
-   (killing the AA read thread). Return the FIFO to PIO (VEND0=0) before the
-   flush; the lock guarantees no DMA re-arms in between. Gated on
-   CONFIG_USB_SUNXI_DMA so only suniv builds touch reg 0x43.
+   under musb->lock (IRQs off) and, when it cannot drain the FIFO, spins up to 1s
+   (1000 x mdelay(1)) before dev_WARN_ONCE. On this 1663-class IC the CPU cannot
+   touch the FIFO while the shared dedicated-DMA datapath is busy, so when the RX
+   *video* DMA owns BUS_SEL a PIO TX cancel can never flush -> a 1s IRQs-off stall
+   that starves the realtime AA read thread. Do NOT force the datapath back to PIO
+   in that case: clearing BUS_SEL / aborting the RX channel corrupts the in-flight
+   video (ep2 RX three-strikes -> disconnect -> re-enumeration storm). Instead
+   flush normally when this TX ep owned DMA (already aborted above) or the datapath
+   is idle, and skip the flush -- leaving the stale FIFO to be discarded on the next
+   ep program, the app re-sends the OUT xfer -- when the RX DMA owns BUS_SEL. Gated
+   on CONFIG_USB_SUNXI_DMA so only suniv builds touch reg 0x43.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
@@ -40,37 +45,50 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  		}
  
  		if (!dma) {
-@@ -2339,6 +2345,33 @@
+@@ -2339,7 +2345,46 @@
  		if (is_dma_capable() && dma)
  			musb_platform_clear_ep_rxintr(musb, ep->epnum);
  	} else if (ep->epnum) {
 +#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
 +		/*
-+		 * suniv MUSB shares one FIFO datapath and one dedicated-DMA
-+		 * channel between the TX and RX directions, gated by a global
-+		 * VEND0 BUS_SEL bit (reg 0x43). When libusb cancels a TX urb
-+		 * (the AA control-write retry does this on every BUS_SEL
-+		 * collision), the RX *video* DMA is usually still in flight:
-+		 * merely clearing BUS_SEL is not enough because the sun4i-dma
-+		 * engine keeps driving the FIFO, so FLUSHFIFO can never empty
-+		 * the TX FIFO and musb_h_tx_flush_fifo() spins 1s and warns
-+		 * ("Could not flush host TX fifo: csr 2003").
++		 * suniv MUSB shares ONE FIFO datapath and one dedicated-DMA
++		 * channel between the TX and RX directions, gated by the global
++		 * VEND0 BUS_SEL bit (reg 0x43). The CPU cannot touch the FIFO
++		 * while DMA owns the datapath, so on a TX-urb cancel FLUSHFIFO
++		 * may never clear FIFONOTEMPTY and musb_h_tx_flush_fifo() then
++		 * spins up to 1s with IRQs off (starving the realtime AA thread)
++		 * before it dev_WARN_ONCEs "Could not flush host TX fifo".
 +		 *
-+		 * Stop the RX DMA engine (channel_abort also returns VEND0 to
-+		 * PIO), then clear the TXCSR DMA-mode bits, before the flush.
-+		 * We hold musb->lock (IRQs off) so nothing re-arms in between;
-+		 * the RX urb is re-driven by the core, and wired-AA tolerates
-+		 * the retransmit (validated: sustained 30fps under the app-side
-+		 * write retry).
++		 * Three cases:
++		 *  - This TX ep itself drove DMA (`dma` set above, already
++		 *    aborted): it owned the datapath, so return VEND0 to PIO and
++		 *    the flush is safe.
++		 *  - The datapath is idle (BUS_SEL clear): a normal PIO flush is
++		 *    safe.
++		 *  - Otherwise the RX *video* DMA is mid-flight and owns BUS_SEL
++		 *    while this is a small PIO control/bulk-OUT write. We must
++		 *    NOT clear BUS_SEL or abort the RX channel -- that corrupts
++		 *    the in-flight video (ep2 RX three-strikes -> disconnect ->
++		 *    re-enumeration storm). Skip the flush: the stale TX FIFO is
++		 *    discarded when the endpoint is next programmed and the app
++		 *    re-sends the cancelled OUT transfer.
 +		 */
-+		if (is_dma_capable() && ep->rx_channel &&
-+		    ep->musb->dma_controller)
-+			ep->musb->dma_controller->channel_abort(ep->rx_channel);
-+		writeb(0, musb->mregs + 0x43);
-+		csr = musb_readw(epio, MUSB_TXCSR);
-+		csr &= ~(MUSB_TXCSR_DMAENAB | MUSB_TXCSR_DMAMODE);
-+		musb_writew(epio, MUSB_TXCSR, csr);
-+#endif
++		if (is_dma_capable() && dma) {
++			writeb(0, musb->mregs + 0x43);
++			csr = musb_readw(epio, MUSB_TXCSR);
++			csr &= ~(MUSB_TXCSR_DMAENAB | MUSB_TXCSR_DMAMODE);
++			musb_writew(epio, MUSB_TXCSR, csr);
++			musb_h_tx_flush_fifo(ep);
++		} else if (!(readb(musb->mregs + 0x43) & 1)) {
++			musb_h_tx_flush_fifo(ep);
++		} else {
++			dev_dbg(musb->controller,
++				"ep%d TX cancel while RX DMA owns BUS_SEL: skip flush\n",
++				ep->epnum);
++		}
++#else
  		musb_h_tx_flush_fifo(ep);
++#endif
  		csr = musb_readw(epio, MUSB_TXCSR);
  		csr &= ~(MUSB_TXCSR_AUTOSET
+ 			| MUSB_TXCSR_DMAENAB
