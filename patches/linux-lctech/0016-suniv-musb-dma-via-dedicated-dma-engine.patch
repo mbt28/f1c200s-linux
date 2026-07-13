@@ -23,7 +23,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,424 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -121,7 +121,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +		val = SUNXI_MUSB_VEND0_PIO_MODE;
 +
 +	writeb(val, musb->mregs + SUNXI_MUSB_VEND0);
-+	dev_info(musb->controller, "VEND0=0x%02x ep=%d %s %s\n", val, epnum,
++	dev_dbg(musb->controller, "VEND0=0x%02x ep=%d %s %s\n", val, epnum,
 +		 is_tx ? "tx" : "rx", enable ? "DMA" : "PIO");
 +}
 +
@@ -134,7 +134,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	struct musb *musb = hw_ep->musb;
 +	unsigned long flags;
 +
-+	dev_info(musb->controller, "DMA %s done ep%d actual_len=%u\n",
++	dev_dbg(musb->controller, "DMA %s done ep%d actual_len=%u\n",
 +		 sunxi_channel->is_tx ? "tx" : "rx", hw_ep->epnum,
 +		 sunxi_channel->cur_len);
 +
@@ -209,7 +209,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	dma_desc = dmaengine_prep_slave_sg(dma_chan, &sg, 1, direction,
 +					   DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 +	if (!dma_desc) {
-+		dev_info(musb->controller, "prep_slave_sg failed ep%d %s len=%u\n",
++		dev_dbg(musb->controller, "prep_slave_sg failed ep%d %s len=%u\n",
 +			 hw_ep->epnum, sunxi_channel->is_tx ? "tx" : "rx", len);
 +		return false;
 +	}
@@ -294,11 +294,11 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	 * transfers >= 512 bytes (the bulk video path) go to DMA.
 +	 */
 +	if (len < 512 || (len & 0x3) || (dma_addr & 0x3) || (packet_sz & 0x3)) {
-+		dev_info(musb->controller, "prog ep%d %s len=%u pkt=%u -> PIO(reject)\n",
++		dev_dbg(musb->controller, "prog ep%d %s len=%u pkt=%u -> PIO(reject)\n",
 +			 sc->hw_ep->epnum, sc->is_tx ? "tx" : "rx", len, packet_sz);
 +		return 0;
 +	}
-+	dev_info(musb->controller, "prog ep%d %s len=%u pkt=%u mode=%u -> DMA\n",
++	dev_dbg(musb->controller, "prog ep%d %s len=%u pkt=%u mode=%u -> DMA\n",
 +		 sc->hw_ep->epnum, sc->is_tx ? "tx" : "rx", len, packet_sz, mode);
 +
 +	BUG_ON(channel->status == MUSB_DMA_STATUS_UNKNOWN ||
@@ -341,10 +341,21 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +		}
 +
 +		dmaengine_terminate_all(sunxi_channel->dma_chan);
-+		sunxi_dma_set_ep_mode(controller, sunxi_channel->hw_ep->epnum,
-+				      sunxi_channel->is_tx, false);
 +		channel->status = MUSB_DMA_STATUS_FREE;
 +	}
++
++	/*
++	 * VEND0 BUS_SEL is a GLOBAL switch, so always return the FIFO datapath
++	 * to PIO on abort -- even if THIS channel was not mid-transfer. A stale
++	 * BUS_SEL=1 left armed by another channel (e.g. the RX video DMA) would
++	 * otherwise block the TX FIFO flush that musb_cleanup_urb() performs
++	 * immediately after this abort, tripping the "Could not flush host TX
++	 * fifo: csr 2003" warning on urb cancel / usb_kill_urb. This is safe:
++	 * musb_cleanup_urb() holds musb->lock, so no DMA can re-arm BUS_SEL
++	 * between here and the flush.
++	 */
++	sunxi_dma_set_ep_mode(controller, sunxi_channel->hw_ep->epnum,
++			      sunxi_channel->is_tx, false);
 +	return 0;
 +}
 +
