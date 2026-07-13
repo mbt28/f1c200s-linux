@@ -1,8 +1,8 @@
 musb: host - suniv DMA fixes to musb_host_rx/urb-cleanup (PIO fallback + flush)
 
-Two host-path fixes needed by the sunxi_dma backend, which (unlike inventra/ux500)
-gates short/misaligned transfers to PIO and shares one FIFO datapath between PIO
-and DMA via a global VEND0 BUS_SEL bit:
+Three host-path fixes needed by the sunxi_dma backend, which (unlike inventra/ux500)
+gates short/misaligned transfers to PIO and shares ONE FIFO datapath between PIO
+and DMA via a global VEND0 BUS_SEL bit (reg 0x43):
 
 1) musb_host_rx(): when musb_rx_dma_in_inventra_cppi41() declines the RX DMA
    (channel_program returns 0 for a short transfer) the helper released
@@ -11,24 +11,75 @@ and DMA via a global VEND0 BUS_SEL bit:
    stalled after "Accessory linked". Refresh the local `dma` (now NULL) so RX
    falls through to PIO, mirroring the TX fallback.
 
-2) musb_cleanup_urb(): on usb_kill_urb of a TX urb, musb_h_tx_flush_fifo() runs
-   under musb->lock (IRQs off) and, when it cannot drain the FIFO, spins up to 1s
-   (1000 x mdelay(1)) before dev_WARN_ONCE. On this 1663-class IC the CPU cannot
-   touch the FIFO while the shared dedicated-DMA datapath is busy, so when the RX
-   *video* DMA owns BUS_SEL a PIO TX cancel can never flush -> a 1s IRQs-off stall
-   that starves the realtime AA read thread. Do NOT force the datapath back to PIO
-   in that case: clearing BUS_SEL / aborting the RX channel corrupts the in-flight
-   video (ep2 RX three-strikes -> disconnect -> re-enumeration storm). Instead
-   flush normally when this TX ep owned DMA (already aborted above) or the datapath
-   is idle, and skip the flush -- leaving the stale FIFO to be discarded on the next
-   ep program, the app re-sends the OUT xfer -- when the RX DMA owns BUS_SEL. Gated
-   on CONFIG_USB_SUNXI_DMA so only suniv builds touch reg 0x43.
+2) musb_h_tx_flush_fifo(): a contended or NAKing OUT packet (e.g. an AA bulk-OUT
+   write that collided with the RX video DMA on the shared datapath) can leave
+   FIFONOTEMPTY set. The stock 1000 x mdelay(1) = up to 1s spin then runs with
+   IRQs off under musb->lock and starves the realtime aa-read thread ->
+   "sched: RT throttling activated" -> the app drops the AA link (observed:
+   "Could not flush host TX2 fifo: csr 2003" WARNING at musb_host.c:113, then a
+   LIBUSB_ERROR_TIMEOUT bulk write and reconnect). Bound the spin to a few us on
+   suniv and drop the WARN (a jammed FIFO is expected on this IC, not a bug); a
+   still-stale FIFO is discarded when the endpoint is next programmed and the app
+   re-sends the OUT transfer. Fixes all callers, not just urb-cleanup.
+
+3) musb_cleanup_urb(): return the shared datapath to PIO only if THIS tx ep owned
+   the DMA (already aborted upstream); never clear BUS_SEL / abort the RX channel
+   when the RX video DMA owns it -- that corrupts the in-flight video (ep2 RX
+   three-strikes -> re-enumeration). Gated on CONFIG_USB_SUNXI_DMA so only suniv
+   builds touch reg 0x43.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- a/drivers/usb/musb/musb_host.c
 +++ b/drivers/usb/musb/musb_host.c
-@@ -1924,8 +1924,14 @@
+@@ -88,7 +88,22 @@
+ 	struct musb	*musb = ep->musb;
+ 	void __iomem	*epio = ep->regs;
+ 	u16		csr;
++#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
++	/*
++	 * suniv has ONE shared FIFO datapath. A contended or NAKing OUT
++	 * packet can leave FIFONOTEMPTY set here (e.g. an AA bulk-OUT write
++	 * that collided with the RX video DMA), and this runs under
++	 * musb->lock with IRQs off. The stock 1000 x mdelay(1) = up to 1s
++	 * spin then starves the realtime aa-read thread -> "sched: RT
++	 * throttling activated" -> the app drops the AA link. Bound the
++	 * spin to a few microseconds and move on; a still-stale FIFO is
++	 * discarded when the endpoint is next programmed and the app
++	 * re-sends the OUT transfer. Not a bug on this IC, so no WARN.
++	 */
++	int		retries = 4;
++#else
+ 	int		retries = 1000;
++#endif
+ 
+ 	csr = musb_readw(epio, MUSB_TXCSR);
+ 	while (csr & MUSB_TXCSR_FIFONOTEMPTY) {
+@@ -96,6 +111,15 @@
+ 		musb_writew(epio, MUSB_TXCSR, csr);
+ 		csr = musb_readw(epio, MUSB_TXCSR);
+ 
++#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
++		if (retries-- < 1) {
++			dev_dbg(musb->controller,
++				"TX%d fifo not flushed (csr %04x); left for next ep program\n",
++				ep->epnum, csr);
++			return;
++		}
++		udelay(10);
++#else
+ 		/*
+ 		 * FIXME: sometimes the tx fifo flush failed, it has been
+ 		 * observed during device disconnect on AM335x.
+@@ -115,6 +139,7 @@
+ 				ep->epnum, csr))
+ 			return;
+ 		mdelay(1);
++#endif
+ 	}
+ }
+ 
+@@ -1924,8 +1949,14 @@
  			if (musb_rx_dma_in_inventra_cppi41(c, hw_ep, qh, urb,
  							   xfer_len, iso_err))
  				goto finish;
@@ -45,50 +96,28 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  		}
  
  		if (!dma) {
-@@ -2339,7 +2345,46 @@
+@@ -2339,6 +2370,24 @@
  		if (is_dma_capable() && dma)
  			musb_platform_clear_ep_rxintr(musb, ep->epnum);
  	} else if (ep->epnum) {
 +#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
 +		/*
-+		 * suniv MUSB shares ONE FIFO datapath and one dedicated-DMA
-+		 * channel between the TX and RX directions, gated by the global
-+		 * VEND0 BUS_SEL bit (reg 0x43). The CPU cannot touch the FIFO
-+		 * while DMA owns the datapath, so on a TX-urb cancel FLUSHFIFO
-+		 * may never clear FIFONOTEMPTY and musb_h_tx_flush_fifo() then
-+		 * spins up to 1s with IRQs off (starving the realtime AA thread)
-+		 * before it dev_WARN_ONCEs "Could not flush host TX fifo".
-+		 *
-+		 * Three cases:
-+		 *  - This TX ep itself drove DMA (`dma` set above, already
-+		 *    aborted): it owned the datapath, so return VEND0 to PIO and
-+		 *    the flush is safe.
-+		 *  - The datapath is idle (BUS_SEL clear): a normal PIO flush is
-+		 *    safe.
-+		 *  - Otherwise the RX *video* DMA is mid-flight and owns BUS_SEL
-+		 *    while this is a small PIO control/bulk-OUT write. We must
-+		 *    NOT clear BUS_SEL or abort the RX channel -- that corrupts
-+		 *    the in-flight video (ep2 RX three-strikes -> disconnect ->
-+		 *    re-enumeration storm). Skip the flush: the stale TX FIFO is
-+		 *    discarded when the endpoint is next programmed and the app
-+		 *    re-sends the cancelled OUT transfer.
++		 * suniv shares one FIFO datapath + one dedicated-DMA channel
++		 * between TX and RX via the global VEND0 BUS_SEL bit (reg 0x43).
++		 * Return the datapath to PIO only if THIS tx ep owned the DMA
++		 * (`dma`, already aborted above); NEVER clear BUS_SEL or abort
++		 * the RX channel when the RX video DMA owns it -- that corrupts
++		 * the in-flight video (ep2 RX three-strikes -> disconnect ->
++		 * re-enumeration storm). musb_h_tx_flush_fifo() is bounded on
++		 * suniv (see its top) so it can't spin 1s / trip RT throttling.
 +		 */
 +		if (is_dma_capable() && dma) {
 +			writeb(0, musb->mregs + 0x43);
 +			csr = musb_readw(epio, MUSB_TXCSR);
 +			csr &= ~(MUSB_TXCSR_DMAENAB | MUSB_TXCSR_DMAMODE);
 +			musb_writew(epio, MUSB_TXCSR, csr);
-+			musb_h_tx_flush_fifo(ep);
-+		} else if (!(readb(musb->mregs + 0x43) & 1)) {
-+			musb_h_tx_flush_fifo(ep);
-+		} else {
-+			dev_dbg(musb->controller,
-+				"ep%d TX cancel while RX DMA owns BUS_SEL: skip flush\n",
-+				ep->epnum);
 +		}
-+#else
- 		musb_h_tx_flush_fifo(ep);
 +#endif
+ 		musb_h_tx_flush_fifo(ep);
  		csr = musb_readw(epio, MUSB_TXCSR);
  		csr &= ~(MUSB_TXCSR_AUTOSET
- 			| MUSB_TXCSR_DMAENAB
