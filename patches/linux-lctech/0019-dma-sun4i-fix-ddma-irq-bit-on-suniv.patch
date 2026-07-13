@@ -1,0 +1,80 @@
+dma: sun4i: fix DDMA completion IRQ bit mapping on suniv (4 NDMA channels)
+
+The IRQ enable/pending register packs NDMA channel events in the low 16 bits and
+DDMA events in the high 16 bits (2 bits/channel), regardless of how many NDMA
+channels the SoC implements. set_pchan_interrupt() and the irq handler assumed a
+contiguous layout (bit = pchan_index * 2), which is only correct when there are 8
+NDMA channels (A10): there DDMA pchan 8 -> bit 16.
+
+On suniv (F1C100s/F1C200s) there are only 4 NDMA channels, so the first DDMA
+pchan is index 4 and the driver used bit 8 -- but the hardware still raises the
+DDMA completion at bit 16. The enable bit (9) and the hardware's pending bit (17)
+never matched, so DDMA end-interrupts were masked and never serviced: DDMA
+transfers completed into SDRAM but their dmaengine callbacks never ran. NDMA was
+unaffected (ch0 = bit 0/1 either way), which is why SPI DMA worked but the USB
+DDMA (used by the MUSB sunxi_dma backend) hung every transfer.
+
+Map DDMA pchans to the high 16 bits explicitly in both the enable path and the
+handler's reverse lookup. A10 behaviour is unchanged (ndma=8 -> DDMA still at
+bit 16).
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/drivers/dma/sun4i-dma.c
++++ b/drivers/dma/sun4i-dma.c
+@@ -377,21 +377,36 @@
+ {
+ 	u32 reg;
+ 	int pchan_number = pchan - priv->pchans;
++	int irq_bit;
+ 	unsigned long flags;
+ 
++	/*
++	 * The IRQ enable/pending register keeps NDMA events in the low 16 bits
++	 * and DDMA events in the high 16 bits, independent of how many NDMA
++	 * channels the SoC has. On the A10 (8 NDMA channels) a DDMA pchan index
++	 * already lands at bit 16+, but on suniv (only 4 NDMA channels) it does
++	 * not, so map DDMA pchans to the high half explicitly. Without this the
++	 * suniv DDMA completion IRQ (hw bit 16+) is enabled at the wrong bit and
++	 * never handled, so DDMA transfers finish in SDRAM but never call back.
++	 */
++	if (pchan_number < priv->cfg->ndma_nr_max_channels)
++		irq_bit = pchan_number * 2;
++	else
++		irq_bit = 16 + (pchan_number - priv->cfg->ndma_nr_max_channels) * 2;
++
+ 	spin_lock_irqsave(&priv->lock, flags);
+ 
+ 	reg = readl_relaxed(priv->base + SUN4I_DMA_IRQ_ENABLE_REG);
+ 
+ 	if (half)
+-		reg |= BIT(pchan_number * 2);
++		reg |= BIT(irq_bit);
+ 	else
+-		reg &= ~BIT(pchan_number * 2);
++		reg &= ~BIT(irq_bit);
+ 
+ 	if (end)
+-		reg |= BIT(pchan_number * 2 + 1);
++		reg |= BIT(irq_bit + 1);
+ 	else
+-		reg &= ~BIT(pchan_number * 2 + 1);
++		reg &= ~BIT(irq_bit + 1);
+ 
+ 	writel_relaxed(reg, priv->base + SUN4I_DMA_IRQ_ENABLE_REG);
+ 
+@@ -1132,7 +1147,13 @@
+ 	free_room = 0;
+ 
+ 	for_each_set_bit(bit, &pendirq, 32) {
+-		pchan = &pchans[bit >> 1];
++		/* Inverse of the NDMA-low / DDMA-high(16+) split in
++		 * set_pchan_interrupt(): map the register bit back to a pchan.
++		 */
++		int pchan_idx = (bit < 16) ? (bit >> 1) :
++			priv->cfg->ndma_nr_max_channels + ((bit - 16) >> 1);
++
++		pchan = &pchans[pchan_idx];
+ 		vchan = pchan->vchan;
+ 		if (!vchan) /* a terminated channel may still interrupt */
+ 			continue;
