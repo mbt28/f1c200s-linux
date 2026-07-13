@@ -1,0 +1,63 @@
+musb: host - suniv DMA fixes to musb_host_rx/urb-cleanup (PIO fallback + flush)
+
+Two host-path fixes needed by the sunxi_dma backend, which (unlike inventra/ux500)
+gates short/misaligned transfers to PIO and shares one FIFO datapath between PIO
+and DMA via a global VEND0 BUS_SEL bit:
+
+1) musb_host_rx(): when musb_rx_dma_in_inventra_cppi41() declines the RX DMA
+   (channel_program returns 0 for a short transfer) the helper released
+   hw_ep->rx_channel, but the caller's local `dma` still pointed at it, so the
+   `if (!dma)` PIO block was skipped and the packet was dropped -> the AA session
+   stalled after "Accessory linked". Refresh the local `dma` (now NULL) so RX
+   falls through to PIO, mirroring the TX fallback.
+
+2) musb_cleanup_urb(): on usb_kill_urb of a TX urb, musb_h_tx_flush_fifo() runs
+   under musb->lock (IRQs off). If the RX video DMA left BUS_SEL=1 the TX FIFO is
+   in DMA mode and FLUSHFIFO never empties it -> a 1s spin + "Could not flush host
+   TX fifo" warning whose backtrace stalls the console and trips RT throttling
+   (killing the AA read thread). Return the FIFO to PIO (VEND0=0) before the
+   flush; the lock guarantees no DMA re-arms in between. Gated on
+   CONFIG_USB_SUNXI_DMA so only suniv builds touch reg 0x43.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/drivers/usb/musb/musb_host.c
++++ b/drivers/usb/musb/musb_host.c
+@@ -1924,8 +1924,14 @@
+ 			if (musb_rx_dma_in_inventra_cppi41(c, hw_ep, qh, urb,
+ 							   xfer_len, iso_err))
+ 				goto finish;
+-			else
+-				dev_err(musb->controller, "error: rx_dma failed\n");
++			/*
++			 * The DMA backend declined this RX (e.g. a short
++			 * transfer the sunxi engine rejects): the helper has
++			 * already released rx_channel, so drop our stale local
++			 * ref and fall through to the PIO path below instead of
++			 * losing the packet.  Mirrors the TX PIO fallback.
++			 */
++			dma = hw_ep->rx_channel;
+ 		}
+ 
+ 		if (!dma) {
+@@ -2339,6 +2345,20 @@
+ 		if (is_dma_capable() && dma)
+ 			musb_platform_clear_ep_rxintr(musb, ep->epnum);
+ 	} else if (ep->epnum) {
++#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
++		/*
++		 * suniv MUSB shares one FIFO datapath between PIO and DMA,
++		 * gated by a global VEND0 BUS_SEL bit (reg 0x43). If the RX
++		 * video DMA left BUS_SEL=1, the TX FIFO is in DMA mode and
++		 * FLUSHFIFO can never empty it, so musb_h_tx_flush_fifo() spins
++		 * 1s and warns ("Could not flush host TX fifo: csr 21xx"), whose
++		 * backtrace print then stalls the console / RT thread. Return
++		 * the FIFO to PIO before flushing. We hold musb->lock (IRQs
++		 * off) so no DMA re-arms in between; the interrupted RX DMA is
++		 * re-requested by the core on its next poll.
++		 */
++		writeb(0, musb->mregs + 0x43);
++#endif
+ 		musb_h_tx_flush_fifo(ep);
+ 		csr = musb_readw(epio, MUSB_TXCSR);
+ 		csr &= ~(MUSB_TXCSR_AUTOSET
