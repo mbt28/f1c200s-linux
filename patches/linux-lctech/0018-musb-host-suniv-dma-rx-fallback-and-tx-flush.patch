@@ -40,23 +40,36 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  		}
  
  		if (!dma) {
-@@ -2339,6 +2345,20 @@
+@@ -2339,6 +2345,33 @@
  		if (is_dma_capable() && dma)
  			musb_platform_clear_ep_rxintr(musb, ep->epnum);
  	} else if (ep->epnum) {
 +#if IS_ENABLED(CONFIG_USB_SUNXI_DMA)
 +		/*
-+		 * suniv MUSB shares one FIFO datapath between PIO and DMA,
-+		 * gated by a global VEND0 BUS_SEL bit (reg 0x43). If the RX
-+		 * video DMA left BUS_SEL=1, the TX FIFO is in DMA mode and
-+		 * FLUSHFIFO can never empty it, so musb_h_tx_flush_fifo() spins
-+		 * 1s and warns ("Could not flush host TX fifo: csr 21xx"), whose
-+		 * backtrace print then stalls the console / RT thread. Return
-+		 * the FIFO to PIO before flushing. We hold musb->lock (IRQs
-+		 * off) so no DMA re-arms in between; the interrupted RX DMA is
-+		 * re-requested by the core on its next poll.
++		 * suniv MUSB shares one FIFO datapath and one dedicated-DMA
++		 * channel between the TX and RX directions, gated by a global
++		 * VEND0 BUS_SEL bit (reg 0x43). When libusb cancels a TX urb
++		 * (the AA control-write retry does this on every BUS_SEL
++		 * collision), the RX *video* DMA is usually still in flight:
++		 * merely clearing BUS_SEL is not enough because the sun4i-dma
++		 * engine keeps driving the FIFO, so FLUSHFIFO can never empty
++		 * the TX FIFO and musb_h_tx_flush_fifo() spins 1s and warns
++		 * ("Could not flush host TX fifo: csr 2003").
++		 *
++		 * Stop the RX DMA engine (channel_abort also returns VEND0 to
++		 * PIO), then clear the TXCSR DMA-mode bits, before the flush.
++		 * We hold musb->lock (IRQs off) so nothing re-arms in between;
++		 * the RX urb is re-driven by the core, and wired-AA tolerates
++		 * the retransmit (validated: sustained 30fps under the app-side
++		 * write retry).
 +		 */
++		if (is_dma_capable() && ep->rx_channel &&
++		    ep->musb->dma_controller)
++			ep->musb->dma_controller->channel_abort(ep->rx_channel);
 +		writeb(0, musb->mregs + 0x43);
++		csr = musb_readw(epio, MUSB_TXCSR);
++		csr &= ~(MUSB_TXCSR_DMAENAB | MUSB_TXCSR_DMAMODE);
++		musb_writew(epio, MUSB_TXCSR, csr);
 +#endif
  		musb_h_tx_flush_fifo(ep);
  		csr = musb_readw(epio, MUSB_TXCSR);
