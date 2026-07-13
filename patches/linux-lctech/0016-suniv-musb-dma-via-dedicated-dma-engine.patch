@@ -23,7 +23,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,413 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -192,18 +192,27 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	slave_conf.direction = direction;
 +	slave_conf.src_addr = usb_fifo_addr;
 +	slave_conf.src_addr_width = addr_width;
-+	slave_conf.src_maxburst = 16;
++	/*
++	 * suniv DDMA supports a max burst of 4 (SUNIV_MAX_BURST in sun4i-dma;
++	 * convert_burst_f1c100s() returns -EINVAL for anything larger). The
++	 * ux500 template used 16, which made dmaengine_slave_config reject the
++	 * transfer -> prep_slave_sg returned NULL -> DMA silently never ran.
++	 */
++	slave_conf.src_maxburst = 4;
 +	slave_conf.dst_addr = usb_fifo_addr;
 +	slave_conf.dst_addr_width = addr_width;
-+	slave_conf.dst_maxburst = 16;
++	slave_conf.dst_maxburst = 4;
 +	slave_conf.device_fc = false;
 +
 +	dmaengine_slave_config(dma_chan, &slave_conf);
 +
 +	dma_desc = dmaengine_prep_slave_sg(dma_chan, &sg, 1, direction,
 +					   DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
-+	if (!dma_desc)
++	if (!dma_desc) {
++		dev_info(musb->controller, "prep_slave_sg failed ep%d %s len=%u\n",
++			 hw_ep->epnum, sunxi_channel->is_tx ? "tx" : "rx", len);
 +		return false;
++	}
 +
 +	dma_desc->callback = sunxi_dma_callback;
 +	dma_desc->callback_param = channel;
