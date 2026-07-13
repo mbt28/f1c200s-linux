@@ -97,16 +97,21 @@ CONFIG_USB_SUNXI_DMA=y
 # Kconfig depends was widened (patch 0016) to allow this on USB_MUSB_SUNXI.
 CONFIG_USB_UX500_DMA=y
 
-# USB Ethernet for the SSH/SCP dev loop -- push cedrus.ko over a USB-hub NIC and
-# rmmod/insmod it instead of reflashing. 0fe6:9700 = Davicom DM9601 (full-speed);
-# the rest cover common USB NICs if the adapter is swapped. Built-in so eth0 is
-# up at boot with no module dance.
-CONFIG_USB_USBNET=m
-CONFIG_USB_NET_DM9601=m
-CONFIG_USB_NET_AX8817X=m
-CONFIG_USB_NET_AX88179_178A=m
-CONFIG_USB_NET_CDCETHER=m
-CONFIG_USB_NET_SMSC95XX=m
+# USB Ethernet: Realtek RTL8153 only (Lenovo 17ef:720c USB-C to LAN + kin).
+# Primary use: stress-test the MUSB host DMA path locally -- iperf --bidir over
+# this NIC hammers bulk RX-DMA + TX across the shared BUS_SEL datapath (the
+# kernel's own documented tx-fifo-flush repro), no phone required. Also serves
+# the SSH/SCP dev loop. Built-in so the NIC binds on plug, no module dance.
+# All other USB-NIC drivers dropped (explicitly, so the base sunxi defconfig
+# can't pull them back in) to keep the image minimal.
+CONFIG_USB_NET_DRIVERS=y
+CONFIG_USB_RTL8152=y
+# CONFIG_USB_USBNET is not set
+# CONFIG_USB_NET_DM9601 is not set
+# CONFIG_USB_NET_AX8817X is not set
+# CONFIG_USB_NET_AX88179_178A is not set
+# CONFIG_USB_NET_CDCETHER is not set
+# CONFIG_USB_NET_SMSC95XX is not set
 
 # USB-gadget ethernet (g_ether) for the dev loop: Type-C straight to the dev host
 # = power + a deterministic usb0 link, no adapter/firmware/hub. Active only when

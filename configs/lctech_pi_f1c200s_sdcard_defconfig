@@ -119,3 +119,8 @@ BR2_PACKAGE_HOSTAPD_DRIVER_NL80211=y
 BR2_PACKAGE_DNSMASQ=y
 # CONFIG_BR2_PACKAGE_DNSMASQ_TFTP default y -- unused here
 # BR2_PACKAGE_DNSMASQ_TFTP is not set
+
+# iperf3: local MUSB-host-DMA stress test over the RTL8153 USB NIC.
+# `iperf3 --bidir` drives concurrent bulk RX-DMA + TX across the shared BUS_SEL
+# datapath (the kernel's documented tx-fifo-flush repro) with no phone needed.
+BR2_PACKAGE_IPERF3=y
