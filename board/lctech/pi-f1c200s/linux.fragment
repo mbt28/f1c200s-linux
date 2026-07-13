@@ -88,9 +88,14 @@ CONFIG_USB_PHY=y
 CONFIG_PHY_SUN4I_USB=y
 # MUSB DMA via the SoC dedicated-DMA engine (patches 0016/0017) -- offloads the
 # wired-AA USB bulk copy off the ARM926. DMADEVICES/DMA_SUN4I already =y (SPI DMA).
-# Opt-in: falls back to PIO if the DT dmas aren't wired. Bring-up pending (VEND0
-# BUS_SEL/DRQ_SEL bits need on-hardware verification).
+# Opt-in: falls back to PIO if the DT dmas aren't wired.
 CONFIG_USB_SUNXI_DMA=y
+# REQUIRED with USB_SUNXI_DMA: sunxi_dma sets the MUSB_DMA_UX500 quirk bit, but
+# the musb_dma_ux500() macro is compiled to 0 unless USB_UX500_DMA is enabled --
+# so without this the bit is inert, the core never releases the DMA channel on
+# the PIO fallback, and short host transfers hang (LIBUSB_ERROR_TIMEOUT). The
+# Kconfig depends was widened (patch 0016) to allow this on USB_MUSB_SUNXI.
+CONFIG_USB_UX500_DMA=y
 
 # USB Ethernet for the SSH/SCP dev loop -- push cedrus.ko over a USB-hub NIC and
 # rmmod/insmod it instead of reflashing. 0fe6:9700 = Davicom DM9601 (full-speed);

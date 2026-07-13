@@ -430,10 +430,22 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +}
 --- a/drivers/usb/musb/Kconfig
 +++ b/drivers/usb/musb/Kconfig
-@@ -143,6 +143,15 @@
+@@ -139,10 +139,26 @@
+ 
+ config USB_UX500_DMA
+ 	bool 'ST Ericsson Ux500'
+-	depends on USB_MUSB_UX500
++	depends on USB_MUSB_UX500 || USB_MUSB_SUNXI
  	help
  	  Enable DMA transfers on UX500 platforms.
  
++	  Also selectable on Allwinner sunxi: the sunxi_dma backend drives the
++	  MUSB CSRs the same way (external dmaengine, mode-1 bulk), so it reuses
++	  the ux500 quirk paths in musb_host/musb_gadget. Without this, the
++	  MUSB_DMA_UX500 quirk bit is inert (musb_dma_ux500() is compiled to 0),
++	  the core never releases the DMA channel on the PIO fallback, and small
++	  host transfers hang (LIBUSB_ERROR_TIMEOUT).
++
 +config USB_SUNXI_DMA
 +	bool 'Allwinner sunxi'
 +	depends on USB_MUSB_SUNXI && DMADEVICES
