@@ -23,7 +23,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- /dev/null
 +++ b/drivers/usb/musb/sunxi_dma.c
-@@ -0,0 +1,424 @@
+@@ -0,0 +1,485 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * drivers/usb/musb/sunxi_dma.c
@@ -61,6 +61,10 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 + */
 +#define SUNXI_MUSB_VEND0		0x0043
 +#define SUNXI_MUSB_VEND0_PIO_MODE	0x00
++/* Endpoint interrupt-enable registers (sunxi layout), used by the RX-DMA
++ * half-duplex guard below. ep0's interrupt is INTRTX bit 0. */
++#define SUNXI_MUSB_INTRTXE		0x0048
++#define SUNXI_MUSB_INTRRXE		0x004a
 +/*
 + * VEND0 layout confirmed against the Allwinner Sunxi USB BSP (USBC_SelectBus()
 + * in usbc.c, USBC_BP_VEND0_* in sunxi_usb_bsp.h):
@@ -104,7 +108,48 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	struct sunxi_dma_channel tx_channel;
 +	struct musb		*musb;
 +	dma_addr_t		phy_base;
++	/* RX-DMA half-duplex guard (see sunxi_dma_rx_mask_others) */
++	u16			saved_intrtxe;
++	u16			saved_intrrxe;
++	bool			intr_masked;
 +};
++
++/*
++ * suniv shares ONE single-port FIFO RAM across all endpoints, muxed CPU-vs-DMA
++ * by the global VEND0 BUS_SEL bit. A stock MUSB with a built-in DMA controller
++ * arbitrates CPU/DMA access to that RAM internally; the external sun4i-dma path
++ * has no such arbitration, so ANY CPU FIFO op (bulk-OUT, or ep0 control) while
++ * an RX-DMA owns BUS_SEL corrupts the in-flight RX transfer (validated: 6/6
++ * corrupt reads under an ep0 GET_DESCRIPTOR hammer). sun4i-dma cannot pause and
++ * the FIFO ops run in IRQ context (can't sleep / defer mid-op), so we emulate
++ * the missing arbitration by MASKING the other endpoints' MUSB interrupts for
++ * the lifetime of the RX-DMA: the TX / ep0 / other-RX handlers that would issue
++ * a CPU FIFO op simply do not run until we restore the masks on completion,
++ * when BUS_SEL is back to 0. The RX-DMA endpoint's own RX interrupt is kept
++ * enabled (Mode-1 uses it for short-packet completion). All of these run under
++ * musb->lock. ep0 lives in INTRTX bit 0, so clearing INTRTXE covers it too.
++ */
++static void sunxi_dma_rx_mask_others(struct sunxi_dma_controller *c, u8 epnum)
++{
++	struct musb *musb = c->musb;
++
++	c->saved_intrtxe = readw(musb->mregs + SUNXI_MUSB_INTRTXE);
++	c->saved_intrrxe = readw(musb->mregs + SUNXI_MUSB_INTRRXE);
++	c->intr_masked = true;
++	writew(0, musb->mregs + SUNXI_MUSB_INTRTXE);
++	writew(1 << epnum, musb->mregs + SUNXI_MUSB_INTRRXE);
++}
++
++static void sunxi_dma_rx_unmask_others(struct sunxi_dma_controller *c)
++{
++	struct musb *musb = c->musb;
++
++	if (!c->intr_masked)
++		return;
++	c->intr_masked = false;
++	writew(c->saved_intrtxe, musb->mregs + SUNXI_MUSB_INTRTXE);
++	writew(c->saved_intrrxe, musb->mregs + SUNXI_MUSB_INTRRXE);
++}
 +
 +/* Program VEND0 to route @epnum's FIFO to the dedicated DMA engine (or back). */
 +static void sunxi_dma_set_ep_mode(struct sunxi_dma_controller *controller,
@@ -143,6 +188,10 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	/* Restore PIO FIFO access for this endpoint. */
 +	sunxi_dma_set_ep_mode(sunxi_channel->controller, hw_ep->epnum,
 +			      sunxi_channel->is_tx, false);
++
++	/* BUS_SEL is back to 0: safe to let the deferred TX/ep0/RX handlers run. */
++	if (!sunxi_channel->is_tx)
++		sunxi_dma_rx_unmask_others(sunxi_channel->controller);
 +
 +	channel->actual_len = sunxi_channel->cur_len;
 +	channel->status = MUSB_DMA_STATUS_FREE;
@@ -220,6 +269,16 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	/* Route this endpoint's FIFO to the DMA engine, then kick it off. */
 +	sunxi_dma_set_ep_mode(controller, hw_ep->epnum,
 +			      sunxi_channel->is_tx, true);
++
++	/*
++	 * For an RX-DMA, freeze the other endpoints (TX/ep0/other-RX) so no CPU
++	 * FIFO op corrupts this transfer on the shared single-port FIFO. Restored
++	 * in the completion callback / abort. TX-DMA is left alone (rare, and the
++	 * concurrent hazard there is a CPU RX-PIO read, handled the same way when
++	 * we widen this later).
++	 */
++	if (!sunxi_channel->is_tx)
++		sunxi_dma_rx_mask_others(controller, hw_ep->epnum);
 +
 +	sunxi_channel->cookie = dmaengine_submit(dma_desc);
 +	dma_async_issue_pending(dma_chan);
@@ -356,6 +415,8 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +	 */
 +	sunxi_dma_set_ep_mode(controller, sunxi_channel->hw_ep->epnum,
 +			      sunxi_channel->is_tx, false);
++	/* aborting a (possibly masked) RX-DMA: always restore the endpoint IRQs */
++	sunxi_dma_rx_unmask_others(controller);
 +	return 0;
 +}
 +
