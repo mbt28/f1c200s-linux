@@ -223,3 +223,10 @@ CONFIG_DEBUG_FS=y
 #  - /proc/config.gz to verify the running config on-target
 CONFIG_IKCONFIG=y
 CONFIG_IKCONFIG_PROC=y
+# === TEMPORARY: CMA-leak diagnosis (find the ~10MB not freed on app exit) ===
+#  - DMA_API_DEBUG: track every dma_alloc_*/dma_map_* by device ->
+#      cat /sys/kernel/debug/dma-api/dump   (names the leaking driver+size)
+CONFIG_DEBUG_KERNEL=y
+CONFIG_DMA_API_DEBUG=y
+#  - CMA region bitmap / used-page count -> /sys/kernel/debug/cma/
+CONFIG_CMA_DEBUGFS=y
