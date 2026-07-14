@@ -152,3 +152,65 @@ collision deterministically (removes the last hand-wave).
   not PIO — re-test **direct** (no hub).
 - Serial: only ever open the console DTR=False/RTS=False (asserting DTR resets
   the board). See memory `ch341-serial-dtr-rts-silent`.
+
+## 7. State of knowledge / parking notes (2026-07-14)
+
+Consolidated before parking so the work resumes cleanly.
+
+### 7.1 Reference survey — nobody uses the suniv MUSB external DMA
+Every MUSB implementation surveyed is **PIO-only**; the external-DMA backend in
+this branch (patch 0016) is **novel**, and the shared-FIFO collision is exactly
+why the ecosystem avoids it:
+- **mainline Linux `drivers/usb/musb/sunxi.c`** — forces `VEND0 = PIO`; no DMA.
+- **CherryUSB** (production F1C100s/F1C200s USB *host* stack) — `musb_read/write_packet`
+  are raw `HWREG`/`HWREGB` FIFO access; **no DMA**; `usb_glue_sunxi.c` is FIFO-size
+  config only.
+- **TinyUSB** `portable/mentor/musb/hcd_musb.c` (host) & `dcd_musb.c` (device) —
+  PIO (`musb_regs->fifo[epnum]`); **0 DMA**.
+- **decaday/musb** (Rust, device-mode) — PIO, generic profiles, no Allwinner/DMA.
+
+### 7.2 The collision is structural; "global DMA mode" is a common shape
+- suniv has ONE **single-port** FIFO RAM shared by all endpoints (PSPG p12),
+  muxed CPU-vs-DMA by the **global** `VEND0.BUS_SEL` bit. The external-DMA path
+  has no CPU/DMA arbitration → any CPU FIFO op during an RX-DMA corrupts it.
+- Parallel: **DWC2** (TinyUSB PR #2576) also makes DMA a **global, core-reset-time,
+  compile-time** mode (default OFF). These controllers want **all-DMA or all-PIO**;
+  the per-transfer **hybrid** this driver does (DMA for big RX, PIO for TX/ep0/small)
+  is what creates the collision.
+
+### 7.3 Resolved via the MUSBMHDRC PSPG (see memory `musb-hdrc-dma-facts`)
+- Cache coherency: **not** the bug (USB core `dma_map/unmap` handles ARMv5).
+- `actual_len = cur_len`: **not** a bug — Mode-1 bulk suppresses the EP interrupt
+  except on a short packet, which is handled via `RXCOUNT`, not the DMA callback.
+- three-strikes: **hardware** (3 failed attempts → Error → DMA request disabled).
+
+### 7.4 Deterministic reproducer (the go-to test; memory `usb-dma-stress-test-suniv`)
+SanDisk `/dev/sda` `dd bs=64k` (RX-DMA) + `musb-collision-test --ctrl 0781 5583`
+(ep0 PIO hammer) + `dd|md5` vs a clean reference → **6/6 corrupt** baseline;
+**0/6** = fixed. Phone-free, ~90 s. Note: SanDisk (0781:5583) enumeration is
+VBUS-flaky at boot — reseat the stick to get `/dev/sda`.
+
+### 7.5 Phase-2 attempt 1 = FAILED (commit ff1a655, on dev, no-op/no-regression)
+Masked other-EP MUSB IRQs while an RX-DMA held BUS_SEL. Still 6/6, hammer
+unslowed. Wrong layer: CPU FIFO ops ALSO come from the **URB-submission path**
+(`musb_ep_program` writes the ep0 SETUP / TX FIFO), which masking IRQs doesn't
+cover; the raw INTRTXE write also fights the core's `musb->intrtxe` shadow. Left
+in place because it regresses nothing (RX-DMA clean, no wedge/starvation).
+
+### 7.6 The two viable paths to resume
+1. **All-PIO (`use_dma=0`)** — proven, collision-free, what the whole ecosystem
+   uses. Open question: fast enough for the AA video now that the console-flood /
+   RT-throttle is fixed? Video is only a few Mbps; PIO did ~21 Mbps on the storage
+   test. Cheapest to validate: boot `musb_hdrc.use_dma=0` + phone → measure fps +
+   confirm zero TLS corruption. **If PIO holds, the DMA (and this whole
+   workstream) is optional.**
+2. **Hybrid DMA + transaction-level defer** — gate `musb_ep_program` (+ the TX/ep0
+   IRQ continuation) so no CPU-FIFO transaction *starts* while RX-DMA owns
+   BUS_SEL, and reschedule deferred endpoints from the DMA completion callback.
+   Correct + keeps DMA throughput, but invasive MUSB-host-scheduler surgery.
+   Validate against the reproducer (→0/6), then the phone.
+
+**Recommended resume order:** test path 1 first (cheap; may make the DMA moot).
+Only if PIO can't sustain the video, invest in path 2. Independently, the kernel
+**CMA-leak** (`cedrus-cma-leak-kernel-side`) still needs fixing so a reconnect
+recovers cleanly regardless of which path wins.
