@@ -1,0 +1,93 @@
+#!/bin/sh
+# cma-leak-loop -- reproduce + quantify (and later, validate the fix for) the
+# F1C200s CMA leak: ~10 MB of CMA that is NOT reclaimed when the decoding app
+# exits (survives process death AND cedrus rmmod; not ion/dma_buf/DRM-fb).
+#
+# Each cycle runs one full app lifecycle: start FastCarPlay -> wait until it
+# actually decodes (= linked + allocated its ~10 MB cedrus DPB) -> kill it ->
+# let the kernel reclaim -> record CmaFree. A monotonic decline in the
+# after-kill CmaFree is the leak; the per-cycle delta is the leak rate.
+# When CmaFree can't recover, decode fails (cma_alloc -12) and wired-AA spirals.
+#
+# PASS (fix works): after-kill CmaFree is FLAT across cycles (leak ~0).
+# FAIL (leak):      after-kill CmaFree drops ~5 MB/cycle until it bottoms out.
+#
+# Needs the phone plugged + unlocked (the app must reach "decode" to allocate).
+# Requires CONFIG_DMA_API_DEBUG + CONFIG_CMA_DEBUGFS for the who-holds-it dump.
+#
+# Usage: cma-leak-loop [cycles=8] [settings_file]
+
+CYCLES=${1:-8}
+SET=${2:-/etc/fastcarplay/settings_cedrus_aa.txt}
+LOG=/tmp/cll.aa.log
+LINK_TIMEOUT=35        # s to wait for the first decode frame
+DECODE_HOLD=4          # s to let the full DPB allocate after first frame
+RECLAIM=3             # s to let the kernel reclaim after kill
+
+kb()   { awk -v k="$1" '$1==k":"{print $2}' /proc/meminfo; }
+free() { kb CmaFree; }
+tot()  { kb CmaTotal; }
+
+command -v fastcarplay >/dev/null || { echo "fastcarplay not found"; exit 1; }
+[ -e /sys/kernel/debug/dma-api/dump ] || echo "WARN: no /sys/kernel/debug/dma-api (need CONFIG_DMA_API_DEBUG for the leaker dump)"
+
+echo "=== cma-leak-loop: $CYCLES cycles, settings=$SET ==="
+echo "CmaTotal=$(tot) kB"
+BASE=$(free); echo "baseline CmaFree=$BASE kB (nothing running)"
+printf "%-5s %-6s %-12s %-12s %-9s\n" cyc linked peak_used_kB free_after_kB leak_kB
+PREV=$BASE
+worst=0
+i=0
+while [ "$i" -lt "$CYCLES" ]; do
+	i=$((i+1))
+	rm -f "$LOG"
+	killall -9 fastcarplay 2>/dev/null; sleep 1
+
+	setsid sh -c "SDL_AUDIODRIVER=dummy fastcarplay '$SET'" </dev/null >"$LOG" 2>&1 &
+	linked=no; t=0
+	while [ "$t" -lt "$LINK_TIMEOUT" ]; do
+		sleep 2; t=$((t+2))
+		grep -q 'decode' "$LOG" 2>/dev/null && { linked=yes; break; }
+	done
+	sleep "$DECODE_HOLD"
+	PEAK=$(( $(tot) - $(free) ))          # CMA in use while decoding
+
+	killall -9 fastcarplay 2>/dev/null
+	sleep "$RECLAIM"
+	F=$(free)
+	LEAK=$((PREV - F))                     # drop vs previous after-kill free
+	[ "$LEAK" -gt "$worst" ] && worst=$LEAK
+	printf "%-5s %-6s %-12s %-12s %-9s\n" "$i" "$linked" "$PEAK" "$F" "$LEAK"
+	PREV=$F
+	# stop early if CMA is effectively exhausted
+	[ "$F" -lt 1024 ] && { echo "!! CmaFree < 1 MB -- exhausted, stopping"; break; }
+done
+
+NOW=$(free)
+echo "=== summary ==="
+echo "CmaFree $BASE -> $NOW kB : leaked $((BASE-NOW)) kB over $i cycles (worst single-cycle drop $worst kB)"
+if [ "$((BASE-NOW))" -lt 512 ]; then
+	echo "VERDICT: NO LEAK (flat) -- fix looks good."
+else
+	echo "VERDICT: LEAK confirmed (~$(( (BASE-NOW)/i )) kB/cycle)."
+fi
+
+echo "=== who holds it: dma-api outstanding allocations ==="
+D=/sys/kernel/debug/dma-api/dump
+if [ -e "$D" ]; then
+	echo "total dma-api entries: $(grep -c . "$D")"
+	echo "--- entries per device (top holders) ---"
+	awk '{print $1}' "$D" 2>/dev/null | sort | uniq -c | sort -rn | head
+	echo "--- entries mentioning video/display/codec ---"
+	grep -iE 'video|cedrus|codec|drm|disp|defe|de2|1c0e|1e00' "$D" 2>/dev/null | head -20
+	echo "--- raw sample (first 15) ---"
+	head -15 "$D" 2>/dev/null
+else
+	echo "(no dma-api debugfs -- build needs CONFIG_DMA_API_DEBUG)"
+fi
+echo "=== cma region usage ==="
+for d in /sys/kernel/debug/cma/*; do
+	[ -d "$d" ] && echo "$(basename "$d"): count=$(cat "$d/count" 2>/dev/null) used=$(cat "$d/used" 2>/dev/null)"
+done
+echo "=== ion (should be empty) / meminfo ==="
+grep -iE 'CmaTotal|CmaFree|MemFree' /proc/meminfo
