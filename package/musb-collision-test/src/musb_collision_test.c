@@ -133,6 +133,54 @@ static void *writer_thread(void *arg)
 	return NULL;
 }
 
+/*
+ * Control-hammer mode (`--ctrl <vid_hex> <pid_hex>`): loop ep0 GET_DESCRIPTOR
+ * to a device WITHOUT claiming its interface (standard device requests to ep0
+ * are allowed even while a kernel driver owns the interfaces, e.g. usb-storage
+ * on the SanDisk). This is a pure TX-PIO/ep0-PIO source to run concurrently
+ * with a `dd if=/dev/sda bs=64k` RX-DMA read: the storage-path reproducer.
+ *   term A:  while :; do echo 3>/proc/sys/vm/drop_caches; \
+ *              dd if=/dev/sda bs=64k count=512 2>/dev/null|md5sum; done
+ *   term B:  musb-collision-test --ctrl 0781 5583
+ * A differing md5 in term A = the ep0 PIO corrupting the in-flight RX-DMA.
+ */
+static int ctrl_hammer(libusb_context *ctx, int vid, int pid)
+{
+	libusb_device_handle *dh =
+		libusb_open_device_with_vid_pid(ctx, vid, pid);
+	unsigned char buf[64];
+	uint64_t ok = 0, err = 0;
+	time_t last;
+
+	if (!dh) {
+		fprintf(stderr, "ctrl: device %04x:%04x not found\n", vid, pid);
+		return 1;
+	}
+	printf("ctrl-hammer on %04x:%04x: ep0 GET_DESCRIPTOR loop (TX-PIO). Run the dd|md5 loop concurrently.\n",
+	       vid, pid);
+	last = time(NULL);
+	while (!g_stop) {
+		int r = libusb_control_transfer(dh, 0x80, 0x06, 0x0100, 0,
+						buf, 18, 1000);
+		if (r < 0) {
+			err++;
+			if (r == LIBUSB_ERROR_NO_DEVICE)
+				break;
+		} else {
+			ok++;
+		}
+		if (time(NULL) - last >= 2) {
+			printf("ctrl ok=%llu err=%llu\n",
+			       (unsigned long long)ok, (unsigned long long)err);
+			last = time(NULL);
+		}
+	}
+	printf("=== ctrl FINAL ok=%llu err=%llu ===\n",
+	       (unsigned long long)ok, (unsigned long long)err);
+	libusb_close(dh);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	libusb_context *ctx = NULL;
@@ -155,6 +203,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "libusb_init failed\n");
 		return 1;
 	}
+
+	/* storage-path reproducer: ep0 control hammer against any device */
+	if (argc > 3 && !strcmp(argv[1], "--ctrl")) {
+		int rc = ctrl_hammer(ctx, (int)strtol(argv[2], NULL, 16),
+				     (int)strtol(argv[3], NULL, 16));
+		libusb_exit(ctx);
+		return rc;
+	}
+
 	g_dh = libusb_open_device_with_vid_pid(ctx, GZERO_VID, GZERO_PID);
 	if (!g_dh) {
 		fprintf(stderr, "g_zero %04x:%04x not found -- is the peer `modprobe g_zero` and cabled to the host port? (check `lsusb`)\n",
