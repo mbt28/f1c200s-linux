@@ -50,6 +50,8 @@ FASTCARPLAY_DEPENDENCIES = \
 #   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- working
 #   USE_AA_WIRELESS=1 -> protocol = aa-wireless (BT bootstrap via BlueZ/D-Bus
 #   + the SoftAP; needs `ap on` + bluetoothd/dbus running at runtime)
+#   USE_LVGL=1 -> on-device UI (vendored third_party/lvgl submodule + the
+#   EEZ-generated screens in src/ui; compiled out entirely without it)
 define FASTCARPLAY_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) \
 		PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" \
@@ -57,6 +59,7 @@ define FASTCARPLAY_BUILD_CMDS
 		USE_CEDAR=1 \
 		USE_CEDRUS=1 \
 		USE_AA_WIRELESS=1 \
+		USE_LVGL=1 \
 		BUILD_TYPE=release \
 		release
 endef
