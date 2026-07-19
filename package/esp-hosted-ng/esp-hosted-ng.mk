@@ -4,11 +4,13 @@
 #
 ################################################################################
 
-# Pinned to the commit the release/ng-1.0.6 tag points at -- the ESP32 runs
-# the prebuilt firmware from that same release (the transport handshake
-# breaks confusingly on driver/firmware version mismatches, so bump both
-# together; flashing procedure in docs/wireless-esp-hosted.md).
-ESP_HOSTED_NG_VERSION = 8626b42fd3f9eb5a1ccb5daea481f0d8d32b1685
+# Pinned to esp-hosted master 2026-07-11 (fw NG-1.0.6.0.4) -- picks up the
+# post-ng-1.0.6 RX-buffer-size, wifi-retry and PMF fixes chased for the
+# WPA2-SoftAP encrypted-data-path failure. The ESP32 runs a CUSTOM firmware
+# built from this same commit (v3 bundle, firmware/ in the project dir; the
+# transport handshake breaks confusingly on driver/firmware version
+# mismatches, so bump both together; flashing in docs/wireless-esp-hosted.md).
+ESP_HOSTED_NG_VERSION = 53bdeeece67532cfb11dfa25e82173570bc7cc7b
 ESP_HOSTED_NG_SITE = $(call github,espressif,esp-hosted,$(ESP_HOSTED_NG_VERSION))
 ESP_HOSTED_NG_LICENSE = GPL-2.0
 ESP_HOSTED_NG_LICENSE_FILES = esp_hosted_ng/host/LICENSE
