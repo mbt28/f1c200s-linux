@@ -24,7 +24,12 @@ ifeq ($(FASTCARPLAY_VERSION),)
 $(error fastcarplay: cannot resolve the $(FASTCARPLAY_BRANCH) branch tip -- network down?)
 endif
 endif
-FASTCARPLAY_SITE = $(call github,mbt28,FastCarPlay,$(FASTCARPLAY_VERSION))
+# Fetched via git (not the github tarball helper): third_party/lvgl is a git
+# SUBMODULE and GitHub tarballs never contain submodules -- the git method +
+# GIT_SUBMODULES pulls it in. The sha-as-version caching above still applies.
+FASTCARPLAY_SITE = https://github.com/mbt28/FastCarPlay.git
+FASTCARPLAY_SITE_METHOD = git
+FASTCARPLAY_GIT_SUBMODULES = YES
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
 FASTCARPLAY_DEPENDENCIES = \
