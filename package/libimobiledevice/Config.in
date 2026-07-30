@@ -1,0 +1,14 @@
+config BR2_PACKAGE_LIBIMOBILEDEVICE
+	bool "libimobiledevice"
+	select BR2_PACKAGE_LIBPLIST
+	select BR2_PACKAGE_LIBUSBMUXD
+	select BR2_PACKAGE_LIBIMOBILEDEVICE_GLUE
+	select BR2_PACKAGE_LIBTATSU
+	select BR2_PACKAGE_OPENSSL
+	help
+	  A cross-platform protocol library to communicate with Apple iOS
+	  devices (lockdown, usbmux, on-device services). FastCarPlay's wired
+	  CarPlay backend uses it to open com.apple.carkit.service over its own
+	  cp_usbmux socket.
+
+	  https://github.com/libimobiledevice/libimobiledevice

@@ -1,0 +1,9 @@
+config BR2_PACKAGE_LIBUSBMUXD
+	bool "libusbmuxd"
+	select BR2_PACKAGE_LIBPLIST
+	select BR2_PACKAGE_LIBIMOBILEDEVICE_GLUE
+	help
+	  A client library to multiplex connections from and to iOS devices
+	  (the usbmux protocol). Link dependency of libimobiledevice.
+
+	  https://github.com/libimobiledevice/libusbmuxd

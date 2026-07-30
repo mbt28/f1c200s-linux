@@ -1,0 +1,9 @@
+config BR2_PACKAGE_LIBTATSU
+	bool "libtatsu"
+	select BR2_PACKAGE_LIBPLIST
+	select BR2_PACKAGE_LIBCURL
+	help
+	  A library to handle Apple's TSS (Tatsu Signing Server) requests.
+	  Required by recent (git) libimobiledevice.
+
+	  https://github.com/libimobiledevice/libtatsu

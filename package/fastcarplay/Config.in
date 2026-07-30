@@ -16,6 +16,10 @@ config BR2_PACKAGE_FASTCARPLAY
 	# -lbluetooth (Buildroot requires _DEPENDENCIES to be selected here)
 	select BR2_PACKAGE_BLUEZ5_UTILS
 	select BR2_PACKAGE_DBUS
+	# USE_CP_WIRED: wired CarPlay opens com.apple.carkit.service over our own
+	# usbmux (cp_usbmux) via libimobiledevice; cp_usbmux serves plists with libplist.
+	select BR2_PACKAGE_LIBIMOBILEDEVICE
+	select BR2_PACKAGE_LIBPLIST
 	help
 	  C++ CarPlay and Android Auto receiver for Autobox-compatible
 	  USB dongles.
