@@ -36,4 +36,16 @@ LIBIMOBILEDEVICE_DEPENDENCIES = \
 LIBIMOBILEDEVICE_AUTORECONF = YES
 LIBIMOBILEDEVICE_CONF_OPTS = --without-cython
 
+# Buildroot's git download archives the tree WITHOUT .git, and a git checkout
+# has no .tarball-version -- so configure.ac's git-version-gen finds neither
+# and autoreconf dies with "PACKAGE_VERSION is not defined". Write the file an
+# official `make dist` tarball would carry, in git-version-gen's own fallback
+# format: <NEWS version>-git-<short sha>. (The release-tarball siblings
+# libusbmuxd/-glue/libtatsu ship it already and don't need this.)
+define LIBIMOBILEDEVICE_SET_TARBALL_VERSION
+	echo "$$(sed -n '1s/^Version //p' $(@D)/NEWS)-git-$$(echo $(LIBIMOBILEDEVICE_VERSION) | cut -c1-7)" \
+		> $(@D)/.tarball-version
+endef
+LIBIMOBILEDEVICE_POST_EXTRACT_HOOKS += LIBIMOBILEDEVICE_SET_TARBALL_VERSION
+
 $(eval $(autotools-package))
