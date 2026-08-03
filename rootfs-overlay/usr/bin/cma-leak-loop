@@ -13,12 +13,14 @@
 # FAIL (leak):      after-kill CmaFree drops ~5 MB/cycle until it bottoms out.
 #
 # Needs the phone plugged + unlocked (the app must reach "decode" to allocate).
-# Requires CONFIG_DMA_API_DEBUG + CONFIG_CMA_DEBUGFS for the who-holds-it dump.
+# The app runs whatever protocol is persisted (`carplay-source`); wired AA is
+# the intended harness. Requires CONFIG_DMA_API_DEBUG + CONFIG_CMA_DEBUGFS for
+# the who-holds-it dump.
 #
 # Usage: cma-leak-loop [cycles=8] [settings_file]
 
 CYCLES=${1:-8}
-SET=${2:-/etc/fastcarplay/settings_cedrus_aa.txt}
+SET=${2:-/etc/fastcarplay/settings_drm.txt}
 LOG=/tmp/cll.aa.log
 LINK_TIMEOUT=35        # s to wait for the first decode frame
 DECODE_HOLD=4          # s to let the full DPB allocate after first frame

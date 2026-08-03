@@ -3,9 +3,10 @@
 # stack (dbus, bluetoothd, bluealsa HFP AG+HF, Audio+Telephony CoD) + the dev
 # network, at boot, INDEPENDENT of the FastCarPlay app autostart. WiFi already
 # had its own autostart (S43wifi); this gives Bluetooth the same independence,
-# so `autorun off` (app off) still leaves WiFi + BT up. Gated on the preset
-# needing radios: "wireless" (set by `autorun wireless`) or any "ui" preset
-# (the LVGL UI offers wireless as a runtime source, so the radios must be up).
+# so `autorun off` (app off) still leaves WiFi + BT up. No gate: since app
+# d58e335 every boot runs the LVGL UI, which offers the wireless sources at
+# runtime, so the radios must be up regardless of the persisted protocol
+# (that was the "ui" arm of the old preset gate -- now the only case).
 #
 # Backgrounded: the ESP needs ~10-20 s to boot and rcS must not block. Order is
 # load-bearing -- `wifi up` loads esp32_spi which pulls the ESP out of reset
@@ -16,7 +17,6 @@
 # Progress is logged to /tmp/aa-stack.log.
 case "$1" in
 start)
-	grep -qE 'wireless|ui' /etc/carplay-preset 2>/dev/null || exit 0
 	(
 		exec >> /tmp/aa-stack.log 2>&1
 		echo "--- $(cut -d. -f1 /proc/uptime)s: start ---"

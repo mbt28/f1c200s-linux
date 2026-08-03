@@ -46,8 +46,10 @@ FASTCARPLAY_DEPENDENCIES = \
 	sdl2 \
 	sdl2_ttf
 
-# Build BOTH HW decoders; the one used is chosen at runtime by the settings
-# (cedar-decode / cedrus-decode) to match /etc/ve-driver:
+# Build BOTH HW decoders; since app d58e335 the app picks its video path at
+# runtime itself (video-path = auto probes the V4L2 decoder nodes + DRM
+# master; S20ve-select still decides which KERNEL driver is loaded via
+# /etc/ve-driver):
 #   USE_CEDAR=1  -> CedarDecoder  (libcedarc + /dev/cedar_dev) -- the working path
 #   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- working
 #   USE_AA_WIRELESS=1 -> protocol = aa-wireless (BT bootstrap via BlueZ/D-Bus
@@ -76,11 +78,12 @@ define FASTCARPLAY_INSTALL_TARGET_CMDS
 		PREFIX=/usr \
 		SYSCONFDIR=/etc \
 		install
-	# Ship EVERY preset the app repo provides (settings_*.txt): cedar/cedrus
-	# for the `carplay` alias (picked by /etc/ve-driver), plus the wireless/AA
-	# variants (settings_cedrus_wireless.txt, settings_cedrus_aa.txt, ...).
-	# Wildcard on purpose -- the package tracks the branch tip, so new presets
-	# ship automatically without touching this file.
+	# Ship the app's preset files (settings_*.txt): since app d58e335 that is
+	# settings_drm.txt (head units -- what S99carplay boots) and
+	# settings_desktop.txt (desktop dev; inert on the device). Wildcard on
+	# purpose -- the package tracks the branch tip, so new presets ship
+	# automatically without touching this file. The commented settings.txt
+	# reference is installed by `make install` above (not matched by the glob).
 	$(foreach f,$(wildcard $(@D)/settings_*.txt), \
 		$(INSTALL) -D -m 0644 $(f) \
 			$(TARGET_DIR)/etc/fastcarplay/$(notdir $(f))$(sep))

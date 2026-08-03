@@ -1,32 +1,31 @@
 #!/bin/sh
 # autorun on|off|status|stop -- FastCarPlay APP-autostart control ONLY.
-# The app PRESET (which settings_*.txt) is managed separately by `carplay-preset`
-# -- on/off do NOT change it. A *wireless* preset also autostarts the WiFi+BT
-# radios (S45aa-stack), independent of the app autostart.
+# The SOURCE protocol (aa-usb, aa-wireless, ...) is managed separately by
+# `carplay-source` or the on-screen UI (Settings > Source) -- on/off do NOT
+# change it. The WiFi+BT radios come up in S45aa-stack at every boot,
+# independent of the app autostart.
 case "$1" in
 on)
 	echo enabled > /etc/carplay-autostart
-	echo "app autostart enabled (preset: $(cat /etc/carplay-preset 2>/dev/null || echo cedrus_wireless))"
+	echo "app autostart enabled (protocol: $(carplay-source current))"
 	;;
 off)
 	rm -f /etc/carplay-autostart
 	echo "app autostart disabled (running instance untouched; 'autorun stop' kills it)"
-	grep -q wireless /etc/carplay-preset 2>/dev/null && \
-		echo "  note: WiFi+BT radios still autostart (wireless preset) -- 'bt off; wifi off' to stop them"
+	echo "  note: WiFi+BT radios still autostart (S45aa-stack) -- 'bt off; wifi off' to stop them"
 	;;
 stop)
 	killall fastcarplay 2>/dev/null && echo stopped || echo "not running"
 	;;
 status)
 	if [ -f /etc/carplay-autostart ]; then
-		echo "app autostart: enabled (preset: $(cat /etc/carplay-preset 2>/dev/null || echo cedrus_wireless))"
+		echo "app autostart: enabled (protocol: $(carplay-source current))"
 	else
 		echo "app autostart: disabled"
 	fi
-	grep -q wireless /etc/carplay-preset 2>/dev/null && echo "radios (S45aa-stack): wireless mode ON" || echo "radios (S45aa-stack): off"
 	pidof fastcarplay > /dev/null 2>&1 && echo "fastcarplay: running (pid $(pidof fastcarplay))" || echo "fastcarplay: not running"
 	;;
 *)
-	echo "usage: autorun on|off|status|stop   (set the preset with: carplay-preset)"
+	echo "usage: autorun on|off|status|stop   (select the source with: carplay-source)"
 	;;
 esac

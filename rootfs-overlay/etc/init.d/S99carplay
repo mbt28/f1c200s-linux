@@ -1,26 +1,26 @@
 #!/bin/sh
 # FastCarPlay app autostart (last rcS step). Opt-out with `autorun off` -- that
 # stops only the app; the WiFi + BT radios stay up (they come up in S45aa-stack,
-# independent of this). The manual `carplay` command replaces a running
-# instance. Log: /tmp/carplay.log
+# independent of this). Log: /tmp/carplay.log
 #
-# Preset: an explicit /etc/carplay-preset (e.g. "cedrus_wireless", set by
-# `autorun wireless`) wins; else it is derived from the active VE driver
-# (/etc/ve-driver -> settings_<cedar|cedrus>.txt). For a *wireless* preset the
-# radios are brought up by S45aa-stack; here we only wait for wlan0 + hci0 to be
-# ready and then launch the app.
+# Since app d58e335 there is ONE device preset -- settings_drm.txt (the app
+# probes its video path at runtime, LVGL UI). The SOURCE protocol is chosen in
+# the UI (Settings > Source) or with `carplay-source`; both persist `protocol`
+# in /root/.fastcarplay/usersettings.txt, which the app applies on top of the
+# preset. For a *wireless* protocol the radios come up in S45aa-stack; here we
+# only wait for wlan0 + hci0 and then launch the app.
+
+SET=/etc/fastcarplay/settings_drm.txt
+# PID 1 runs rcS with the kernel's HOME=/ -- pin the app to root's real home so
+# a boot-started app and a shell-started one read/write the SAME
+# usersettings.txt (the app's own /root fallback only covers HOME being unset).
+export HOME=/root
 
 case "$1" in
 start)
 	[ -f /etc/carplay-autostart ] || exit 0
-	# Preset from /etc/carplay-preset (set by `carplay-preset`); default is
-	# cedrus_wireless (wireless Android Auto), then settings.txt as a last resort.
-	name="$(cat /etc/carplay-preset 2>/dev/null)"
-	[ -n "$name" ] || name=cedrus_wireless
-	preset="/etc/fastcarplay/settings_${name}.txt"
-	[ -f "$preset" ] || preset=/etc/fastcarplay/settings.txt
-	echo "carplay: autostarting ($preset)"
-	case "$preset" in
+	echo "carplay: autostarting ($SET)"
+	case "$(carplay-source current)" in
 	*wireless*)
 		# Wait for the radios (S45aa-stack) to be up, then launch. Backgrounded
 		# so rcS is not blocked.
@@ -28,11 +28,11 @@ start)
 		  while [ $i -lt 45 ] && { [ ! -d /sys/class/net/wlan0 ] || [ ! -d /sys/class/bluetooth/hci0 ]; }; do
 			sleep 1; i=$((i + 1))
 		  done
-		  SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1
+		  SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /tmp/carplay.log 2>&1
 		) &
 		;;
 	*)
-		SDL_AUDIODRIVER=dummy fastcarplay "$preset" > /tmp/carplay.log 2>&1 &
+		SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /tmp/carplay.log 2>&1 &
 		;;
 	esac
 	;;

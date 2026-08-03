@@ -1,0 +1,59 @@
+#!/bin/sh
+# carplay-source [protocol] -- show or set the FastCarPlay SOURCE protocol.
+# (`carplay-preset` is kept as an alias. The per-board settings_*.txt presets
+# are gone since app d58e335: the device always boots settings_drm.txt and only
+# the protocol varies.) Writes the same file the on-screen UI (Settings >
+# Source) writes -- /root/.fastcarplay/usersettings.txt, applied by the app on
+# top of the shipped preset -- replacing only the `protocol` key.
+#   carplay-source                  show current + valid protocols
+#   carplay-source aa-wireless     set (effective next boot / app restart)
+#   carplay-source current          print just the effective protocol
+#                                   (for scripts: S99carplay's radio wait)
+U=/root/.fastcarplay/usersettings.txt   # matches HOME=/root pinned in S99carplay
+D=/etc/fastcarplay/settings_drm.txt
+VALID="carlinkit aa-usb aa-wireless carplay-wired carplay-wireless"
+
+get() { sed -n 's/^[ \t]*protocol[ \t]*=[ \t]*//p' "$1" 2>/dev/null | tail -n1; }
+
+case "$1" in
+current)
+	# effective = user override, else the shipped preset's default
+	cur="$(get "$U")"
+	[ -n "$cur" ] || cur="$(get "$D")"
+	echo "${cur:-aa-usb}"
+	;;
+""|status|list)
+	over="$(get "$U")"
+	def="$(get "$D")"
+	if [ -n "$over" ]; then
+		echo "current protocol: $over"
+	else
+		echo "current protocol: ${def:-aa-usb} (preset default, no user override)"
+	fi
+	cur="${over:-${def:-aa-usb}}"
+	echo "valid:"
+	for p in $VALID; do
+		[ "$p" = "$cur" ] && echo "  $p  <= active" || echo "  $p"
+	done
+	;;
+*)
+	ok=
+	for p in $VALID; do [ "$p" = "$1" ] && ok=1; done
+	if [ -z "$ok" ]; then
+		echo "no such protocol: $1"
+		echo "valid: $VALID"
+		exit 1
+	fi
+	# same merge the app's setUser does: replace the key, keep everything else
+	mkdir -p -m 0700 "${U%/*}"
+	if grep -q '^[ \t]*protocol[ \t]*=' "$U" 2>/dev/null; then
+		sed -i "s/^[ \t]*protocol[ \t]*=.*/protocol = $1/" "$U"
+	else
+		echo "protocol = $1" >> "$U"
+	fi
+	echo "protocol set to '$1' -- effective from next boot (or restart the app)"
+	case "$1" in
+	*wireless*) echo "  wireless: S99carplay waits for the radios (S45aa-stack) at boot" ;;
+	esac
+	;;
+esac
