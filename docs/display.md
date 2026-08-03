@@ -82,22 +82,31 @@ Sources + the Pillow generator live in `board/lctech/pi-f1c200s/splash-themes/`
 (PNG previews + the `.fb.gz` exports into `rootfs-overlay/etc/splash/`). Add a
 theme = add a function to `generate.py`, run it, rebuild the rootfs.
 
-## FastCarPlay rendering (`renderer = drm`)
+## FastCarPlay rendering (`video-path = auto`)
+
+Nothing in the settings selects a decoder or a renderer any more (app d58e335
+dropped the `renderer` / `*-decode` keys): `video-path` defaults to `auto`,
+which probes the V4L2 decoder nodes and whether it can become DRM master, then
+picks one of three modes — `Drm` (we own KMS), `Sdl` (a desktop session owns
+the screen) or `Headless` (no display). `video-path = hw|sw|headless` forces
+one, for bring-up and for boards that lie. On the F1C200s auto resolves to Drm.
 
 The F1C200s has **no GPU**, and SDL2's only embedded video backend (KMSDRM)
-requires GBM + EGL — so `renderer = sdl` can never work on the target. The
-DRM renderer replaces it wholesale:
+requires GBM + EGL — so the Sdl mode can never drive this panel. The DRM path
+replaces it wholesale:
 
 - **Video**: the decoder (cedrus or cedar) presents each frame itself —
   tiled-NV12 dma-buf imported as a DRM framebuffer and committed on the
   primary plane, which sun4i routes through the DEFE (hardware de-tile + CSC
   + scale, zero CPU per pixel).
-- **UI** (home screen, toasts, debug): the regular SDL `Interface` code runs
-  against an SDL *software* renderer targeting an offscreen surface (no SDL
-  video driver involved), which is copied into double-buffered DRM dumb
-  framebuffers on the ARGB **overlay plane** above the video. Per-pixel alpha
-  is blended by the DEBE. The plane is disabled whenever there is nothing to
-  show, so it costs no scanout bandwidth during playback.
+- **UI** (home screen, toasts, debug): the UI code runs against an SDL
+  *software* renderer targeting an offscreen surface (no SDL video driver
+  involved), which is copied into double-buffered DRM dumb framebuffers on the
+  ARGB **overlay plane** above the video. Per-pixel alpha is blended by the
+  DEBE. The plane is disabled whenever there is nothing to show, so it costs
+  no scanout bandwidth during playback. With `lvgl-ui = true` (set in
+  `settings_drm.txt`) the LVGL screens replace the plain status home screen
+  and render through that same surface.
 - Both paths share one DRM master session (`src/drm_display.{h,cpp}` in the
   FastCarPlay fork).
 - **Idle streams**: CarPlay sends frames only when the screen content
@@ -105,5 +114,7 @@ DRM renderer replaces it wholesale:
   of a session until disconnect — never on a frame-recency timeout (that
   repainted the home screen over idle-but-live video once; fixed).
 
-`renderer = none` remains the minimal fallback: no UI at all, cedar's CPU
-de-tile straight to `/dev/fb0`.
+`video-path = headless` remains the minimal fallback: the app brings up no
+display at all. Separately, the cedar decoder keeps its own `/dev/fb0` path
+(CPU de-tile straight to the framebuffer) for when the DRM DEFE plane is
+unavailable.
