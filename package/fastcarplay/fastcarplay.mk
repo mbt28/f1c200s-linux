@@ -46,6 +46,31 @@ FASTCARPLAY_DEPENDENCIES = \
 	sdl2 \
 	sdl2_ttf
 
+# Kernel features the app cannot run without. Declared HERE, not just in the
+# board fragment, so they are a real dependency of the package instead of
+# something inherited from whatever defconfig a board happens to use: Buildroot
+# applies these to the kernel .config (after the fragments, before olddefconfig)
+# whenever this package is enabled. Buildroot's own Kconfig cannot express a
+# Linux config symbol, so Config.in can only document them -- this is the
+# mechanism that actually enforces it. board/lctech/pi-f1c200s/post-build.sh
+# then fails the build if either symbol did not survive olddefconfig.
+#
+# IPV6: both CarPlay backends hand the phone an IPv6 link-local address to
+#   connect back to -- CarPlayStartSession { ip = fe80::..%usb0 | %wlan0,
+#   port = 7000 }. There is no IPv4 form of that handshake, so without IPv6 the
+#   :7000 AF_INET6 listener fails EAFNOSUPPORT and CarPlay cannot start at all.
+#   (Android Auto is IPv4 over AOAP and unaffected.) INET is listed because
+#   IPV6 lives inside "if INET" in net/Kconfig -- enabling IPV6 alone would be
+#   silently dropped by olddefconfig on a kernel without it.
+# I2C_CHARDEV: the MFi authentication coprocessor is driven from userspace as
+#   /dev/i2c-N (mfi-i2c-bus). I2C is its menu gate, same reasoning as INET.
+define FASTCARPLAY_LINUX_CONFIG_FIXUPS
+	$(call KCONFIG_ENABLE_OPT,CONFIG_INET)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_IPV6)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_I2C)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_I2C_CHARDEV)
+endef
+
 # Build BOTH HW decoders; since app d58e335 the app picks its video path at
 # runtime itself (video-path = auto probes the V4L2 decoder nodes + DRM
 # master; S20ve-select still decides which KERNEL driver is loaded via

@@ -7,9 +7,24 @@
 
 # Networking core is required: libusb's hotplug backend uses a netlink uevent
 # socket (NETLINK_KOBJECT_UEVENT) to init, and FastCarPlay's libusb_init() fails
-# with LIBUSB_ERROR_OTHER without it. Keep it minimal (net core + netlink, no IP).
+# with LIBUSB_ERROR_OTHER without it. (IPv4 is not added here -- it already
+# arrives from the base sunxi defconfig, CONFIG_INET=y.)
 CONFIG_NET=y
 CONFIG_UEVENT_HELPER=y
+
+# IPv6 is REQUIRED by FastCarPlay's CarPlay backends. The base sunxi defconfig
+# explicitly turns it off ("# CONFIG_IPV6 is not set"), which is why the board
+# had no /proc/net/if_inet6 and the app's :7000 control server died on its
+# AF_INET6 socket with EAFNOSUPPORT (observed on-target, 6.6.143).
+# BOTH CarPlay paths hand the phone an IPv6 link-local address to connect back
+# to -- wired sends CarPlayStartSession { ip = fe80::..%usb0, port = 7000 } and
+# wireless does the same over wlan0. There is no IPv4 form of that handshake,
+# so it cannot be worked around in the app. Android Auto (IPv4 over AOAP) is
+# unaffected. Kconfig gate: IPV6 sits inside "if INET" in net/Kconfig, so the
+# base defconfig's INET=y is what makes this stick. It costs kernel text on
+# this 64 MiB part (cf. the RAM diet below) -- unavoidable, CarPlay cannot
+# start without it.
+CONFIG_IPV6=y
 
 # 480x272 RGB LCD via the sun4i DRM driver (binds the suniv DE/TCON through
 # their sun4i-a10 fallback compatibles; panel qd43003c0-40 is in panel-simple).
@@ -47,6 +62,12 @@ CONFIG_I2C=y
 CONFIG_I2C_MV64XXX=y
 CONFIG_INPUT_TOUCHSCREEN=y
 CONFIG_TOUCHSCREEN_GOODIX=y
+# MFi authentication coprocessor -- FastCarPlay drives it from userspace via the
+# i2c-dev chardev (mfi-i2c-bus = /dev/i2c-0). It shares i2c0, the only bus this
+# board enables: MFi answers at 0x10/0x11, the GT911 at 0x5d, so no clash.
+# The base sunxi defconfig happens to set this; declared here so a defconfig
+# bump cannot silently drop it and take CarPlay authentication with it.
+CONFIG_I2C_CHARDEV=y
 
 # Mainline cedrus (V4L2 stateless H.264) video decoder -- blob-free: no cedar_ve,
 # no ION, no libcedarc. cedrus binds the DT "video-engine" node and claims SRAM-C

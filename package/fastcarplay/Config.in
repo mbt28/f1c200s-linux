@@ -24,6 +24,17 @@ config BR2_PACKAGE_FASTCARPLAY
 	  C++ CarPlay and Android Auto receiver for Autobox-compatible
 	  USB dongles.
 
+	  Needs two kernel options. Buildroot's Kconfig cannot express a Linux
+	  config symbol, so they are not "depends on" here -- the package
+	  enables them through LINUX_CONFIG_FIXUPS and the board post-build
+	  script fails the build if they are missing:
+	    CONFIG_IPV6        both CarPlay backends hand the phone an IPv6
+	                       link-local address to connect back to, so the
+	                       :7000 server cannot start without it. Note the
+	                       sunxi defconfig disables IPv6 explicitly.
+	    CONFIG_I2C_CHARDEV the MFi authentication coprocessor is reached
+	                       from userspace as /dev/i2c-N.
+
 	  https://github.com/mbt28/FastCarPlay
 
 comment "FastCarPlay needs a toolchain w/ C++, threads, dynamic library"
