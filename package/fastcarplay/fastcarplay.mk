@@ -64,11 +64,19 @@ FASTCARPLAY_DEPENDENCIES = \
 #   silently dropped by olddefconfig on a kernel without it.
 # I2C_CHARDEV: the MFi authentication coprocessor is driven from userspace as
 #   /dev/i2c-N (mfi-i2c-bus). I2C is its menu gate, same reasoning as INET.
+# IPHETH + CDC_NCM: these are what give wired CarPlay its usb0 link -- ipheth
+#   switches the iPhone into NCM mode, cdc_ncm creates usb0, and usb0's fe80::
+#   address is what CarPlayStartSession points the phone at. USBNET is
+#   cdc_ncm's dependency and USB_NET_DRIVERS the menu gate for both.
 define FASTCARPLAY_LINUX_CONFIG_FIXUPS
 	$(call KCONFIG_ENABLE_OPT,CONFIG_INET)
 	$(call KCONFIG_ENABLE_OPT,CONFIG_IPV6)
 	$(call KCONFIG_ENABLE_OPT,CONFIG_I2C)
 	$(call KCONFIG_ENABLE_OPT,CONFIG_I2C_CHARDEV)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_USB_NET_DRIVERS)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_USB_USBNET)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_USB_NET_CDC_NCM)
+	$(call KCONFIG_ENABLE_OPT,CONFIG_USB_IPHETH)
 endef
 
 # Build BOTH HW decoders; since app d58e335 the app picks its video path at

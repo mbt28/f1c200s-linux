@@ -118,20 +118,37 @@ CONFIG_USB_SUNXI_DMA=y
 # Kconfig depends was widened (patch 0016) to allow this on USB_MUSB_SUNXI.
 CONFIG_USB_UX500_DMA=y
 
-# USB Ethernet: Realtek RTL8153 only (Lenovo 17ef:720c USB-C to LAN + kin).
+# USB Ethernet: Realtek RTL8153 (Lenovo 17ef:720c USB-C to LAN + kin).
 # Primary use: stress-test the MUSB host DMA path locally -- iperf --bidir over
 # this NIC hammers bulk RX-DMA + TX across the shared BUS_SEL datapath (the
 # kernel's own documented tx-fifo-flush repro), no phone required. Also serves
 # the SSH/SCP dev loop. Built-in so the NIC binds on plug, no module dance.
-# All other USB-NIC drivers dropped (explicitly, so the base sunxi defconfig
-# can't pull them back in) to keep the image minimal.
 CONFIG_USB_NET_DRIVERS=y
 CONFIG_USB_RTL8152=y
-# CONFIG_USB_USBNET is not set
+# Wired CarPlay's DATA path -- REQUIRED, and it takes both drivers together.
+# In USB config 6 the iPhone exposes a CDC-NCM function:
+#   ipheth  binds the Apple vendor interface (ff/fd) and sends the vendor
+#           control request that switches the phone into NCM mode;
+#   cdc_ncm then binds the CDC-NCM data interface and creates usb0, whose
+#           fe80:: link-local is exactly what the app hands the phone in
+#           CarPlayStartSession so it can connect back to [fe80::..%usb0]:7000.
+# Without usb0 the app loops on "usb0 has no IPv6 link-local -- NCM link down"
+# and there is no CarPlay AV path at all (observed on-target, 6.6.143).
+# Built-in for the same reason as the RTL8152 above -- they bind on plug, no
+# module dance. Dependency chain checked against 6.6 drivers/net/usb/Kconfig:
+# USB_NET_CDC_NCM depends on USB_USBNET and SELECTS USB_NET_CDCETHER (spelled
+# out here because it used to be disabled in this file); USB_USBNET selects
+# MII. USB_IPHETH is standalone -- it does NOT use the usbnet framework and
+# needs only the USB_NET_DRIVERS menu gate above.
+CONFIG_USB_USBNET=y
+CONFIG_USB_NET_CDCETHER=y
+CONFIG_USB_NET_CDC_NCM=y
+CONFIG_USB_IPHETH=y
+# All other USB-NIC drivers stay dropped (explicitly, so the base sunxi
+# defconfig can't pull them back in) to keep the image minimal.
 # CONFIG_USB_NET_DM9601 is not set
 # CONFIG_USB_NET_AX8817X is not set
 # CONFIG_USB_NET_AX88179_178A is not set
-# CONFIG_USB_NET_CDCETHER is not set
 # CONFIG_USB_NET_SMSC95XX is not set
 
 # USB-gadget ethernet (g_ether) for the dev loop: Type-C straight to the dev host

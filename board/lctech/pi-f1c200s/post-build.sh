@@ -51,7 +51,7 @@ for d in "${BUILD_DIR}/linux-custom" "${BUILD_DIR}"/linux-[0-9]*; do
 	fi
 done
 if [ -n "${KCONFIG}" ]; then
-	for sym in CONFIG_IPV6 CONFIG_I2C_CHARDEV; do
+	for sym in CONFIG_IPV6 CONFIG_I2C_CHARDEV CONFIG_USB_NET_CDC_NCM CONFIG_USB_IPHETH; do
 		if grep -q "^${sym}=y\$" "${KCONFIG}"; then
 			continue
 		fi
@@ -64,6 +64,11 @@ if [ -n "${KCONFIG}" ]; then
 		CONFIG_I2C_CHARDEV)
 			why="the MFi authentication coprocessor is driven from userspace as
        /dev/i2c-0 (mfi-i2c-bus)." ;;
+		CONFIG_USB_NET_CDC_NCM|CONFIG_USB_IPHETH)
+			why="wired CarPlay's data path needs both: ipheth switches the iPhone
+       into NCM mode and cdc_ncm creates usb0, whose fe80:: address is what
+       CarPlayStartSession hands the phone. Without usb0 the app loops on
+       \"usb0 has no IPv6 link-local -- NCM link down\"." ;;
 		esac
 		echo "ERROR: ${sym}=y missing from ${KCONFIG}" >&2
 		echo "       Needed because ${why}" >&2
