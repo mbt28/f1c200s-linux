@@ -55,7 +55,7 @@ diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_h264.c b/drivers/staging/
 index 08e5b70..53a30e5 100644
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_h264.c
-@@ -706,28 +706,32 @@ err_pic_buf:
+@@ -706,33 +706,36 @@ err_pic_buf:
  	return ret;
  }
  
@@ -84,8 +84,13 @@ index 08e5b70..53a30e5 100644
  
  	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE);
  
--	for (i = 0; i < vq->num_buffers; i++) {
--		buf = vb2_to_cedrus_buffer(vb2_get_buffer(vq, i));
+-	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
+-		struct vb2_buffer *vb = vb2_get_buffer(vq, i);
+-
+-		if (!vb)
+-			continue;
+-
+-		buf = vb2_to_cedrus_buffer(vb);
 -
 -		if (buf->codec.h264.mv_col_buf_size > 0) {
 -			dma_free_attrs(dev->dev,
@@ -97,8 +102,12 @@ index 08e5b70..53a30e5 100644
 -			buf->codec.h264.mv_col_buf_size = 0;
 -		}
 -	}
-+	for (i = 0; i < vq->num_buffers; i++)
-+		cedrus_h264_buf_cleanup(ctx, vb2_get_buffer(vq, i));
++	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
++		struct vb2_buffer *vb = vb2_get_buffer(vq, i);
++
++		if (vb)
++			cedrus_h264_buf_cleanup(ctx, vb);
++	}
  
  	dma_free_attrs(dev->dev, CEDRUS_NEIGHBOR_INFO_BUF_SIZE,
  		       ctx->codec.h264.neighbor_info_buf,
@@ -113,7 +122,7 @@ diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_h265.c b/drivers/staging/
 index 16c8226..bf3f805 100644
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_h265.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_h265.c
-@@ -858,28 +858,32 @@ static int cedrus_h265_start(struct cedrus_ctx *ctx)
+@@ -858,33 +858,36 @@ static int cedrus_h265_start(struct cedrus_ctx *ctx)
  	return 0;
  }
  
@@ -142,8 +151,13 @@ index 16c8226..bf3f805 100644
  
  	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE);
  
--	for (i = 0; i < vq->num_buffers; i++) {
--		buf = vb2_to_cedrus_buffer(vb2_get_buffer(vq, i));
+-	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
+-		struct vb2_buffer *vb = vb2_get_buffer(vq, i);
+-
+-		if (!vb)
+-			continue;
+-
+-		buf = vb2_to_cedrus_buffer(vb);
 -
 -		if (buf->codec.h265.mv_col_buf_size > 0) {
 -			dma_free_attrs(dev->dev,
@@ -155,8 +169,12 @@ index 16c8226..bf3f805 100644
 -			buf->codec.h265.mv_col_buf_size = 0;
 -		}
 -	}
-+	for (i = 0; i < vq->num_buffers; i++)
-+		cedrus_h265_buf_cleanup(ctx, vb2_get_buffer(vq, i));
++	for (i = 0; i < vb2_get_num_buffers(vq); i++) {
++		struct vb2_buffer *vb = vb2_get_buffer(vq, i);
++
++		if (vb)
++			cedrus_h265_buf_cleanup(ctx, vb);
++	}
  
  	dma_free_attrs(dev->dev, CEDRUS_H265_NEIGHBOR_INFO_BUF_SIZE,
  		       ctx->codec.h265.neighbor_info_buf,
@@ -172,7 +190,7 @@ diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_video.c b/drivers/staging
 index b00feaf..1623ba8 100644
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
-@@ -562,12 +562,28 @@ static void cedrus_buf_request_complete(struct vb2_buffer *vb)
+@@ -575,12 +575,28 @@
  	v4l2_ctrl_request_complete(vb->req_obj.req, &ctx->hdl);
  }
  
@@ -200,5 +218,4 @@ index b00feaf..1623ba8 100644
 +	.buf_cleanup		= cedrus_buf_cleanup,
  	.start_streaming	= cedrus_start_streaming,
  	.stop_streaming		= cedrus_stop_streaming,
- 	.wait_prepare		= vb2_ops_wait_prepare,
--- 
+ };
