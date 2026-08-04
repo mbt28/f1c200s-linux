@@ -1,0 +1,32 @@
+lctech F1C200s: wire spi1 to the DMA engine for the ESP-Hosted link
+
+Board-side only. NDMA DRQ 0x05 = SPI1 Rx/Tx per the F1C200s User Manual
+V1.2 sections 3.6.7.4 and 7.3.7.5. spi-sun6i needs no changes: it
+requests the channels and enables its FIFO DRQ bits automatically,
+turning the ESP-Hosted transfers from ~25 FIFO interrupts per 1600-byte
+frame into DMA (motivation: wireless Android Auto streams the whole AV
+feed over this link; see docs/wireless-esp-hosted.md P6). Without the
+channels spi-sun6i falls back to PIO, so this is an optimisation, not a
+requirement.
+
+On 6.6 this patch also carried a backport of the whole A10-class
+NDMA/DDMA driver plus the dtsi controller node. Both are upstream as of
+6.18 -- drivers/dma/sun4i-dma.c has suniv_f1c100s_dma_cfg with the
+f1c100s data-width/burst variants, drivers/dma/Kconfig already allows
+MACH_SUNIV, and suniv-f1c100s.dtsi carries dma-controller@1c02000 plus
+the dt-bindings include. Only the board wiring is left, since upstream
+leaves spi1's dmas unset.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -73,6 +73,11 @@
+ &spi1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&spi1_pe_pins>;
++	/* NDMA DRQ 0x05 = SPI1 Rx/Tx (F1C200s manual 3.6.7.4); spi-sun6i
++	 * uses the channels automatically and falls back to PIO without. */
++	dmas = <&dma SUN4I_DMA_NORMAL 5>,
++	       <&dma SUN4I_DMA_NORMAL 5>;
++	dma-names = "rx", "tx";
+ 	status = "okay";
+ };

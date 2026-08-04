@@ -10,7 +10,7 @@ name: build-image
 
 on:
   push:
-    branches: [main, dev, kernel-6.6, kernel-7.1]
+    branches: [main, dev, kernel-6.6, kernel-6.18, kernel-7.1]
     tags: ['v*']
     paths-ignore: ['docs/**', '**.md']
   pull_request:
