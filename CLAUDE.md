@@ -35,9 +35,22 @@ overlay and docs. See `README.md` for the full picture.
 
 ## Build facts
 
-- Pinned versions live in `config.env` (Buildroot 2026.05, Linux 6.6.143,
-  U-Boot 2026.04, `CEDAR_REF`). The kernel version must match
-  `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE` in the defconfig.
+- Pinned versions live in `config.env` (Buildroot, Linux, U-Boot).
+- **Bumping the kernel touches FOUR places — miss one and the build lies to
+  you.** `config.env` `LINUX_VERSION`; and in the defconfig
+  `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE`,
+  `BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION` (the URL carries the version, and
+  because `CUSTOM_TARBALL=y` this is what actually supplies the source — a
+  stale URL silently builds the OLD kernel), and
+  `BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_<ver>`.
+- The `linux-headers` package extracts the **same** tarball and gets the
+  **same** `patches/linux-lctech/*` applied to it, so the series must apply to
+  both. A patch failure there fails the build at
+  `linux-headers-custom/.stamp_patched`, which reads like a headers problem but
+  is really a kernel-patch problem.
+- The kernel comes from a `git.kernel.org` **snapshot** URL, not the kernel.org
+  release tarball, because kernel.org keeps only the newest point release of a
+  series and older ones 404. Snapshots keep every version.
 - Build with `scripts/build.sh` (wraps Buildroot; any Buildroot target is
   forwarded, e.g. `scripts/build.sh linux-rebuild`).
 - A cold CI build takes ~80 min; warm (caches restored) ~25-30 min. GitHub
