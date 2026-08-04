@@ -69,14 +69,14 @@ CONFIG_TOUCHSCREEN_GOODIX=y
 # bump cannot silently drop it and take CarPlay authentication with it.
 CONFIG_I2C_CHARDEV=y
 
-# Mainline cedrus (V4L2 stateless H.264) video decoder -- blob-free: no cedar_ve,
-# no ION, no libcedarc. cedrus binds the DT "video-engine" node and claims SRAM-C
+# Mainline cedrus (V4L2 stateless H.264) video decoder -- the only decoder on
+# this image; blob-free. It binds the DT "video-engine" node and claims SRAM-C
 # via sunxi_sram; decode buffers come from CMA (vb2-dma-contig).
 CONFIG_STAGING=y
 CONFIG_STAGING_MEDIA=y
 CONFIG_VIDEO_SUNXI=y
 CONFIG_SUNXI_SRAM=y
-# CMA is the global pool for ION (libcedarc) and cedrus' vb2-dma-contig (mainline).
+# CMA is the pool cedrus' vb2-dma-contig allocates decode buffers from.
 # HARD LIMIT: on this 64 MiB part the early CMA reservation in setup_arch wedges
 # *before the console comes up* if too large -- 32 MiB hangs at "Starting kernel"
 # with no output. 16 MiB is the proven-bootable value. Paired with the ffmpeg
@@ -165,13 +165,6 @@ CONFIG_USB_ETH_RNDIS=y
 # SCSI disk (sd_mod). See docs/musb-datapath-serialization-roadmap.md.
 CONFIG_USB_STORAGE=y
 CONFIG_BLK_DEV_SD=y
-
-# Cedar VE + ION (BSP path for the libcedarc blob) -- the colour-correct decoder,
-# kept alongside cedrus while the cedrus chroma bug is open. Both are MODULES; an
-# init script (S29ve-select) loads cedar OR cedrus at boot per /etc/ve-driver.
-# cedar_ve builds as cedar_dev.ko.
-CONFIG_VIDEO_SUNXI_CEDAR_VE=m
-CONFIG_VIDEO_SUNXI_CEDAR_ION=y
 
 # --- ESP-Hosted-NG wireless: ESP32 co-processor on SPI1 (docs/wireless-esp-hosted.md) ---
 # spi1 controller (sun8i-h3-compatible, pins PE7-PE10 via patch 0012) carries

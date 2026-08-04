@@ -8,24 +8,26 @@ a CarPlay / Android-Auto receiver.
 
 This repo is **patch-only**: it does **not** vendor the Linux kernel or Buildroot
 trees. It ships the scripts, patches, configs and docs that fetch those from
-upstream and apply our customizations. Two hardware H.264 decoders are supported
-and selectable at boot:
+upstream and apply our customizations. Hardware H.264 decode uses **cedrus** —
+mainline, blob-free (V4L2 stateless). **Working — hardware-validated 2026-07-04:
+colour-correct decode, no freezes.** The broken reconstruction was root-caused
+2026-07-03 (the suniv VE has no internal SRAM for the H.264 deblock/intra-pred
+working data; the old variant was also wrongly modelled on the V3s) and fixed by
+patches 0006-0009 (`docs/cedrus-status.md`).
 
-- **cedar** — the Allwinner BSP VideoEngine + `libcedarc` blobs. **Colour-correct,
-  working.** Driver fetched from a separate repo (`cedar/README.md`).
-- **cedrus** — mainline, blob-free (V4L2 stateless). **Working — hardware-validated
-  on this branch (2026-07-04): colour-correct decode, no freezes.** The broken
-  reconstruction was root-caused 2026-07-03 (the suniv VE has no internal SRAM for
-  the H.264 deblock/intra-pred working data; the old variant was also wrongly
-  modelled on the V3s) and fixed by patches 0006-0009 (`docs/cedrus-status.md`).
+The Allwinner BSP path (`cedar_ve` + ION + the `libcedarc` blobs) was **dropped
+on the `kernel-6.6` branch** once cedrus was validated: it was the only remaining
+binary-blob dependency, and its out-of-tree driver was the highest-risk item in
+any kernel upgrade. `main` still carries it; see `docs/kernel-6.18-upgrade.md`.
 
 ## Branches
 
 | branch | kernel | state |
 |---|---|---|
-| `main` | 6.6.143 | **stable**: every commit hardware-validated; cedrus default, BOTH decoders working; releases are tagged here |
+| `main` | 6.6.143 | **stable**: every commit hardware-validated; cedrus default, cedar still present; releases are tagged here |
 | `dev` | 6.6.143 | integration — day-to-day work; CI builds a flashable image per push |
 | `feature/*` | — | short-lived experiment branches off `dev`, merged back via PR |
+| `kernel-6.6` | 6.6.143 | cedrus-only: the cedar/ION blob path removed; CI builds an image per push |
 | `kernel-7.1` | 7.1.2 | parallel 7.1 track, same fixes; open: freezes under decode — a 7.1-specific regression (main is freeze-free with identical patches); clone with `-b kernel-7.1` |
 
 Workflow, CI details and release steps: `docs/development.md`. Every push to
@@ -61,27 +63,22 @@ board/lctech/pi-f1c200s/   linux/uboot config fragments, genimage, post-build
 patches/linux-lctech/      0001 LCD+GT911 · 0002 VE-clk→PLL_VE · 0003 cedar+cedrus VE DT ·
                            0004 USB-OTG host · 0005 DEFE frontend · 0006-0009 cedrus suniv
                            fix (ext deblk/intra-pred bufs, MB reset, VE_MODE DRAM quirk,
-                           A10-modelled variant) · 0010 cedar ion heap (/dev/ion) ·
+                           A10-modelled variant) ·
                            0011 cedrus bounded VLD poll (hang hardening)
 patches/ffmpeg/            v4l2-request hwaccel + buffer right-sizing
-package/                   fastcarplay · libcedarc · cedar-decode-test
-rootfs-overlay/            /etc/ve-driver, init scripts (VE-select, usb-gadget), autorun
-cedar/                     pointer + fetch of the cedar VE+ION driver (not vendored)
+package/                   fastcarplay · esp-hosted-ng · libimobiledevice stack
+rootfs-overlay/            init scripts (cedrus, usb-gadget, wifi/ap, aa-stack, carplay), autorun
 tools/cedrus_drm_test.cpp  dongle-free decode→DEFE test rig (with --dump)
 docs/                      display · hardware-fixes · cedrus-status · ffmpeg-v4l2-request
 ```
 
-Upstream sources land in `buildroot/`, `cedar/src/`, `output/` — all git-ignored.
+Upstream sources land in `buildroot/` and `output/` — both git-ignored.
 
-## Choosing the decoder (both are built)
+## Decoder
 
-At boot, `/etc/init.d/S20ve-select` reads `/etc/ve-driver` and modprobes the chosen
-engine. **Default is `cedrus`** (mainline, blob-free, colour-correct):
-
-```sh
-echo cedrus > /etc/ve-driver     # default — blob-free mainline decoder (/dev/video0)
-echo cedar  > /etc/ve-driver     # Allwinner BSP fallback (/dev/cedar_dev + /dev/ion)
-```
+**cedrus only** on this branch. `/etc/init.d/S20cedrus` modprobes `sunxi-cedrus`
+at boot (it is a module on purpose — see `linux.fragment`), giving `/dev/video0`.
+There is no runtime choice and no `/etc/ve-driver` any more.
 
 ## USB: host (default) ⇄ slave
 
