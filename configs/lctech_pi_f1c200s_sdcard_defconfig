@@ -70,14 +70,6 @@ BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 
-# Cedar (BSP) decode path kept alongside cedrus while the cedrus chroma bug is open.
-# Soft-float ARMv5 -> arm-linux-gnueabi blobs. Selected at boot by S20ve-select.
-BR2_PACKAGE_LIBCEDARC=y
-BR2_PACKAGE_LIBCEDARC_ARCHLIB="toolchain-sunxi-arm9-glibc"
-BR2_PACKAGE_LIBCEDARC_DECODER=y
-BR2_PACKAGE_LIBCEDARC_DECODER_H264=y
-BR2_PACKAGE_CEDAR_DECODE_TEST=y
-
 # WiFi + Bluetooth via the ESP32 co-processor (ESP-Hosted-NG on spi1, patch
 # 0012 + docs/wireless-esp-hosted.md). The esp32_spi module is loaded on
 # demand by `wifi on` -- everything default-off, appliance-style.

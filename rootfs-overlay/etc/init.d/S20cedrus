@@ -1,0 +1,23 @@
+#!/bin/sh
+# Load the mainline cedrus V4L2 decoder at boot.
+#
+# cedrus is built as a MODULE on purpose (see linux.fragment): built-in lets the
+# VE probe -- clk_set_rate PLL_VE, VE reset, SRAM claim -- run during boot and
+# wedge the board before login, whereas =m keeps the probe off the boot path so
+# a probe hiccup can never brick it. modalias coldplug does not autoload it here
+# (the driver binds a DT node, and this image has no udev/mdev), so load it
+# explicitly.
+#
+# This replaced S20ve-select, which chose between cedrus and the Allwinner BSP
+# cedar/ION path; that blob path was dropped, cedrus is the only decoder now.
+case "$1" in
+start)
+	modprobe sunxi-cedrus && echo "[cedrus] mainline V4L2 decoder loaded" > /dev/console
+	;;
+stop)
+	rmmod sunxi-cedrus 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

@@ -37,7 +37,6 @@ FASTCARPLAY_DEPENDENCIES = \
 	dbus \
 	ffmpeg \
 	host-pkgconf \
-	libcedarc \
 	libdrm \
 	libimobiledevice \
 	libplist \
@@ -79,12 +78,11 @@ define FASTCARPLAY_LINUX_CONFIG_FIXUPS
 	$(call KCONFIG_ENABLE_OPT,CONFIG_USB_IPHETH)
 endef
 
-# Build BOTH HW decoders; since app d58e335 the app picks its video path at
-# runtime itself (video-path = auto probes the V4L2 decoder nodes + DRM
-# master; S20ve-select still decides which KERNEL driver is loaded via
-# /etc/ve-driver):
-#   USE_CEDAR=1  -> CedarDecoder  (libcedarc + /dev/cedar_dev) -- the working path
-#   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline) -- working
+# Mainline cedrus is the only decoder: the Allwinner BSP cedar/ION blob path
+# was dropped, so the app is built without USE_CEDAR and never links libcedarc.
+# The app picks its video path at runtime anyway (video-path = auto probes the
+# V4L2 decoder nodes + DRM master); S20cedrus loads the kernel module.
+#   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline)
 #   USE_AA_WIRELESS=1 -> protocol = aa-wireless (BT bootstrap via BlueZ/D-Bus
 #   + the SoftAP; needs `ap on` + bluetoothd/dbus running at runtime)
 #   USE_LVGL=1 -> on-device UI (vendored third_party/lvgl submodule + the
@@ -95,7 +93,6 @@ define FASTCARPLAY_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) \
 		PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" \
 		HOST_XXD="/usr/bin/xxd" \
-		USE_CEDAR=1 \
 		USE_CEDRUS=1 \
 		USE_AA_WIRELESS=1 \
 		USE_CP_WIRED=1 \

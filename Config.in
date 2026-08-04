@@ -1,11 +1,9 @@
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libudev-zero/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/libcedarc/Config.in"
 # Wired-CarPlay dependency stack (libplist comes from upstream Buildroot).
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice-glue/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libusbmuxd/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libtatsu/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/fastcarplay/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/cedar-decode-test/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/musb-collision-test/Config.in"
