@@ -1,0 +1,22 @@
+#!/bin/sh
+# Kernel uevent helper (registered in /proc/sys/kernel/hotplug by S46usb0-up).
+#
+# The kernel forks this for EVERY uevent, so it must decide fast and exit: the
+# three tests below reject everything that is not a network interface being
+# added, before any real work.
+#
+# Job: bring up the iPhone's CDC-NCM interface the instant cdc_ncm registers
+# it. A fresh netdev is DOWN, and while it is down there is no carrier and no
+# IPv6 link-local -- but wired CarPlay hands the phone exactly that fe80::
+# address in CarPlayStartSession, so the app otherwise loops forever on
+# "usb0 has no IPv6 link-local -- NCM link down". This has to be event-driven,
+# not a one-shot at boot: the phone re-enumerates when the app switches it to
+# USB config 6, which destroys and recreates usb0 mid-session.
+[ "$SUBSYSTEM" = net ] || exit 0
+[ "$ACTION" = add ] || exit 0
+case "$INTERFACE" in
+usb[0-9]*)
+	ip link set "$INTERFACE" up 2>/dev/null || ifconfig "$INTERFACE" up 2>/dev/null
+	;;
+esac
+exit 0

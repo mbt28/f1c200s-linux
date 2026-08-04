@@ -1,0 +1,33 @@
+#!/bin/sh
+# Auto-up the iPhone's CDC-NCM link (usb0) for wired CarPlay.
+#
+# ipheth switches the phone into NCM mode and cdc_ncm creates usb0, but a new
+# netdev is DOWN -- and a down interface has no carrier and never gets an IPv6
+# link-local. Wired CarPlay puts that fe80:: address in CarPlayStartSession for
+# the phone to connect back to [fe80::..%usb0]:7000, so without this the app
+# just loops on "usb0 has no IPv6 link-local -- NCM link down" (seen on-target
+# 2026-08-04; the reference Pi had NetworkManager doing this for it).
+#
+# This image has no mdev/udev (device creation is devtmpfs-only), so the
+# kernel's own uevent helper is the hook -- CONFIG_UEVENT_HELPER=y with an
+# empty CONFIG_UEVENT_HELPER_PATH, i.e. present and unused.
+case "$1" in
+start)
+	# Registered HERE and not earlier on purpose: the kernel forks the helper
+	# for every uevent, and by S46 the boot-time storm is over -- so this costs
+	# nothing until something is actually plugged in.
+	echo /usr/bin/net-hotplug > /proc/sys/kernel/hotplug
+	# The helper only sees events from now on, so catch an interface that is
+	# already there (phone plugged in before/through boot).
+	for d in /sys/class/net/usb[0-9]*; do
+		[ -e "$d" ] || continue
+		ip link set "${d##*/}" up 2>/dev/null || ifconfig "${d##*/}" up 2>/dev/null
+	done
+	;;
+stop)
+	echo > /proc/sys/kernel/hotplug
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
