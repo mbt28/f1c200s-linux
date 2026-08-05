@@ -1,0 +1,95 @@
+usb: musb: sunxi: suniv F1C100s/F1C200s has only 3 TX + 3 RX endpoints
+
+The sunxi glue points suniv at sunxi_musb_hdrc_config_5eps, which
+declares endpoints 1-5 with a TX and an RX FIFO each. The hardware does
+not have them. F1C200s User Manual V1.2 section 7.7.2 states:
+
+  "Support up to 6 User-Configurable Endpoints
+   (TX Endpoint 1/2/3 and RX Endpoint 1/2/3)"
+
+i.e. three TX and three RX, not five of each. Section 7.7.3.1
+corroborates it independently: the dedicated-DMA request lines are
+DMA_REQ[0..2] for TX EP1-3 and DMA_REQ[4..6] for RX EP1-3 -- six lines,
+three per direction.
+
+The consequence is worse than a cosmetic over-count. musb_schedule()
+allocates a free dedicated endpoint before falling back to the shared
+musb->bulk_ep, so with RX 4 and 5 advertised it hands a QH to hardware
+that is not implemented. The URB is queued and simply never completes,
+and because the QH never lands on bulk_ep its qh->mux stays 0, so
+musb_bulk_nak_timeout() -- the rotation that exists precisely to stop
+"devices like Ethernet and serial adapters [that] keep reads posted at
+all times" from starving others -- never runs on it either.
+
+Observed on an F1C200s doing wired CarPlay, which needs three IN
+endpoints at once (usbfs mux IN, plus cdc_ncm bulk IN and interrupt IN).
+ftrace over 42 s, phone connected directly, 6.18.42:
+
+  endpoint  role                  enq   rx
+  ep5in     mux IN (iAP2)          27    0
+  ep4out    mux OUT                15    0
+  ep8in     cdc_ncm bulk IN         5    5
+  ep7in     cdc_ncm interrupt IN    0    0
+
+Zero completions on the mux while cdc_ncm was up -- and all five cdc_ncm
+URBs completed with len 0/16384, i.e. the link was carrying no traffic
+at all, so this is not bandwidth contention. Bringing usb0 down frees an
+RX endpoint and the mux immediately works. Register dumps taken during
+the failure show ep4 and ep5 completely unprogrammed, consistent with
+them not existing.
+
+Add a 3-endpoint FIFO table and config in the style of the existing
+4-endpoint one (H3/V3s) and point suniv at it. With the count declared
+honestly, musb_schedule() runs out of dedicated endpoints and falls back
+to bulk_ep as designed, where the NAK-timeout rotation applies.
+
+--- a/drivers/usb/musb/sunxi.c
++++ b/drivers/usb/musb/sunxi.c
+@@ -654,6 +654,21 @@
+ 	MUSB_EP_FIFO_SINGLE(4, FIFO_RX, 512),
+ };
+ 
++/*
++ * F1C100s/F1C200s OTG implements only 3 TX and 3 RX endpoints -- see the
++ * F1C200s User Manual V1.2 section 7.7.2 ("TX Endpoint 1/2/3 and RX Endpoint
++ * 1/2/3"), corroborated by 7.7.3.1, where the dedicated-DMA request lines are
++ * DMA_REQ[0..2] for TX EP1-3 and DMA_REQ[4..6] for RX EP1-3.
++ */
++static const struct musb_fifo_cfg sunxi_musb_mode_cfg_3eps[] = {
++	MUSB_EP_FIFO_SINGLE(1, FIFO_TX, 512),
++	MUSB_EP_FIFO_SINGLE(1, FIFO_RX, 512),
++	MUSB_EP_FIFO_SINGLE(2, FIFO_TX, 512),
++	MUSB_EP_FIFO_SINGLE(2, FIFO_RX, 512),
++	MUSB_EP_FIFO_SINGLE(3, FIFO_TX, 512),
++	MUSB_EP_FIFO_SINGLE(3, FIFO_RX, 512),
++};
++
+ static const struct musb_hdrc_config sunxi_musb_hdrc_config_5eps = {
+ 	.fifo_cfg       = sunxi_musb_mode_cfg_5eps,
+ 	.fifo_cfg_size  = ARRAY_SIZE(sunxi_musb_mode_cfg_5eps),
+@@ -674,6 +689,16 @@
+ 	.ram_bits	= SUNXI_MUSB_RAM_BITS,
+ };
+ 
++static const struct musb_hdrc_config sunxi_musb_hdrc_config_3eps = {
++	.fifo_cfg       = sunxi_musb_mode_cfg_3eps,
++	.fifo_cfg_size  = ARRAY_SIZE(sunxi_musb_mode_cfg_3eps),
++	.multipoint	= true,
++	.dyn_fifo	= true,
++	/* Two FIFOs per endpoint, plus ep_0. */
++	.num_eps	= (ARRAY_SIZE(sunxi_musb_mode_cfg_3eps) / 2) + 1,
++	.ram_bits	= SUNXI_MUSB_RAM_BITS,
++};
++
+ static int sunxi_musb_probe(struct platform_device *pdev)
+ {
+ 	struct musb_hdrc_platform_data	pdata;
+@@ -834,7 +859,7 @@
+ };
+ 
+ static const struct sunxi_musb_cfg suniv_f1c100s_musb_cfg = {
+-	.hdrc_config = &sunxi_musb_hdrc_config_5eps,
++	.hdrc_config = &sunxi_musb_hdrc_config_3eps,
+ 	.has_sram = true,
+ 	.has_reset = true,
+ 	.no_configdata = true,
