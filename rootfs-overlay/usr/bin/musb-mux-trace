@@ -1,0 +1,68 @@
+#!/bin/sh
+# musb-mux-trace [seconds] -- measure MUSB bulk-IN starvation during wired CarPlay.
+#
+# Wired CarPlay needs three IN endpoints of the SAME device live at once: the
+# usbfs mux IN (iAP2 control) plus cdc_ncm's bulk IN and interrupt IN. If the
+# host controller cannot service them together, the mux gets URBs submitted and
+# never completed and the session dies at "carkit open failed".
+#
+# The metric is completions on the mux IN endpoint while usb0 is up:
+#   enq  = musb_urb_enq  (submitted)
+#   rx   = musb_urb_rx   (completed)
+# PASS = non-zero rx on the mux IN endpoint. Baseline before the fix was 27/0.
+#
+# Runs the app itself so the phone is switched to config 6 and usb0 comes up.
+# Fully detached from the console on purpose: the app grabs the tty otherwise
+# and a serial session goes deaf until Ctrl-C (see the board-serial skill).
+#
+# Usage:
+#   musb-mux-trace           # 45 s capture, then print the table
+#   musb-mux-trace 90        # longer window
+#   RXQ=1 musb-mux-trace     # also clamp cdc_ncm's RX queue first (patch 0021)
+SECS=${1:-45}
+T=/sys/kernel/tracing
+SET=/tmp/musb-mux-cpw.txt
+LOG=/tmp/musb-mux-app.log
+
+[ -d $T/events/musb ] || mount -t tracefs nodev $T 2>/dev/null
+[ -d $T/events/musb ] || { echo "musb-mux-trace: no musb tracepoints (CONFIG_FTRACE?)"; exit 1; }
+
+# Optional: cap in-flight cdc_ncm RX URBs, then re-bind so usbnet recomputes
+# rx_qlen. Frees an RX endpoint, which is the other lever on the same theory.
+if [ -n "$RXQ" ] && [ -w /sys/module/usbnet/parameters/rx_qlen_max ]; then
+	echo "$RXQ" > /sys/module/usbnet/parameters/rx_qlen_max
+	for i in /sys/bus/usb/drivers/cdc_ncm/*:*; do
+		[ -e "$i" ] || continue
+		n=${i##*/}
+		echo "$n" > /sys/bus/usb/drivers/cdc_ncm/unbind 2>/dev/null
+		echo "$n" > /sys/bus/usb/drivers/cdc_ncm/bind 2>/dev/null
+	done
+	echo "rx_qlen_max=$(cat /sys/module/usbnet/parameters/rx_qlen_max)"
+fi
+
+sed 's|^protocol.*|protocol = carplay-wired|' /etc/fastcarplay/settings_drm.txt > $SET
+
+killall fastcarplay 2>/dev/null
+sleep 4
+echo 0 > $T/tracing_on
+echo > $T/trace
+echo 1 > $T/events/musb/musb_urb_enq/enable
+echo 1 > $T/events/musb/musb_urb_rx/enable
+echo 1 > $T/tracing_on
+
+setsid sh -c "exec fastcarplay $SET > $LOG 2>&1" < /dev/null > /dev/null 2>&1 &
+
+sleep "$SECS"
+echo 0 > $T/tracing_on
+cp $T/trace /tmp/musb-mux.trace
+
+echo "=== window ${SECS}s, usb0: $(cat /sys/class/net/usb0/operstate 2>/dev/null || echo absent) ==="
+printf '%-8s %6s %6s\n' endpoint enq rx
+# Endpoint names come from the trace itself, so this survives renumbering.
+for ep in $(grep -oE 'ep[0-9]+(in|out)' /tmp/musb-mux.trace | sort -u); do
+	e=$(grep -c "musb_urb_enq.*dev[0-9] $ep," /tmp/musb-mux.trace)
+	r=$(grep -c "musb_urb_rx.*dev[0-9] $ep," /tmp/musb-mux.trace)
+	printf '%-8s %6s %6s\n' "$ep" "$e" "$r"
+done
+echo "--- app ---"
+grep -aE 'carkit|iAP2|MFi|identification|CarPlayStart|NCM' $LOG | tail -4
