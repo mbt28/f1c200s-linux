@@ -1,0 +1,65 @@
+usbnet: allow capping rx_qlen, to unstarve the MUSB shared endpoint
+
+On the F1C200s (MUSB host) wired CarPlay needs two bulk-IN endpoints of
+the SAME device live at once: the iAP2 control channel over the usbfs
+mux (ep5in) and the CarPlay AV session over cdc_ncm/usb0 (ep8in). The
+controller will not service both -- ftrace on 6.18.42 (phone connected
+directly, no hub) shows the mux completely starved while NCM is up:
+
+  endpoint  role                 enq   rx
+  ep5in     mux IN (iAP2)         27    0     <- zero completions
+  ep8in     cdc_ncm bulk IN        5    5
+
+The five ep8in URBs are exactly usbnet's rx_qlen for this device:
+MAX_QUEUE_MEMORY / rx_urb_size = 91080 / 16384 = 5, with cdc_ncm setting
+rx_max = 16384. Every one of them completed with len 0/16384 -- the NCM
+link was carrying no traffic at all -- so this is not bandwidth
+contention: five idle but permanently-posted URBs are enough to block
+the other endpoint outright.
+
+musb_host.c already names this failure mode ("Devices like Ethernet and
+serial adapters keep reads posted at all times, which will starve other
+devices without this logic") for its NAK-timeout rotation, which is
+gated on qh->mux == 1 and so only applies to QHs that land on the shared
+bulk_ep.
+
+Add an rx_qlen_max module parameter (0 = unchanged, the default, so
+stock behaviour is untouched) applied in usbnet_update_max_qlen(), which
+is the single point where rx_qlen is (re)computed. Writable at 0644 so
+it can be tuned at runtime via
+/sys/module/usbnet/parameters/rx_qlen_max and picked up by re-binding
+the device, or set on the kernel command line as usbnet.rx_qlen_max=N
+(usbnet is built-in here).
+
+This is primarily a diagnostic lever for confirming the starvation
+hypothesis, but it is also a plausible mitigation on this board: 5 x
+16 KB of NCM RX buffering is not defensible on 64 MiB of RAM.
+
+--- a/drivers/net/usb/usbnet.c
++++ b/drivers/net/usb/usbnet.c
+@@ -66,6 +66,16 @@
+ module_param (msg_level, int, 0);
+ MODULE_PARM_DESC (msg_level, "Override default message level");
+ 
++/*
++ * Cap on the number of RX URBs kept in flight. 0 keeps the computed
++ * value. Small values trade throughput for not monopolising a host
++ * controller that cannot service several bulk-IN endpoints at once
++ * (MUSB on suniv): perpetually-posted reads otherwise starve them.
++ */
++static int rx_qlen_max;
++module_param(rx_qlen_max, int, 0644);
++MODULE_PARM_DESC(rx_qlen_max, "Cap on in-flight RX URBs (0 = no cap)");
++
+ /*-------------------------------------------------------------------------*/
+ 
+ static const char * const usbnet_event_names[] = {
+@@ -386,6 +396,8 @@
+ insanity:
+ 		dev->rx_qlen = dev->tx_qlen = 4;
+ 	}
++	if (rx_qlen_max > 0 && dev->rx_qlen > rx_qlen_max)
++		dev->rx_qlen = rx_qlen_max;
+ }
+ EXPORT_SYMBOL_GPL(usbnet_update_max_qlen);
+ 
