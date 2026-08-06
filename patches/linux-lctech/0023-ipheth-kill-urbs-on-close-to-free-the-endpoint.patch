@@ -1,0 +1,51 @@
+usb: ipheth: kill in-flight URBs on close, freeing the endpoint
+
+ipheth_close() stops the queue and cancels the carrier work but never
+drops the URBs it has posted, so an administratively down interface
+keeps its RX URB in flight and the endpoint claimed. Only unbind or
+disconnect -- which reach ipheth_kill_urbs() -- release it.
+
+That is a leak in its own right: an RX URB outliving the netdev being
+down. On the F1C200s it also blocks wired CarPlay outright. The MUSB
+host cannot service the iPhone's usbmux bulk-IN endpoint (EP 0x85) while
+ipheth holds an RX URB on the same device; a standalone usbfs probe with
+the phone in USB config 6 and usb0 up gets no mux VERSION reply at all
+with ipheth bound, and replies reproducibly after
+"echo 1-1:6.2 > /sys/bus/usb/drivers/ipheth/unbind". Rebinding kills it
+again. cdc_ncm's usb0 can stay up throughout, so it is specifically
+ipheth, not NCM traffic.
+
+ipheth does not use the usbnet framework -- it manages a single RX URB
+itself, submitted in ipheth_open() and resubmitted every second by
+ipheth_carrier_check_work(). So capping usbnet's rx_qlen does nothing
+here, and "ip link set <if> down" is currently not enough either.
+
+Reuse the existing ipheth_kill_urbs() helper rather than open-coding.
+Order matters: the carrier work is what resubmits RX, so it must be
+cancelled first, which the existing code already does. ipheth_open()
+resubmits, so bringing the interface back up still works.
+
+With this, taking the interface down is sufficient to free the endpoint
+-- no driver unbinding, and nothing that has to re-fire each time the
+phone re-enumerates on the config-6 switch.
+
+Not yet built or tested on hardware. The decisive check is a mux
+VERSION reply, or non-zero musb_urb_rx completions on the mux IN
+endpoint, while usb0 is up and ipheth's interface is down.
+
+--- a/drivers/net/usb/ipheth.c
++++ b/drivers/net/usb/ipheth.c
+@@ -500,6 +500,13 @@
+ 
+ 	netif_stop_queue(net);
+ 	cancel_delayed_work_sync(&dev->carrier_work);
++	/*
++	 * Drop the URBs the interface had in flight. Without this the RX URB
++	 * stays posted while the netdev is down, keeping the endpoint claimed;
++	 * ipheth_open() resubmits, so reopening still works. Order matters --
++	 * the carrier work is what resubmits RX, so it must be cancelled first.
++	 */
++	ipheth_kill_urbs(dev);
+ 	return 0;
+ }
+ 
