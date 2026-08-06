@@ -2,21 +2,45 @@
 # Kernel uevent helper (registered in /proc/sys/kernel/hotplug by S46usb0-up).
 #
 # The kernel forks this for EVERY uevent, so it must decide fast and exit: the
-# three tests below reject everything that is not a network interface being
+# two tests below reject everything that is not a network interface being
 # added, before any real work.
 #
-# Job: bring up the iPhone's CDC-NCM interface the instant cdc_ncm registers
-# it. A fresh netdev is DOWN, and while it is down there is no carrier and no
-# IPv6 link-local -- but wired CarPlay hands the phone exactly that fe80::
-# address in CarPlayStartSession, so the app otherwise loops forever on
-# "usb0 has no IPv6 link-local -- NCM link down". This has to be event-driven,
-# not a one-shot at boot: the phone re-enumerates when the app switches it to
-# USB config 6, which destroys and recreates usb0 mid-session.
+# Two jobs, both driven by the iPhone appearing on USB:
+#
+# 1. Bring UP the CDC-NCM interface the instant cdc_ncm registers it. A fresh
+#    netdev is DOWN, and while it is down there is no carrier and no IPv6
+#    link-local -- but wired CarPlay hands the phone exactly that fe80::
+#    address in CarPlayStartSession, so the app otherwise loops forever on
+#    "usb0 has no IPv6 link-local -- NCM link down".
+#
+# 2. Take DOWN whatever ipheth registers. ipheth's probe is required -- it
+#    sends the vendor control request that switches the phone into NCM mode,
+#    which is what makes usb0 appear at all -- but once it has done that, its
+#    perpetually-posted RX URB keeps a MUSB endpoint claimed and starves the
+#    usbmux bulk-IN endpoint the CarPlay iAP2 control channel needs. Bringing
+#    the interface down calls ipheth_close(), which (with patch 0023) kills
+#    the URB and frees the endpoint. Matched on the DRIVER, not the name: this
+#    interface is called eth0 when nothing else claims that name, which would
+#    otherwise collide with the RTL8152 dev-loop NIC in S41eth-dev.
+#
+# Both have to be event-driven rather than one-shot at boot: the phone
+# re-enumerates when the app switches it to USB config 6, which destroys and
+# recreates these interfaces mid-session.
 [ "$SUBSYSTEM" = net ] || exit 0
 [ "$ACTION" = add ] || exit 0
+
 case "$INTERFACE" in
 usb[0-9]*)
 	ip link set "$INTERFACE" up 2>/dev/null || ifconfig "$INTERFACE" up 2>/dev/null
+	exit 0
+	;;
+esac
+
+# Not an NCM link -- is it ipheth's? DEVPATH is relative to /sys.
+drv=$(readlink "/sys${DEVPATH}/device/driver" 2>/dev/null)
+case "${drv##*/}" in
+ipheth)
+	ip link set "$INTERFACE" down 2>/dev/null || ifconfig "$INTERFACE" down 2>/dev/null
 	;;
 esac
 exit 0
