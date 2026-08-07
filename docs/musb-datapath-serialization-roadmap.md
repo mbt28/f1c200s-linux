@@ -1,9 +1,18 @@
 # Roadmap & Test Plan — serialize the suniv MUSB shared-FIFO datapath
 
-Status: **PLAN** (2026-07-13). Fixes the RX-DMA↔TX-PIO collision that corrupts
-wired-AA video (`TLS bad record mac`). Companion to the bounded-flush fix
-(shipped, `1a450c9`) and the separate kernel CMA leak (open, see
-`docs/` / memory `cedrus-cma-leak-kernel-side`).
+Status: **PARTLY SUPERSEDED** (2026-08-07). The problem statement (§1), the
+reference survey, the reproducer and the parking notes (§4, §6, §7) still hold
+and are worth reading. **The fix in §2 — cooperative TX-PIO deferral — is not
+the approach we are taking.** It was re-derived, scored against three
+alternatives and placed third; a deferral design needs a kick, and a kick needs
+a restart edge and a watchdog on which correctness depends. See
+`musb-dma-fix-plan.md` for the current plan (reclaim-on-touch: let the CPU take
+the datapath back rather than trying to stop it from asking).
+
+Original header: **PLAN** (2026-07-13). Fixes the RX-DMA↔TX-PIO collision that
+corrupts wired-AA video (`TLS bad record mac`). Companion to the bounded-flush
+fix (shipped, `1a450c9`) and the kernel CMA leak (since FIXED — patch 0020,
+`a2408bc`).
 
 ## 1. Problem & root cause (established)
 

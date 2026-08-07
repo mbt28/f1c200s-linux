@@ -25,7 +25,9 @@ stays 1 long after the lock that started it was dropped.
 
 See `musb-suniv-hardware-facts.md` for the register-level evidence, including
 Allwinner's own admission that hardware CPU/DMA arbitration exists only on later
-ICs than this one.
+ICs than this one, and `musb-dma-fix-plan.md` for the plan to re-enable DDMA
+safely — which starts by measuring whether PIO is fast enough that we should
+simply delete the DMA backend.
 
 The rest of this document records the investigation that got here -- what was
 ruled out and, importantly, the measurement mistake that produced two false
