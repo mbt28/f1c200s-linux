@@ -1,0 +1,53 @@
+musb: host - fall back to PIO when the DMA backend declines an RX transfer
+
+musb_host_rx(): when musb_rx_dma_in_inventra_cppi41() declines the RX DMA
+(channel_program() returns 0 for a short or misaligned transfer) the helper
+releases hw_ep->rx_channel, but the caller's local `dma` still pointed at the
+released channel, so the `if (!dma)` PIO block was skipped and the packet was
+dropped -- the AA session stalled after "Accessory linked". Refresh the local
+`dma` (now NULL) so RX falls through to PIO, mirroring the TX fallback.
+
+This is an upstream bug, not a sunxi one: no in-tree DMA backend ever refuses a
+transfer, which is why it survived. sunxi_dma is the first that does, so it is
+the first to hit it. Worth submitting on its own.
+
+This patch used to carry two more changes; both are removed here.
+
+  - A bounded (4-retry) musb_h_tx_flush_fifo() replacing the stock
+    1000 x mdelay(1) spin. It was a build-time #if, NOT gated on use_dma, so it
+    also altered the use_dma=0 path we have been calling the "proven-safe PIO
+    baseline" -- every A/B measurement taken in this workstream was against
+    non-stock code. It is also unsound on its own terms: it returns with
+    FIFONOTEMPTY still set while TXPKTRDY is armed over stale bytes. With
+    use_dma=0 the stock loop never spins, because the only thing that kept
+    FIFONOTEMPTY set was a DMA holding VEND0.BUS_SEL.
+
+  - A raw writeb(0, musb->mregs + 0x43) in musb_cleanup_urb(). A hardcoded
+    sunxi register offset in a file linked into eight different glue layers,
+    and it never did what its comment claimed: channel_abort() already cleared
+    VEND0 unconditionally a few lines earlier.
+
+Both belong in the sunxi glue, and the datapath-serialisation plan puts them
+there. See docs/musb-dma-fix-plan.md.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/drivers/usb/musb/musb_host.c
++++ b/drivers/usb/musb/musb_host.c
+@@ -1924,8 +1924,14 @@
+ 			if (musb_rx_dma_in_inventra_cppi41(c, hw_ep, qh, urb,
+ 							   xfer_len, iso_err))
+ 				goto finish;
+-			else
+-				dev_err(musb->controller, "error: rx_dma failed\n");
++			/*
++			 * The DMA backend declined this RX (e.g. a short
++			 * transfer the sunxi engine rejects): the helper has
++			 * already released rx_channel, so drop our stale local
++			 * ref and fall through to the PIO path below instead of
++			 * losing the packet.  Mirrors the TX PIO fallback.
++			 */
++			dma = hw_ep->rx_channel;
+ 		}
+ 
+ 		if (!dma) {

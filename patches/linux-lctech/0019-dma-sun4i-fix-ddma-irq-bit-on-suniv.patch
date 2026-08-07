@@ -18,6 +18,12 @@ Map DDMA pchans to the high 16 bits explicitly in both the enable path and the
 handler's reverse lookup. A10 behaviour is unchanged (ndma=8 -> DDMA still at
 bit 16).
 
+Bound the reverse lookup too. The register has room for 8 channels per half,
+but suniv implements 4 + 4, so bits 24+ decode to pchan indices 8-11 against an
+8-entry array. Those bits should never be raised -- but reading past the end of
+a devm_kcalloc'd array on the strength of that is not a bet worth taking in a
+hardirq, and the value read becomes a pchan->vchan pointer.
+
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
 --- a/drivers/dma/sun4i-dma.c
@@ -63,7 +69,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
  
  	writel_relaxed(reg, priv->base + SUN4I_DMA_IRQ_ENABLE_REG);
  
-@@ -1132,7 +1147,13 @@
+@@ -1132,7 +1147,23 @@
  	free_room = 0;
  
  	for_each_set_bit(bit, &pendirq, 32) {
@@ -73,6 +79,16 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +		 */
 +		int pchan_idx = (bit < 16) ? (bit >> 1) :
 +			priv->cfg->ndma_nr_max_channels + ((bit - 16) >> 1);
++
++		/*
++		 * The register has room for 8 channels per half but the SoC
++		 * need not implement them: suniv has 4 + 4, so bits 24+ map
++		 * past the end of the 8-entry pchans array. Those bits should
++		 * never be raised; do not index on the hardware's good
++		 * behaviour.
++		 */
++		if (pchan_idx >= priv->cfg->dma_nr_max_channels)
++			continue;
 +
 +		pchan = &pchans[pchan_idx];
  		vchan = pchan->vchan;
