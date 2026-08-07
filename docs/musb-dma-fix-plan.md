@@ -208,6 +208,15 @@ Three things this fixes, all raised by judges and all real:
 
 ### Stage 0 — make the baseline honest, and decide whether to continue *(ship immediately; no new patches)*
 
+> **Patch work DONE 2026-08-07.** `0018` is now
+> `0018-musb-host-fall-back-to-pio-when-the-dma-backend-declines-rx.patch`
+> (RX-PIO fallback only, −78 lines) and `0019` carries the bounds check.
+> Both regenerated with `diff -u` against pristine 6.18.42 sources and verified
+> to apply in series with no rejects; `musb_h_tx_flush_fifo()` is back to the
+> stock `retries = 1000` and `musb_host.c` has zero references to `0x43`.
+> **The measurement below is the remaining half of this stage, and it needs the
+> board.**
+
 **Do:** trim `0018-musb-host-suniv-dma-rx-fallback-and-tx-flush.patch` to hunk 1 only. Delete hunk 2 (the bounded 4-retry TX flush: it returns with `FIFONOTEMPTY` still set and `TXPKTRDY` armed over stale bytes — a data-integrity hazard in its own right — and being a build-time `#if` it *also* modified the `use_dma=0` "proven-safe PIO baseline", so every A/B measurement this workstream has ever taken was against non-stock code). Delete hunk 3 (raw `writeb(0, musb->mregs + 0x43)` in `musb_cleanup_urb()`, a hardcoded sunxi offset in a file linked into eight glues, which never did what its comment claimed since `channel_abort()` cleared VEND0 unconditionally a few lines earlier). Keep `musb_hdrc.use_dma=0`. Add the 2-line bounds check to 0019 (`if (pchan_idx >= priv->cfg->dma_nr_max_channels) continue;` — bit 24 indexes past the end of an 8-entry array on suniv).
 
 **Files:** `patches/linux-lctech/0018-*.patch` (−78), `0019-*.patch` (+3).
