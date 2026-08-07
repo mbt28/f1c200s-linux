@@ -1,6 +1,42 @@
 # Plan — serialising the suniv MUSB shared FIFO datapath
 
-Status: **PLAN**, 2026-08-07. Kernel 6.18.42, Lctech Pi F1C200s.
+Status: **STAGE 0 MEASURED — the answer is NO-GO.** 2026-08-07, kernel 6.18.42,
+Lctech Pi F1C200s. Hardware A/B, 64 MiB read from a SanDisk 0781:5583 attached
+directly, app stopped, caches dropped, one reboot between the two runs:
+
+| | PIO (`use_dma=0`) | DDMA (`use_dma=1`) | |
+| --- | --- | --- | --- |
+| throughput | **10.05 MiB/s (84.3 Mbps)** | 3.28 MiB/s (27.5 Mbps) | DMA **3.1× slower** |
+| CPU sys+irq+softirq | **10.03 cs/MiB** | 29.17 cs/MiB | DMA **2.9× more expensive** |
+| musb irqs | 2074/MiB | 2079/MiB | **unchanged** |
+| ddma irqs | 0 | 2062/MiB | **all additive** |
+
+The mechanism is in the last two rows. DDMA does not remove a single MUSB
+interrupt — it adds a second interrupt per 512-byte packet, plus a
+`prep_slave_sg`, a submit, an issue and the claim/release bookkeeping, to
+replace a FIFO copy that is only ~128 load/store pairs. It loses on both axes
+at once.
+
+**This kills Stages 1–4, and no arbiter design can rescue it.** The ceiling of
+reclaim-on-touch is one 512-byte packet per claim (§5 Stage 4) — which is
+exactly the configuration measured above. Serialisation only *adds* cost on top,
+so 29.17 cs/MiB is a **lower bound** for any correct DMA design. The measured
+DMA run is the unserialised path, i.e. the most favourable case DMA will ever
+get, and it still loses by 3×.
+
+The plan's own exit criterion applies: delete `sunxi_dma.c`, drop patches
+0016/0017, close the workstream. **Keep 0019** — the plan says drop it, but that
+is wrong: it is a genuine sun4i-dma bugfix that any suniv DDMA client needs,
+including `feature/spi-ddma-ahb`.
+
+Caveat, stated plainly: this is storage load without a phone attached, so the
+video/mux contention case was not measured. It does not change the conclusion —
+the per-packet economics are the same, and contention can only make DMA worse
+(refusals, gate spins). Everything below is preserved as the design record.
+
+---
+
+Original status: **PLAN**, 2026-08-07. Kernel 6.18.42, Lctech Pi F1C200s.
 
 Supersedes the cooperative-deferral approach in
 `musb-datapath-serialization-roadmap.md` §2; that document's reference survey,

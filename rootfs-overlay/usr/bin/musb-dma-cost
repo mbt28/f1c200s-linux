@@ -79,8 +79,10 @@ cpu_busy() {
 	awk '/^cpu /{print $4+$7+$8}' /proc/stat
 }
 
-# Interrupt totals for the two controllers on the path. Names come from the
-# DT node addresses: 1c13000 = MUSB, 1c02000 = the DMA controller.
+# Interrupt totals for the two controllers on the path. Match the names as
+# /proc/interrupts actually spells them: the DMA controller is named by DT node
+# address (1c02000.dma-controller) but MUSB is not -- it registers as
+# "musb-hdrc.1.auto". Matching 1c13000 silently reports 0 for every run.
 irq_count() {
 	awk -v pat="$1" '$0 ~ pat {s=0; for (i=2; i<=NF; i++) if ($i ~ /^[0-9]+$/) s+=$i; print s; exit}' \
 		/proc/interrupts
@@ -128,7 +130,7 @@ echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
 # --- the measured window ---------------------------------------------------
 c0=$(cpu_busy)
-m0=$(irq_count 1c13000)
+m0=$(irq_count musb-hdrc)
 d0=$(irq_count 1c02000)
 r0=$(rt_thread_ticks)
 t0f=$(cut -d' ' -f1 /proc/uptime)
@@ -138,7 +140,7 @@ dd if="$DEV" of=/dev/null bs=64k count=$(( MIB * 16 )) 2>/tmp/musb-cost-dd.log
 t1f=$(cut -d' ' -f1 /proc/uptime)
 r1=$(rt_thread_ticks)
 d1=$(irq_count 1c02000)
-m1=$(irq_count 1c13000)
+m1=$(irq_count musb-hdrc)
 c1=$(cpu_busy)
 
 # --- report ----------------------------------------------------------------
@@ -155,10 +157,10 @@ grep -E 'copied|bytes' /tmp/musb-cost-dd.log 2>/dev/null | tail -1
 awk -v e="$elapsed" -v m="$MIB" -v c="$cpu" -v mi="$musbirq" -v di="$dmairq" -v rt="$rt" \
     -v mode="$MODE" -v v="$VIDEO" 'BEGIN {
 	printf "RESULT mode=%s video=%s  %.2f s  %.2f MiB/s  %.1f Mbps\n", mode, v, e, m/e, m*8.388608/e
-	printf "  cpu system+irq+softirq : %d cs  (%.1f%% of window, %.2f cs/MiB)\n", c, e>0?c/e:0, c/m
-	printf "  musb irqs (1c13000)    : %d  (%.0f/MiB)\n", mi, mi/m
+	printf "  cpu system+irq+softirq : %d cs  (%.1f%% of window, %.2f cs/MiB)\n", c, (e>0?c/e:0), c/m
+	printf "  musb irqs (musb-hdrc)  : %d  (%.0f/MiB)\n", mi, mi/m
 	printf "  ddma irqs (1c02000)    : %d  (%.0f/MiB)\n", di, di/m
-	printf "  app RT thread utime+st : %d cs%s\n", rt, rt==0 ? "  (no RT thread found -- app not running?)" : ""
+	printf "  app RT thread utime+st : %d cs%s\n", rt, (rt==0 ? "  (no RT thread found -- app not running?)" : "")
 }'
 
 if [ "$VIDEO" = 1 ]; then
