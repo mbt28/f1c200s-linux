@@ -1,9 +1,35 @@
-# Wired CarPlay: the usbmux bulk-IN endpoint returns nothing
+# Wired CarPlay: MUSB silently drops bulk-OUT packets in DMA mode
 
-Status 2026-08-06: **unresolved.** Three hypotheses tested and refuted on
-hardware. This records what is measured, what is ruled out, and the one
-measurement mistake that produced two false "fixed" conclusions -- so nobody
-repeats it.
+**Status 2026-08-07: RESOLVED (cause found, permanent fix still to write).**
+
+The cause is the shared FIFO datapath, not the mux endpoint. With MUSB DMA
+enabled the controller completes bulk-OUT transfers that the device never
+receives: userspace gets a full byte count, no error, and the iPhone reports
+usbmux sequence gaps. usbmux has no retransmission, so one silent drop desyncs
+the link permanently and the session dies at `carkit open failed`.
+
+Booting with **`musb_hdrc.use_dma=0`** (PIO only -- `musb_core.c` gates
+`musb_dma_controller_create()` on that parameter) eliminates the loss entirely,
+and a complete wired CarPlay session then works: carkit TLS iAP2 channel up,
+iAP2 link NORMAL, MFi authentication, hardware H.264.
+
+Mechanism, in one line: `VEND0` bit 0 (`BUS_SEL`) is a GLOBAL mux between CPU
+and DMA access to a single shared FIFO RAM, and per both vendor manuals "any
+operation of FIFO ports by CPU host is unpredictable" while it is 1. Our DDMA
+backend guards this by masking MUSB interrupts, which only stops
+interrupt-context FIFO ops -- a bulk-OUT URB submitted from PROCESS context
+(`musb_urb_enqueue` -> `musb_schedule` -> `musb_start_urb` -> `musb_ep_program`
+-> `musb_write_fifo`) walks straight past the guard while a cdc_ncm RX DMA owns
+the datapath. `musb->lock` does not help: the DMA is asynchronous, so BUS_SEL
+stays 1 long after the lock that started it was dropped.
+
+See `musb-suniv-hardware-facts.md` for the register-level evidence, including
+Allwinner's own admission that hardware CPU/DMA arbitration exists only on later
+ICs than this one.
+
+The rest of this document records the investigation that got here -- what was
+ruled out and, importantly, the measurement mistake that produced two false
+"fixed" conclusions. Both are still worth reading before touching this area.
 
 ## The symptom
 
@@ -63,7 +89,18 @@ lines in 7.7.3.1) and the driver still declares five of each in mainline and in
 linux-7.1.y. 0023 fixes a genuine URB leak (an RX URB outliving the netdev being
 down) and is defensible upstream on its own merits. Neither fixes this.
 
-## Open question: app or host?
+## Endpoint count: revised 2026-08-07
+
+The 0022 row above says "correct per the User Manual". That is still the best
+evidence for the F1C200s specifically, but the F1C600 manual documents the SAME
+block with 4 TX + 4 RX and 4 KB of FIFO RAM (vs 3+3 and 2 KB here). So this IP
+ships in several strap configurations and mainline's 5 matches none of them.
+Keep 0022, but treat the count as documented-not-proven --
+`musb-suniv-hardware-facts.md` has the full variant table and the reason the
+silicon cannot be interrogated (EPINFO/RAMINFO are not in the relocated sunxi
+register map, and CONFIGDATA returns a hardcoded 0xde).
+
+## Open question: app or host? -- ANSWERED
 
 Every measurement so far drives the mux through FastCarPlay, which cannot
 distinguish "the host controller will not service the endpoint" from "the app is
@@ -71,9 +108,11 @@ asking wrongly". The app-side notes report a standalone usbfs probe that **did**
 get VERSION replies with ipheth unbound; the equivalent through the app gets
 nothing. That contradiction is the most valuable thing left to resolve.
 
-`cp-mux-probe` (package/cp-mux-probe) exists for this: it claims the mux
-interface itself, sends a usbmux VERSION packet and reports whether the phone
-replies, with no app involved.
+`cp-mux-probe` (package/cp-mux-probe) answered this: with the app stopped it
+claims the mux interface, sends a usbmux VERSION packet and gets a valid 20-byte
+reply on the FIRST read, with usb0 up and ipheth bound. So the host path was
+never broken and the mux was never starved -- which is what redirected the
+investigation to the OUT direction and found the real bug.
 
 ```sh
 killall fastcarplay          # the app holds the interface via usbfs
