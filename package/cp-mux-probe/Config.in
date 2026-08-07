@@ -1,6 +1,5 @@
 config BR2_PACKAGE_CP_MUX_PROBE
 	bool "cp-mux-probe"
-	depends on BR2_PACKAGE_LIBUSB
 	help
 	  Standalone usbmux VERSION probe for the iPhone, with no FastCarPlay
 	  involved. Claims the mux interface (ff/fe, EP 0x04 OUT / 0x85 IN) in
@@ -12,5 +11,4 @@ config BR2_PACKAGE_CP_MUX_PROBE
 	  measurement so far has been taken through the app and cannot tell
 	  those apart. See docs/musb-mux-starvation.md.
 
-comment "cp-mux-probe needs libusb"
-	depends on !BR2_PACKAGE_LIBUSB
+	  Speaks usbfs directly, so it depends on nothing but libc.

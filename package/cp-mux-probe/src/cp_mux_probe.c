@@ -12,7 +12,11 @@
 // version 0/1 -- the magic/seq fields only appear from version 2 -- followed by
 // a 12-byte body (major, minor, padding), all big-endian.
 //
-//   Usage: cp-mux-probe [-t timeout_ms] [-r reads] [-s readsize]
+// Talks to usbfs directly rather than through libusb: no library dependency, so
+// it cross-compiles against nothing but libc and can be dropped onto a board
+// over serial.
+//
+//   Usage: cp-mux-probe [-t timeout_ms] [-r reads] [-s readsize] [-i iface]
 //
 // Exit 0 = the phone replied. Non-zero = it did not, and the message says how
 // far it got, so a failure distinguishes claim/permission problems from a
@@ -20,12 +24,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <dirent.h>
+#include <sys/ioctl.h>
 #include <arpa/inet.h>
-#include <libusb-1.0/libusb.h>
+#include <linux/usbdevice_fs.h>
 
-#define APPLE_VID	0x05ac
+#define APPLE_VID	"05ac"
 #define MUX_IFACE	1	/* ff/fe in config 6 */
 #define EP_OUT		0x04
 #define EP_IN		0x85
@@ -42,6 +51,57 @@ struct version_body {
 	uint32_t padding;
 } __attribute__((packed));
 
+static int read_sysfs(const char *dir, const char *attr, char *out, size_t n)
+{
+	char path[512];
+	int fd;
+	ssize_t r;
+
+	snprintf(path, sizeof(path), "/sys/bus/usb/devices/%s/%s", dir, attr);
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	r = read(fd, out, n - 1);
+	close(fd);
+	if (r <= 0)
+		return -1;
+	out[r] = 0;
+	while (r > 0 && (out[r - 1] == '\n' || out[r - 1] == ' '))
+		out[--r] = 0;
+	return 0;
+}
+
+/* Find the Apple device and return its usbfs path plus the config it is in. */
+static int find_phone(char *path, size_t pathn, int *cfg, char *devdir, size_t ddn)
+{
+	DIR *d = opendir("/sys/bus/usb/devices");
+	struct dirent *e;
+	char vid[32], bus[32], dev[32], cfgs[32];
+	int found = 0;
+
+	if (!d)
+		return -1;
+	while ((e = readdir(d))) {
+		if (e->d_name[0] == '.' || strchr(e->d_name, ':'))
+			continue;	/* skip interfaces, only whole devices */
+		if (read_sysfs(e->d_name, "idVendor", vid, sizeof(vid)) < 0)
+			continue;
+		if (strcmp(vid, APPLE_VID) != 0)
+			continue;
+		if (read_sysfs(e->d_name, "busnum", bus, sizeof(bus)) < 0 ||
+		    read_sysfs(e->d_name, "devnum", dev, sizeof(dev)) < 0)
+			continue;
+		if (read_sysfs(e->d_name, "bConfigurationValue", cfgs, sizeof(cfgs)) == 0)
+			*cfg = atoi(cfgs);
+		snprintf(path, pathn, "/dev/bus/usb/%03d/%03d", atoi(bus), atoi(dev));
+		snprintf(devdir, ddn, "%s", e->d_name);
+		found = 1;
+		break;
+	}
+	closedir(d);
+	return found ? 0 : -1;
+}
+
 static void hexdump(const unsigned char *p, int n)
 {
 	int i;
@@ -51,77 +111,63 @@ static void hexdump(const unsigned char *p, int n)
 
 int main(int argc, char **argv)
 {
-	int timeout = 1000, reads = 5, readsize = 4096, opt;
-	libusb_context *ctx = NULL;
-	libusb_device_handle *h = NULL;
-	libusb_device **list = NULL;
-	struct libusb_device_descriptor dd;
+	int timeout = 1000, reads = 5, readsize = 4096, iface = MUX_IFACE, opt;
+	char path[256], devdir[256];
+	int cfg = -1, fd, rc, i;
 	unsigned char buf[65536];
 	unsigned char pkt[sizeof(struct mux_hdr) + sizeof(struct version_body)];
 	struct mux_hdr *hdr = (struct mux_hdr *)pkt;
 	struct version_body *vb = (struct version_body *)(pkt + sizeof(*hdr));
-	ssize_t ndev;
-	int i, rc, transferred, detached = 0, found = 0;
+	struct usbdevfs_bulktransfer bt;
+	struct usbdevfs_disconnect_claim dc;
+	int claimed = 0;
 
-	while ((opt = getopt(argc, argv, "t:r:s:")) != -1) {
+	while ((opt = getopt(argc, argv, "t:r:s:i:")) != -1) {
 		switch (opt) {
 		case 't': timeout = atoi(optarg); break;
 		case 'r': reads = atoi(optarg); break;
 		case 's': readsize = atoi(optarg); break;
+		case 'i': iface = atoi(optarg); break;
 		default:
-			fprintf(stderr, "usage: %s [-t ms] [-r reads] [-s size]\n", argv[0]);
+			fprintf(stderr, "usage: %s [-t ms] [-r reads] [-s size] [-i iface]\n", argv[0]);
 			return 2;
 		}
 	}
 	if (readsize > (int)sizeof(buf))
 		readsize = sizeof(buf);
 
-	if ((rc = libusb_init(&ctx)) < 0) {
-		fprintf(stderr, "libusb_init: %s\n", libusb_error_name(rc));
+	if (find_phone(path, sizeof(path), &cfg, devdir, sizeof(devdir)) < 0) {
+		fprintf(stderr, "cp-mux-probe: no Apple device found (plugged in directly?)\n");
+		return 1;
+	}
+	printf("device %s (sysfs %s), configuration %d%s\n", path, devdir, cfg,
+	       cfg == 6 ? "" : "  <-- expected 6 for CarPlay");
+
+	fd = open(path, O_RDWR);
+	if (fd < 0) {
+		fprintf(stderr, "open %s: %s\n", path, strerror(errno));
 		return 1;
 	}
 
-	ndev = libusb_get_device_list(ctx, &list);
-	for (i = 0; i < ndev; i++) {
-		if (libusb_get_device_descriptor(list[i], &dd) < 0)
-			continue;
-		if (dd.idVendor != APPLE_VID)
-			continue;
-		found = 1;
-		rc = libusb_open(list[i], &h);
-		if (rc < 0) {
-			fprintf(stderr, "open %04x:%04x: %s\n", dd.idVendor,
-				dd.idProduct, libusb_error_name(rc));
-			h = NULL;
-			continue;
-		}
-		printf("device %04x:%04x on bus %d addr %d\n", dd.idVendor, dd.idProduct,
-		       libusb_get_bus_number(list[i]), libusb_get_device_address(list[i]));
-		break;
+	/* Take the interface even if a kernel driver holds it. */
+	memset(&dc, 0, sizeof(dc));
+	dc.interface = iface;
+	dc.flags = USBDEVFS_DISCONNECT_CLAIM_EXCEPT_DRIVER;
+	strncpy(dc.driver, "usbfs", sizeof(dc.driver) - 1);
+	if (ioctl(fd, USBDEVFS_DISCONNECT_CLAIM, &dc) == 0) {
+		claimed = 1;
+	} else {
+		unsigned int n = iface;
+		if (ioctl(fd, USBDEVFS_CLAIMINTERFACE, &n) == 0)
+			claimed = 1;
 	}
-	if (!h) {
-		fprintf(stderr, found ? "cp-mux-probe: found an Apple device but could not open it\n"
-				      : "cp-mux-probe: no Apple device found (plugged in? config 6?)\n");
-		libusb_free_device_list(list, 1);
-		libusb_exit(ctx);
+	if (!claimed) {
+		fprintf(stderr, "claim interface %d: %s\n", iface, strerror(errno));
+		fprintf(stderr, "  (is fastcarplay still running? it holds this interface)\n");
+		close(fd);
 		return 1;
 	}
-
-	int cfg = 0;
-	if (libusb_get_configuration(h, &cfg) == 0)
-		printf("configuration: %d%s\n", cfg, cfg == 6 ? "" : "  (expected 6 for CarPlay)");
-
-	if (libusb_kernel_driver_active(h, MUX_IFACE) == 1) {
-		printf("kernel driver holds interface %d -- detaching\n", MUX_IFACE);
-		if (libusb_detach_kernel_driver(h, MUX_IFACE) == 0)
-			detached = 1;
-	}
-	if ((rc = libusb_claim_interface(h, MUX_IFACE)) < 0) {
-		fprintf(stderr, "claim interface %d: %s\n", MUX_IFACE, libusb_error_name(rc));
-		goto out;
-	}
-	printf("claimed interface %d, EP OUT 0x%02x / EP IN 0x%02x\n",
-	       MUX_IFACE, EP_OUT, EP_IN);
+	printf("claimed interface %d, EP OUT 0x%02x / EP IN 0x%02x\n", iface, EP_OUT, EP_IN);
 
 	memset(pkt, 0, sizeof(pkt));
 	hdr->protocol = htonl(MUX_PROTO_VERSION);
@@ -130,38 +176,45 @@ int main(int argc, char **argv)
 	vb->minor     = htonl(0);
 	vb->padding   = 0;
 
-	rc = libusb_bulk_transfer(h, EP_OUT, pkt, sizeof(pkt), &transferred, timeout);
-	printf("VERSION out: rc=%s transferred=%d/%d\n",
-	       libusb_error_name(rc), transferred, (int)sizeof(pkt));
+	memset(&bt, 0, sizeof(bt));
+	bt.ep = EP_OUT;
+	bt.len = sizeof(pkt);
+	bt.timeout = timeout;
+	bt.data = pkt;
+	rc = ioctl(fd, USBDEVFS_BULK, &bt);
+	printf("VERSION out: rc=%d (%s) sent=%d/%d\n", rc,
+	       rc < 0 ? strerror(errno) : "ok", rc < 0 ? 0 : rc, (int)sizeof(pkt));
 	if (rc < 0)
-		goto release;
+		goto done;
 
 	for (i = 0; i < reads; i++) {
-		transferred = 0;
-		rc = libusb_bulk_transfer(h, EP_IN, buf, readsize, &transferred, timeout);
-		printf("read %d: rc=%s len=%d\n", i + 1, libusb_error_name(rc), transferred);
-		if (rc == 0 && transferred > 0) {
-			hexdump(buf, transferred < 32 ? transferred : 32);
-			printf("cp-mux-probe: PHONE REPLIED (%d bytes)\n", transferred);
-			libusb_release_interface(h, MUX_IFACE);
-			if (detached)
-				libusb_attach_kernel_driver(h, MUX_IFACE);
-			libusb_close(h);
-			libusb_free_device_list(list, 1);
-			libusb_exit(ctx);
+		memset(&bt, 0, sizeof(bt));
+		bt.ep = EP_IN;
+		bt.len = readsize;
+		bt.timeout = timeout;
+		bt.data = buf;
+		rc = ioctl(fd, USBDEVFS_BULK, &bt);
+		printf("read %d: rc=%d (%s) len=%d\n", i + 1, rc,
+		       rc < 0 ? strerror(errno) : "ok", rc < 0 ? 0 : rc);
+		if (rc > 0) {
+			hexdump(buf, rc < 32 ? rc : 32);
+			printf("cp-mux-probe: PHONE REPLIED (%d bytes)\n", rc);
+			{
+				unsigned int n = iface;
+				ioctl(fd, USBDEVFS_RELEASEINTERFACE, &n);
+			}
+			close(fd);
 			return 0;
 		}
 	}
 	fprintf(stderr, "cp-mux-probe: NO REPLY after %d reads of %d bytes (%d ms each)\n",
 		reads, readsize, timeout);
 
-release:
-	libusb_release_interface(h, MUX_IFACE);
-out:
-	if (detached)
-		libusb_attach_kernel_driver(h, MUX_IFACE);
-	libusb_close(h);
-	libusb_free_device_list(list, 1);
-	libusb_exit(ctx);
+done:
+	{
+		unsigned int n = iface;
+		ioctl(fd, USBDEVFS_RELEASEINTERFACE, &n);
+	}
+	close(fd);
 	return 1;
 }
