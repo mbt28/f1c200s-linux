@@ -6,7 +6,19 @@
 #
 # Partition layout (see genimage-sdcard.cfg): p1 = FAT (zImage + dtb),
 # p2 = ext4 rootfs.  DRAM base 0x80000000.
+# musb_hdrc.use_dma=0 forces the USB host onto PIO. REQUIRED for wired CarPlay:
+# with MUSB DMA enabled the controller completes bulk-OUT transfers the device
+# never receives (the iPhone reports usbmux sequence gaps, and usbmux has no
+# retransmission, so one silent drop kills the session). The suniv FIFO RAM is
+# muxed CPU-vs-DMA by a GLOBAL VEND0 BUS_SEL bit and this IC has no hardware
+# arbitration -- Allwinner's own USBC_SelectBus() says that only arrived in
+# "1667 1673 and later ic". See docs/musb-mux-starvation.md and
+# docs/musb-suniv-hardware-facts.md.
+#
+# This is the conservative fix: it also disables the DDMA offload that patches
+# 0016-0019 added for wired Android Auto. Drop this once the datapath is
+# properly serialised and the offload can be re-enabled safely.
 CONFIG_USE_BOOTARGS=y
-CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4"
+CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0"
 CONFIG_USE_BOOTCOMMAND=y
 CONFIG_BOOTCOMMAND="load mmc 0:1 0x80008000 zImage; load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000"
