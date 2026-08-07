@@ -221,7 +221,14 @@ Three things this fixes, all raised by judges and all real:
 
 **Files:** `patches/linux-lctech/0018-*.patch` (−78), `0019-*.patch` (+3).
 
-**Then measure, before writing a line of Stage 1.** Fixed 60 s CarPlay video plus a `dd` from a USB stick: record `/proc/stat` system+irq time, `/proc/interrupts` deltas, and the RT aa-read thread's `utime/stime` from `/proc/<pid>/stat`. (No `perf stat` cycles — ARM926EJ-S is ARMv5 with no PMU; Linux has no ARMv5 perf backend and you will get `<not supported>`.) A 512-byte `ioread32_rep` is ~128 load/store pairs, maybe 1.5-3 µs; one DDMA arm costs a `prep_slave_sg` (contract + promise allocation), submit, issue, a DDMA hardirq, a vchan tasklet, and the claim/release bookkeeping. **These are plausibly the same order of magnitude.**
+**Then measure, before writing a line of Stage 1.** `musb-dma-cost` in the
+rootfs overlay is the harness: it moves a fixed number of MiB from a USB stick
+(fixed bytes, not fixed seconds, so both modes do identical work and the
+numbers divide into cost-per-MiB), optionally under a live wired-CarPlay
+session with `-v`, and prints one `RESULT` line to compare across a reboot.
+`use_dma` is boot-time only — a runtime toggle leaves the controller in a dirty
+DMA↔PIO state — so the A/B is: boot `use_dma=0`, run it; boot `use_dma=1`, run
+it; compare. What it records: `/proc/stat` system+irq time, `/proc/interrupts` deltas, and the RT aa-read thread's `utime/stime` from `/proc/<pid>/stat`. (No `perf stat` cycles — ARM926EJ-S is ARMv5 with no PMU; Linux has no ARMv5 perf backend and you will get `<not supported>`.) A 512-byte `ioread32_rep` is ~128 load/store pairs, maybe 1.5-3 µs; one DDMA arm costs a `prep_slave_sg` (contract + promise allocation), submit, issue, a DDMA hardirq, a vchan tasklet, and the claim/release bookkeeping. **These are plausibly the same order of magnitude.**
 
 **Exit criterion / GO-NO-GO:** if PIO leaves adequate headroom for the video stream, **stop here, delete `sunxi_dma.c`, remove patches 0016/0017/0019 and the two DMA Kconfig lines, and close the workstream.** That is a good outcome and it costs one boot argument to reach.
 
