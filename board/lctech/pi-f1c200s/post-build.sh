@@ -34,6 +34,38 @@ FSTAB="${TARGET_DIR}/etc/fstab"
 sed -i '\#^/dev/mmcblk0p3#d' "${FSTAB}"
 printf '/dev/mmcblk0p3\t/var/log\text4\tnoatime,nofail\t0\t2\n' >> "${FSTAB}"
 
+# Cap the tmpfs mounts. Buildroot's skeleton gives none of them a size=, so each
+# defaults to RAM/2 = 25.9 MiB on this board -- three mounts entitled to 77.7 MiB
+# against 52 MiB of RAM. This frees nothing by itself (tmpfs only consumes what
+# is written); what it buys is blast radius. A runaway writer now gets ENOSPC on
+# an 8 MiB filesystem instead of consuming RAM until the OOM killer picks a
+# victim, and the victim on this board would plausibly be fastcarplay.
+#
+# It matters MORE once zram exists, not less: tmpfs pages are swappable, so an
+# uncapped /tmp writer would push through zram and out onto the SD card.
+#
+# /tmp 8M    - every log writer moved to /var/log on p3 (4df4538), so measured
+#              use is ~64 KiB; 8M leaves room for scratch/scp.
+# /run 2M    - pidfiles, the dbus socket, wpa_supplicant/hostapd/bluealsa state.
+# /dev/shm 4M- glibc POSIX shm / SDL2. Do not shrink below this without
+#              measuring: shm_open failures are hard errors in some libraries.
+# Match on the mountpoint so the mode= flags are preserved verbatim.
+sed -i '\#^tmpfs[[:space:]]\+/tmp[[:space:]]#d;
+        \#^tmpfs[[:space:]]\+/run[[:space:]]#d;
+        \#^tmpfs[[:space:]]\+/dev/shm[[:space:]]#d' "${FSTAB}"
+printf 'tmpfs\t/tmp\ttmpfs\tmode=1777,size=8M,noatime\t0\t0\n'                  >> "${FSTAB}"
+printf 'tmpfs\t/run\ttmpfs\tmode=0755,nosuid,nodev,size=2M,noatime\t0\t0\n'     >> "${FSTAB}"
+printf 'tmpfs\t/dev/shm\ttmpfs\tmode=1777,size=4M,noatime\t0\t0\n'              >> "${FSTAB}"
+
+# SD swap (p4), emergency backstop only -- see S02swap and genimage-sdcard.cfg.
+# noauto is LOAD-BEARING: the partition ships unformatted (genimage has no swap
+# handler), so sysinit's `swapon -a` would fail EINVAL and print to the console.
+# S02swap does mkswap + `swapon -p 10` instead. busybox swapon honours noauto,
+# and `swapoff -a` still covers it because it walks /proc/swaps first.
+# busybox `mount -a` skips swap-type entries, so this is inert at sysinit.
+sed -i '\#^/dev/mmcblk0p4#d' "${FSTAB}"
+printf '/dev/mmcblk0p4\tnone\tswap\tnoauto,pri=10\t0\t0\n' >> "${FSTAB}"
+
 # Dropbear key auth: the overlay copy of authorized_keys/.ssh lands 0644/0755;
 # tighten to the conventional 0600/0700 so dropbear never refuses the dev key.
 if [ -d "${TARGET_DIR}/root/.ssh" ]; then
@@ -94,4 +126,47 @@ if [ -n "${KCONFIG}" ]; then
 		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
 		exit 1
 	done
+
+	# zram is =m, not =y, so it needs its own check -- the loop above matches
+	# "=y" exactly and would pass a silently-missing module straight through.
+	if ! grep -q "^CONFIG_ZRAM=[ym]\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_ZRAM missing from ${KCONFIG}" >&2
+		echo "       /etc/init.d/S02swap modprobes zram for the primary swap tier;" >&2
+		echo "       without it the board silently runs with no swap at all." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+		exit 1
+	fi
+
+	# The debug symbols retired for RAM. DMA_API_DEBUG alone preallocates 65536
+	# dma_debug_entry at core_initcall and never frees them: ~3.5-4 MiB on a
+	# 52 MiB board. FTRACE is the sneaky one -- CONFIG_EXPERT=y selects
+	# DEBUG_KERNEL and FTRACE is "default y if DEBUG_KERNEL", so it comes back
+	# unless the fragment says "is not set" explicitly. Catch a regression here
+	# rather than on the board.
+	for sym in CONFIG_DMA_API_DEBUG CONFIG_FTRACE; do
+		if grep -q "^${sym}=y\$" "${KCONFIG}"; then
+			echo "ERROR: ${sym}=y is back in ${KCONFIG}" >&2
+			echo "       It was retired to reclaim RAM (see linux.fragment)." >&2
+			echo "       FTRACE in particular returns unless it is disabled" >&2
+			echo "       EXPLICITLY, because EXPERT selects DEBUG_KERNEL." >&2
+			exit 1
+		fi
+	done
 fi
+
+# swapon -p must really be compiled in, or S02swap cannot rank zram above the SD
+# card and the priority policy silently inverts -- the failure mode being
+# "video stutters sometimes", the worst class of bug on this board. A busybox
+# version bump that renames the symbol should fail the build, not ship.
+for d in "${BUILD_DIR}"/busybox-*; do
+	[ -f "${d}/.config" ] || continue
+	if ! grep -q "^CONFIG_FEATURE_SWAPON_PRI=y\$" "${d}/.config"; then
+		echo "ERROR: CONFIG_FEATURE_SWAPON_PRI missing from ${d}/.config" >&2
+		echo "       Without it busybox swapon rejects -p outright (bb_show_usage)," >&2
+		echo "       so S02swap cannot put zram above the SD swap." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/busybox.fragment + the" >&2
+		echo "       BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES line in the defconfig." >&2
+		exit 1
+	fi
+	break
+done

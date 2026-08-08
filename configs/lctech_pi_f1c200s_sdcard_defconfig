@@ -27,6 +27,10 @@ BR2_TARGET_ROOTFS_EXT2_4=y
 BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
 # Bundle test video clips into /root/videos via a rootfs overlay.
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_CARPLAY_PATH)/rootfs-overlay"
+# Merged over busybox's default config. Currently only enables swapon -p, which
+# S02swap needs to rank zram above the SD swap; see the fragment for why that
+# ordering is a safety property on this board.
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/busybox.fragment"
 # ffmpeg for a quick video-playback test (software decode).
 # OUTDEVS pulls in the fbdev output device: ffmpeg ... -f fbdev /dev/fb0
 # (the ffmpeg CLI is default-y; swscale handles scaling/pixfmt for the panel).

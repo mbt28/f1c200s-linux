@@ -1,0 +1,122 @@
+#!/bin/sh
+# Two-tier swap: zram in RAM (primary), SD partition p4 (emergency backstop).
+#
+# WHY THIS SCRIPT OWNS BOTH DEVICES. inittab runs `swapon -a` at sysinit, well
+# before rcS. zram cannot exist that early (it needs modprobe), so if p4 were
+# auto-mounted there it would be enabled FIRST -- and the kernel hands out
+# descending priorities in activation order, which would make the SD CARD the
+# primary swap. That is the exact failure this design exists to prevent, so p4
+# carries `noauto` in fstab and both devices are activated here with EXPLICIT
+# priorities. Explicit beats emergent: if zram fails to come up, p4 keeps
+# pri=10 and is simply never promoted.
+#
+# The asymmetry that makes the ordering a safety property, not a preference:
+# a SCHED_FIFO video thread faulting on a zram page pays ~100 us of LZO
+# decompress. The same fault against the SD card costs 5-50 ms AND contends
+# with the rootfs on the same physical card.
+#
+# Runs at S02: after S01logs (so /var/log exists and the log persists) and long
+# before S20cedrus/S99carplay. Nothing here may ever fail the boot.
+#
+# Escape hatches, none needing a reflash:
+#   touch /etc/swap-disable   -> no swap at all
+#   rm /etc/swap-sd           -> zram only, card untouched
+#   /etc/default/swap         -> override sizes/algorithm/priorities
+#   S02swap stop | start      -> live A/B without rebooting
+LOG=/var/log/swap.log
+ZRAM_SIZE=24M         # logical swap advertised (~0.5x MemTotal)
+ZRAM_MEM_LIMIT=16M    # HARD cap on physical RAM zsmalloc may hold
+ZRAM_ALGO=lzo-rle     # fastest decompress on ARMv5; see linux.fragment
+ZRAM_PRI=100
+SD_DEV=/dev/mmcblk0p4
+SD_PRI=10
+SD_SECTORS=131072     # 64 MiB; p4 is declared past EOF, so verify it is real
+
+[ -r /etc/default/swap ] && . /etc/default/swap
+
+log() { echo "$(cut -d' ' -f1 /proc/uptime) $*" >> "$LOG" 2>/dev/null; }
+
+case "$1" in
+start)
+	[ -f /etc/swap-disable ] && { log "disabled by /etc/swap-disable"; exit 0; }
+
+	# Before any swap exists, so the first reclaim uses the new watermarks.
+	[ -r /etc/sysctl.conf ] && sysctl -q -p /etc/sysctl.conf 2>/dev/null
+
+	# --- tier 1: zram ---------------------------------------------------
+	if [ ! -e /sys/block/zram0 ]; then
+		modprobe zram num_devices=1 2>/dev/null
+		# devtmpfs-only image: give the node a moment to appear.
+		i=0
+		while [ ! -e /sys/block/zram0 ] && [ $i -lt 20 ]; do
+			i=$((i + 1))
+			usleep 100000 2>/dev/null || sleep 1
+		done
+	fi
+
+	if [ -e /sys/block/zram0 ]; then
+		# ORDER IS LOAD-BEARING (Documentation/.../zram.rst): comp_algorithm
+		# must precede disksize (it returns -EBUSY once initialised);
+		# mem_limit is runtime-adjustable and follows.
+		echo "$ZRAM_ALGO"      > /sys/block/zram0/comp_algorithm 2>/dev/null
+		echo "$ZRAM_SIZE"      > /sys/block/zram0/disksize       2>/dev/null
+		echo "$ZRAM_MEM_LIMIT" > /sys/block/zram0/mem_limit      2>/dev/null
+		if mkswap /dev/zram0 >/dev/null 2>&1 &&
+		   swapon -p "$ZRAM_PRI" /dev/zram0 2>/dev/null; then
+			log "zram0 up: $ZRAM_SIZE disk, $ZRAM_MEM_LIMIT cap, $(cat /sys/block/zram0/comp_algorithm 2>/dev/null)"
+		else
+			log "zram0 FAILED to activate"
+		fi
+	else
+		log "zram0 absent (CONFIG_ZRAM=m not loaded?)"
+	fi
+
+	# --- tier 2: SD card, emergency only ---------------------------------
+	# Deliberately conditional on zram being live. If the compressed tier is
+	# missing, attaching the card would silently promote it to primary swap
+	# on a board whose realtime video path cannot afford SD latency.
+	if [ ! -f /etc/swap-sd ]; then
+		log "SD swap skipped (no /etc/swap-sd)"
+	elif ! grep -q '^/dev/zram0 ' /proc/swaps; then
+		log "SD swap REFUSED: zram is not active, refusing to make the card primary"
+	elif [ "$(cat /sys/class/block/${SD_DEV#/dev/}/size 2>/dev/null)" != "$SD_SECTORS" ]; then
+		log "SD swap skipped: $SD_DEV is not $SD_SECTORS sectors (card too small?)"
+	else
+		# busybox blkid cannot see a swap signature
+		# (CONFIG_FEATURE_VOLUMEID_LINUXSWAP is off), so do not probe --
+		# try, and format only on failure. Self-healing: a swap area torn by
+		# an abrupt power cut is simply re-made on the next boot.
+		if swapon -p "$SD_PRI" "$SD_DEV" 2>/dev/null; then
+			log "SD swap attached (pre-existing signature)"
+		elif mkswap "$SD_DEV" >/dev/null 2>&1 &&
+		     swapon -p "$SD_PRI" "$SD_DEV" 2>/dev/null; then
+			log "SD swap attached (mkswap'd)"
+		else
+			log "SD swap FAILED (harmless; zram carries on)"
+		fi
+	fi
+
+	# One quiet line to the console -- this board's RT thread has already been
+	# throttled once by console flooding. Detail goes to the log.
+	echo "swap: $(awk 'NR>1 {printf "%s(pri %s) ", $1, $5}' /proc/swaps)"
+	log "swappiness=$(cat /proc/sys/vm/swappiness) page-cluster=$(cat /proc/sys/vm/page-cluster)"
+	;;
+stop)
+	# Snapshot before tearing down: a non-zero Used on p4, or a rising write
+	# count, means the conservative policy is not holding and wants
+	# investigating. This is the evidence trail for SD wear.
+	log "--- shutdown ---"
+	awk 'NR>1 {print "  swap " $1 " used=" $4 "kB pri=" $5}' /proc/swaps >> "$LOG" 2>/dev/null
+	[ -r /sys/block/zram0/mm_stat ] && log "  zram mm_stat: $(cat /sys/block/zram0/mm_stat)"
+	[ -r /sys/class/block/mmcblk0p4/stat ] && log "  p4 blkstat: $(cat /sys/class/block/mmcblk0p4/stat)"
+	# swapoff on a full zram must decompress everything back into RAM; if it
+	# cannot it fails ENOMEM and leaves swap on, which is safe.
+	swapoff "$SD_DEV"    2>/dev/null
+	swapoff /dev/zram0   2>/dev/null
+	echo 1 > /sys/block/zram0/reset 2>/dev/null
+	rmmod zram 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
