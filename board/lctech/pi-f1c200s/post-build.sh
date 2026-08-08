@@ -15,6 +15,25 @@ echo ''                                    >> "${INITTAB}"
 echo '# Auto-login as root (serial console)' >> "${INITTAB}"
 echo 'ttyS0::respawn:-/bin/sh'             >> "${INITTAB}"
 
+# Logs live on their own SD-card partition (p3), never in the rootfs -- see the
+# rationale in genimage-sdcard.cfg. Buildroot's skeleton ships /var/log as a
+# symlink to ../tmp (i.e. RAM), which is why no log ever survived a reboot and
+# why a chatty one ate into the 64 MiB. Replace the symlink with a real
+# mountpoint. It stays EMPTY in the rootfs image -- the contents only ever
+# exist on p3.
+rm -f "${TARGET_DIR}/var/log"
+mkdir -p "${TARGET_DIR}/var/log"
+
+# noatime: a log write should not also cost a metadata write.
+# nofail:  busybox mount PARSES AND DISCARDS this -- verified on the board; it
+#          is absent from `mount --help` and never shows up in /proc/mounts. It
+#          is recorded here as intent, not as behaviour. What actually stops a
+#          failed mount being fatal is that busybox `mount -a` already carries
+#          on past a bad entry; S01logs then supplies the fallback.
+FSTAB="${TARGET_DIR}/etc/fstab"
+sed -i '\#^/dev/mmcblk0p3#d' "${FSTAB}"
+printf '/dev/mmcblk0p3\t/var/log\text4\tnoatime,nofail\t0\t2\n' >> "${FSTAB}"
+
 # Dropbear key auth: the overlay copy of authorized_keys/.ssh lands 0644/0755;
 # tighten to the conventional 0600/0700 so dropbear never refuses the dev key.
 if [ -d "${TARGET_DIR}/root/.ssh" ]; then

@@ -21,7 +21,7 @@
 
 CYCLES=${1:-8}
 SET=${2:-/etc/fastcarplay/settings_drm.txt}
-LOG=/tmp/cll.aa.log
+LOG=/var/log/cll.aa.log
 LINK_TIMEOUT=35        # s to wait for the first decode frame
 DECODE_HOLD=4          # s to let the full DPB allocate after first frame
 RECLAIM=3             # s to let the kernel reclaim after kill

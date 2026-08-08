@@ -5,7 +5,8 @@
 # is physically UART1.  The U-Boot defconfig already sets CONS_INDEX=2.
 #
 # Partition layout (see genimage-sdcard.cfg): p1 = FAT (zImage + dtb),
-# p2 = ext4 rootfs.  DRAM base 0x80000000.
+# p2 = ext4 rootfs, p3 = ext4 logs (mounted /var/log, kept off the rootfs so a
+# torn log costs a fsck of p3 and not the boot).  DRAM base 0x80000000.
 # musb_hdrc.use_dma=0 forces the USB host onto PIO. REQUIRED for wired CarPlay:
 # with MUSB DMA enabled the controller completes bulk-OUT transfers the device
 # never receives (the iPhone reports usbmux sequence gaps, and usbmux has no

@@ -22,7 +22,7 @@
 SECS=${1:-45}
 T=/sys/kernel/tracing
 SET=/tmp/musb-mux-cpw.txt
-LOG=/tmp/musb-mux-app.log
+LOG=/var/log/musb-mux-app.log
 
 [ -d $T/events/musb ] || mount -t tracefs nodev $T 2>/dev/null
 [ -d $T/events/musb ] || { echo "musb-mux-trace: no musb tracepoints (CONFIG_FTRACE?)"; exit 1; }
@@ -54,14 +54,14 @@ setsid sh -c "exec fastcarplay $SET > $LOG 2>&1" < /dev/null > /dev/null 2>&1 &
 
 sleep "$SECS"
 echo 0 > $T/tracing_on
-cp $T/trace /tmp/musb-mux.trace
+cp $T/trace /var/log/musb-mux.trace
 
 echo "=== window ${SECS}s, usb0: $(cat /sys/class/net/usb0/operstate 2>/dev/null || echo absent) ==="
 printf '%-8s %6s %6s\n' endpoint enq rx
 # Endpoint names come from the trace itself, so this survives renumbering.
-for ep in $(grep -oE 'ep[0-9]+(in|out)' /tmp/musb-mux.trace | sort -u); do
-	e=$(grep -c "musb_urb_enq.*dev[0-9] $ep," /tmp/musb-mux.trace)
-	r=$(grep -c "musb_urb_rx.*dev[0-9] $ep," /tmp/musb-mux.trace)
+for ep in $(grep -oE 'ep[0-9]+(in|out)' /var/log/musb-mux.trace | sort -u); do
+	e=$(grep -c "musb_urb_enq.*dev[0-9] $ep," /var/log/musb-mux.trace)
+	r=$(grep -c "musb_urb_rx.*dev[0-9] $ep," /var/log/musb-mux.trace)
 	printf '%-8s %6s %6s\n' "$ep" "$e" "$r"
 done
 echo "--- app ---"
