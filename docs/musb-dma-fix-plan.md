@@ -1,8 +1,38 @@
 # Plan — serialising the suniv MUSB shared FIFO datapath
 
-Status: **STAGE 0 MEASURED — the answer is NO-GO.** 2026-08-07, kernel 6.18.42,
-Lctech Pi F1C200s. Hardware A/B, 64 MiB read from a SanDisk 0781:5583 attached
-directly, app stopped, caches dropped, one reboot between the two runs:
+Status: **PARKED 2026-08-08 — MUSB DMA is disabled, the patches are kept.**
+
+`CONFIG_USB_SUNXI_DMA` and `CONFIG_USB_UX500_DMA` are off in
+`board/lctech/pi-f1c200s/linux.fragment`, and `musb_hdrc.use_dma=0` stays in
+`uboot-sdcard.fragment` as belt-and-braces. Patches 0016 (backend) and 0017 (DT
+wiring) are **deliberately retained, not dropped**: they are guarded by
+`#ifdef CONFIG_USB_SUNXI_DMA` and fall back to mainline's NULL stubs, so the
+tree builds clean with the option off, and reviving them is two Kconfig lines.
+The reason to keep them is that the failure is a documentation problem as much
+as a silicon one — if better material on the suniv MUSB DMA path ever appears,
+this is worth another look. Patch 0019 stays enabled regardless: it fixes the
+shared `sun4i-dma` driver and every suniv DDMA client needs it, including
+`feature/spi-ddma-ahb`.
+
+**The board is fully working in this configuration: wired and wireless CarPlay
+and Android Auto all function.** Nothing below is a blocker; it is the record of
+why DMA is off.
+
+Two independent reasons it is off, either sufficient on its own:
+
+1. **Correctness** — the shared single-port FIFO has no CPU/DMA arbiter, so a
+   CPU FIFO write during a DMA is silently lost while still reporting success.
+   With DDMA enabled, wired CarPlay never establishes a session at all.
+2. **Performance** — RX DMA is pinned to mode 0, so it is armed per 512-byte
+   packet and suppresses no interrupts. It is 3× slower and 3× dearer than PIO.
+
+---
+
+### The measurements that decided it
+
+2026-08-07, kernel 6.18.42, Lctech Pi F1C200s. Hardware A/B, 64 MiB read from a
+SanDisk 0781:5583 attached directly, app stopped, caches dropped, one reboot
+between the two runs:
 
 | | PIO (`use_dma=0`) | DDMA (`use_dma=1`) | |
 | --- | --- | --- | --- |
@@ -24,10 +54,13 @@ so 29.17 cs/MiB is a **lower bound** for any correct DMA design. The measured
 DMA run is the unserialised path, i.e. the most favourable case DMA will ever
 get, and it still loses by 3×.
 
-The plan's own exit criterion applies: delete `sunxi_dma.c`, drop patches
-0016/0017, close the workstream. **Keep 0019** — the plan says drop it, but that
-is wrong: it is a genuine sun4i-dma bugfix that any suniv DDMA client needs,
-including `feature/spi-ddma-ahb`.
+The plan's own exit criterion said to delete `sunxi_dma.c` and drop 0016/0017.
+**We are not doing that** — see the PARKED note at the top: the backend is
+switched off at Kconfig instead, and the patches stay in the series so the work
+can be picked up again if better suniv MUSB DMA documentation surfaces. Either
+way **0019 stays enabled**; the plan says drop it and that is wrong, it is a
+genuine sun4i-dma bugfix that any suniv DDMA client needs, `feature/spi-ddma-ahb`
+included.
 
 ### The video/mux contention case — measured 2026-08-08, and it is worse than a cost gap
 
@@ -297,7 +330,14 @@ session with `-v`, and prints one `RESULT` line to compare across a reboot.
 DMA↔PIO state — so the A/B is: boot `use_dma=0`, run it; boot `use_dma=1`, run
 it; compare. What it records: `/proc/stat` system+irq time, `/proc/interrupts` deltas, and the RT aa-read thread's `utime/stime` from `/proc/<pid>/stat`. (No `perf stat` cycles — ARM926EJ-S is ARMv5 with no PMU; Linux has no ARMv5 perf backend and you will get `<not supported>`.) A 512-byte `ioread32_rep` is ~128 load/store pairs, maybe 1.5-3 µs; one DDMA arm costs a `prep_slave_sg` (contract + promise allocation), submit, issue, a DDMA hardirq, a vchan tasklet, and the claim/release bookkeeping. **These are plausibly the same order of magnitude.**
 
-**Exit criterion / GO-NO-GO:** if PIO leaves adequate headroom for the video stream, **stop here, delete `sunxi_dma.c`, remove patches 0016/0017/0019 and the two DMA Kconfig lines, and close the workstream.** That is a good outcome and it costs one boot argument to reach.
+**Exit criterion / GO-NO-GO:** if PIO leaves adequate headroom for the video stream, **stop here, remove the two DMA Kconfig lines, and close the workstream.** That is a good outcome and it costs one boot argument to reach.
+
+> **This is what happened — see the PARKED note at the top.** The criterion was
+> met and then some. The one amendment made in hindsight: this line originally
+> said to delete `sunxi_dma.c` and remove 0016/0017/0019. Instead the Kconfig
+> symbols were turned off and **all four patches were kept** — 0016/0017 so the
+> work can be revived if better documentation appears, 0019 because it is a
+> `sun4i-dma` fix unrelated to MUSB that other DDMA clients need.
 
 **What could go wrong:** removing hunk 2 restores the stock `1000 × mdelay(1)` flush spin. With `use_dma=0` that loop never spins (nothing holds `BUS_SEL`), which is exactly the point — but watch for it if you ever boot `use_dma=1` before Stage 1 lands.
 
