@@ -29,10 +29,41 @@ The plan's own exit criterion applies: delete `sunxi_dma.c`, drop patches
 is wrong: it is a genuine sun4i-dma bugfix that any suniv DDMA client needs,
 including `feature/spi-ddma-ahb`.
 
-Caveat, stated plainly: this is storage load without a phone attached, so the
-video/mux contention case was not measured. It does not change the conclusion —
-the per-packet economics are the same, and contention can only make DMA worse
-(refusals, gate spins). Everything below is preserved as the design record.
+### The video/mux contention case — measured 2026-08-08, and it is worse than a cost gap
+
+Phone attached directly, live wired CarPlay with **navigation running** (real
+motion, not a static screen — a still CarPlay screen encodes to ~30 kbps and
+0.5 fps and measures nothing). Same phone, same cable, same boot cycle; only the
+boot argument differs.
+
+| | PIO (`use_dma=0`) | DDMA (`use_dma=1`) |
+| --- | --- | --- |
+| session | `iAP2 link NORMAL`, MFi auth, `CarPlayStartSession` in **30 s** | **never establishes** — 11× `carkit open failed`, no iAP2, no MFi |
+| usb0 traffic | **14.04 MiB in 60.4 s** (1.95 Mbps) | 6.5 KB total |
+| decoder | 28–30 fps, 800x480, cedrus | never reached |
+| CPU sys+irq+softirq | 1098 cs (18.2% of one core), 78.22 cs/MiB | n/a |
+| musb irqs | 35 749 (592/s), 2547/MiB | n/a |
+| ddma irqs | 0 | n/a |
+
+**There is no DMA-side number because there is nothing to measure.** With DDMA
+enabled, wired CarPlay does not reach video at all: the phone enumerates and
+`usb0` comes up, but the usbmux/lockdown handshake dies on the silent bulk-OUT
+loss and the app loops on `carkit open failed`. Rebooting to `use_dma=0` with
+nothing else changed brought the full session back in 30 seconds.
+
+So the contention case does not merely cost more — the feature is
+**non-functional** with DMA. That closes the gap the storage-only measurement
+left open, and closes it harder.
+
+Note the CarPlay CPU cost per MiB (78 cs/MiB) is ~8× the storage figure
+(10 cs/MiB), because CarPlay bytes carry TLS, RTSP, the network stack and
+decode, where the storage test is a raw block read. Both PIO numbers are
+inflated slightly by an unrelated defect: `settings_drm.txt` pins
+`audio-driver = alsa` on an image with no sound card, so the app spins retrying
+a device that cannot exist (~290 cs/60 s of the total). It is present in both
+runs and does not affect the comparison.
+
+Everything below is preserved as the design record.
 
 ---
 
