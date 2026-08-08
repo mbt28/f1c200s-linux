@@ -42,7 +42,7 @@ MIB=32
 DEV=
 VIDEO=0
 SET=/tmp/musb-cost-cpw.txt
-LOG=/tmp/musb-cost-app.log
+LOG=/var/log/musb-cost-app.log
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -135,7 +135,7 @@ d0=$(irq_count 1c02000)
 r0=$(rt_thread_ticks)
 t0f=$(cut -d' ' -f1 /proc/uptime)
 
-dd if="$DEV" of=/dev/null bs=64k count=$(( MIB * 16 )) 2>/tmp/musb-cost-dd.log
+dd if="$DEV" of=/dev/null bs=64k count=$(( MIB * 16 )) 2>/var/log/musb-cost-dd.log
 
 t1f=$(cut -d' ' -f1 /proc/uptime)
 r1=$(rt_thread_ticks)
@@ -153,7 +153,7 @@ rt=$(( r1 - r0 ))
 
 echo
 echo "=== musb-dma-cost: $MIB MiB from $DEV, mode=$MODE, video=$VIDEO ==="
-grep -E 'copied|bytes' /tmp/musb-cost-dd.log 2>/dev/null | tail -1
+grep -E 'copied|bytes' /var/log/musb-cost-dd.log 2>/dev/null | tail -1
 awk -v e="$elapsed" -v m="$MIB" -v c="$cpu" -v mi="$musbirq" -v di="$dmairq" -v rt="$rt" \
     -v mode="$MODE" -v v="$VIDEO" 'BEGIN {
 	printf "RESULT mode=%s video=%s  %.2f s  %.2f MiB/s  %.1f Mbps\n", mode, v, e, m/e, m*8.388608/e

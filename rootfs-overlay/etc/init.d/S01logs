@@ -1,0 +1,42 @@
+#!/bin/sh
+# Guarantee /var/log is never the rootfs, and never grows without bound.
+#
+# fstab mounts /dev/mmcblk0p3 on /var/log at sysinit (inittab's `mount -a`,
+# which runs before rcS). This script covers the case where that did not
+# happen -- a card flashed from an image predating p3, a dirty or unmountable
+# filesystem, a hand-partitioned card. Without it /var/log silently reverts to
+# being a plain directory on the rootfs, and every log write lands on exactly
+# the filesystem the separate partition exists to protect, precisely when the
+# card is already misbehaving.
+#
+# The fallback is a small tmpfs: logs then live in RAM and are lost on reboot,
+# which is the right trade against corrupting the rootfs. It is capped because
+# this board only has 64 MiB and an unbounded tmpfs log would be its own
+# failure.
+case "$1" in
+start)
+	if ! grep -q ' /var/log ' /proc/mounts; then
+		echo "logs: /dev/mmcblk0p3 not mounted on /var/log -- using tmpfs"
+		echo "logs: logs will NOT persist across reboot (rootfs protected)"
+		mount -t tmpfs -o size=8M,mode=0755,noatime logs /var/log
+	fi
+
+	# Nothing rotates these and p3 is only 64 MiB, so a long session or an
+	# append-mode log across many boots would eventually fill it -- and a full
+	# log partition fails silently, which is the worst kind. Keep one previous
+	# generation of anything oversized; that bounds each log to ~8 MiB.
+	find /var/log -maxdepth 1 -type f -name '*.log' -size +4096k 2>/dev/null |
+	while read -r f; do
+		echo "logs: rotating oversized ${f##*/}"
+		mv -f "$f" "$f.1"
+	done
+	;;
+stop)
+	# Flush to the card before the power goes; nothing here unmounts, the
+	# shutdown `umount -a -r` does that.
+	sync
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

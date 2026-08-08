@@ -14,11 +14,11 @@
 # controller is briefly not ready right after that reset, so retry `bt on`
 # until the adapter is actually UP RUNNING -- a dead UART link still registers
 # an hci0 (BD 00:00.., DOWN), so mere /sys presence is NOT health.
-# Progress is logged to /tmp/aa-stack.log.
+# Progress is logged to /var/log/aa-stack.log.
 case "$1" in
 start)
 	(
-		exec >> /tmp/aa-stack.log 2>&1
+		exec >> /var/log/aa-stack.log 2>&1
 		echo "--- $(cut -d. -f1 /proc/uptime)s: start ---"
 		wifi up
 		echo "$(cut -d. -f1 /proc/uptime)s: wifi up rc=$? wlan0=$([ -d /sys/class/net/wlan0 ] && echo up || echo missing)"
