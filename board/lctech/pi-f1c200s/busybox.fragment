@@ -1,0 +1,18 @@
+# Merged over Buildroot's package/busybox/busybox.config.
+#
+# swapon -p is REQUIRED by rootfs-overlay/etc/init.d/S02swap. Without it
+# busybox's swapon does not accept -p at all -- it is absent from OPTSTR_SWAPON
+# and the call dies via bb_show_usage(), it does not silently ignore the flag.
+#
+# The priority relationship is a safety property on this board, not a
+# convenience: zram (pri 100) costs ~100 us per page-in, the SD card (pri 10)
+# costs 5-50 ms and contends with the rootfs on the same card, and a SCHED_FIFO
+# video thread pays whichever it faults on. Expressing that explicitly also
+# makes /proc/swaps self-documenting (100 vs 10, not -1 vs -2) and makes
+# failure degrade instead of invert -- if zram never comes up there is simply
+# no pri=100 device, rather than the card being promoted to primary.
+CONFIG_FEATURE_SWAPON_PRI=y
+
+# Deliberately NOT enabled: CONFIG_FEATURE_SWAPON_DISCARD. Discard-on-swap
+# issues a TRIM per freed page, multiplying small writes on a cheap card in a
+# vehicle that loses power without warning.

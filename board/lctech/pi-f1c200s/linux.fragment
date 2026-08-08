@@ -266,26 +266,57 @@ CONFIG_SND_SUN4I_CODEC=y
 # CONFIG_HID is not set
 # CONFIG_USB_HID is not set
 
-# === TEMPORARY: MUSB DMA bring-up instrumentation (REMOVE before shipping) ===
-# We are debugging why enabling sunxi_dma breaks the host PIO path. The stock
-# image has zero runtime introspection, so add it:
-#  - dynamic_debug: turn on musb_dbg()/dev_dbg() live via
-#      echo 'module musb_hdrc +p' > /sys/kernel/debug/dynamic_debug/control
-CONFIG_DYNAMIC_DEBUG=y
-#  - ftrace trace-events: musb traces EVERY register r/w ->
-#      /sys/kernel/debug/tracing/events/musb/  (the raw CSR sequence)
-CONFIG_FTRACE=y
-CONFIG_ENABLE_DEFAULT_TRACERS=y
-#  - musb debugfs regdump: dump all MUSB regs on demand ->
-#      /sys/kernel/debug/musb-hdrc.1.auto/regdump
+# === Debug instrumentation: RETIRED 2026-08-08 ===
+# This block was TEMPORARY for two investigations, both now closed: the CMA
+# leak (fixed 2026-07-19, patch 0020) and the MUSB DDMA bring-up (parked,
+# 4da8c3f). It was costing real resident RAM on a 52 MiB board.
+#
+# DMA_API_DEBUG is the expensive one and the reason this got revisited.
+# kernel/dma/debug.c preallocates PREALLOC_DMA_DEBUG_ENTRIES = 1<<16 = 65536
+# struct dma_debug_entry at core_initcall and NEVER frees them. On this target
+# (32-bit, UP so ____cacheline_aligned_in_smp is a no-op, no STACKTRACE) the
+# struct is ~56-64 B, so that is ~3.5-4 MiB gone before userspace starts, plus
+# a static dma_entry_hash[16384] in BSS (~190 KiB). More than the whole zram
+# exercise nets, at zero runtime cost.
+# CONFIG_DMA_API_DEBUG is not set
+#
+# FTRACE must be turned off EXPLICITLY, not merely deleted. CONFIG_EXPERT=y
+# above (needed to unhide the CONFIG_VT prompt) `select`s DEBUG_KERNEL
+# (init/Kconfig:1637), and FTRACE is `default y if DEBUG_KERNEL`
+# (kernel/trace/Kconfig:197) -- so dropping the line lets olddefconfig put it
+# straight back. Exactly the CONFIG_VT trap documented in docs/memory.md that
+# already cost two rebuilds. ENABLE_DEFAULT_TRACERS and TRACING live inside
+# `if FTRACE` and go with it. This also removes the landmine that a single
+# `echo 1 > tracing_on` allocates a ~1.4 MiB ring buffer and never returns it.
+# CONFIG_FTRACE is not set
+#
+# dynamic_debug retains every format string plus a __dyndbg descriptor table.
+# CONFIG_DYNAMIC_DEBUG is not set
+# CONFIG_CMA_DEBUGFS is not set
+#
+# KEPT deliberately:
+#  - DEBUG_FS: needed by the overlay diagnostic tools and by zram's counters.
+#  - IKCONFIG: CLAUDE.md verifies the shipped config via /proc/config.gz.
+# DEBUG_KERNEL is not listed: EXPERT selects it regardless, so a line here
+# would be decorative. Reviving the MUSB work means reverting this hunk --
+# rootfs-overlay/usr/bin/musb-mux-trace degrades cleanly (it already checks for
+# the tracepoints and exits with a message).
 CONFIG_DEBUG_FS=y
-#  - /proc/config.gz to verify the running config on-target
 CONFIG_IKCONFIG=y
 CONFIG_IKCONFIG_PROC=y
-# === TEMPORARY: CMA-leak diagnosis (find the ~10MB not freed on app exit) ===
-#  - DMA_API_DEBUG: track every dma_alloc_*/dma_map_* by device ->
-#      cat /sys/kernel/debug/dma-api/dump   (names the leaking driver+size)
-CONFIG_DEBUG_KERNEL=y
-CONFIG_DMA_API_DEBUG=y
-#  - CMA region bitmap / used-page count -> /sys/kernel/debug/cma/
-CONFIG_CMA_DEBUGFS=y
+
+# zram: compressed swap in RAM, driven by rootfs-overlay/etc/init.d/S02swap.
+# ONE line is genuinely all that is needed. ZRAM is a tristate that selects
+# ZSMALLOC, and ZRAM_BACKEND_FORCE_LZO is a def_bool that fires when no other
+# backend is chosen, giving lzo-rle as ZRAM_DEF_COMP. Do NOT add CONFIG_CRYPTO_*
+# -- zram in 6.18 no longer uses the crypto API and those would be dead weight.
+#
+# =m, not =y: keeps it off the boot path, lets a video A/B unload it live
+# (swapoff /dev/zram0; rmmod zram), and reverting is this one line.
+#
+# lzo-rle (the default) is the right algorithm here and needs no symbol: it has
+# the fastest decompress on ARMv5, which matters because every page-in is a
+# synchronous decompress executed BY THE FAULTING THREAD on the only core --
+# and one of those threads is the SCHED_FIFO video reader. zstd's better ratio
+# is not worth 5-10x the compress time in that position.
+CONFIG_ZRAM=m

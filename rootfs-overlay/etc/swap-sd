@@ -1,0 +1,13 @@
+# Presence of this file enables the SD-card swap tier (/dev/mmcblk0p4) in
+# /etc/init.d/S02swap. Delete it and reboot to run on zram alone -- the card is
+# then never written for swap at all.
+#
+# It is shipped present because the SD backstop was asked for, but note that in
+# normal operation it should stay at 0 kB used: zram (priority 100) must fill
+# its 16 MiB mem_limit before the kernel touches this (priority 10). A non-zero
+# Used column for mmcblk0p4 in /proc/swaps is a bug report, not routine.
+#
+#   awk '$1=="/dev/mmcblk0p4" {print "SD swap used:", $4, "kB"}' /proc/swaps
+#
+# S02swap logs /proc/swaps and the p4 block write counter to /var/log/swap.log
+# on every shutdown so the wear trail is visible.
