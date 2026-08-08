@@ -1,3 +1,16 @@
+[PARKED 2026-08-08 -- CONFIG_USB_SUNXI_DMA is OFF, this patch is inert.]
+
+Kept on purpose rather than dropped: MUSB DMA does not work on this silicon and
+is slower than the PIO it replaces, but the failure is partly a documentation
+problem, so this stays in the series in case better material on the suniv MUSB
+DMA path appears. Guarded by #ifdef CONFIG_USB_SUNXI_DMA and falls back to
+mainline's NULL stubs, so the tree builds clean with the option off.
+
+Measured on hardware, kernel 6.18.42:
+  storage 64 MiB  PIO 10.05 MiB/s, 10.03 cs/MiB | DDMA 3.28 MiB/s, 29.17 cs/MiB
+  wired CarPlay   PIO full session, 28-30 fps   | DDMA never establishes at all
+Why, and how to revive it: docs/musb-dma-fix-plan.md
+
 suniv: MUSB DMA via the dedicated-DMA (sun4i-dma) engine
 
 Mainline sunxi MUSB is PIO-only: sunxi_musb_dma_controller_create() is a NULL

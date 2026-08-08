@@ -107,16 +107,44 @@ CONFIG_USB_MUSB_DUAL_ROLE=y
 CONFIG_NOP_USB_XCEIV=y
 CONFIG_USB_PHY=y
 CONFIG_PHY_SUN4I_USB=y
-# MUSB DMA via the SoC dedicated-DMA engine (patches 0016/0017) -- offloads the
-# wired-AA USB bulk copy off the ARM926. DMADEVICES/DMA_SUN4I already =y (SPI DMA).
-# Opt-in: falls back to PIO if the DT dmas aren't wired.
-CONFIG_USB_SUNXI_DMA=y
-# REQUIRED with USB_SUNXI_DMA: sunxi_dma sets the MUSB_DMA_UX500 quirk bit, but
-# the musb_dma_ux500() macro is compiled to 0 unless USB_UX500_DMA is enabled --
-# so without this the bit is inert, the core never releases the DMA channel on
-# the PIO fallback, and short host transfers hang (LIBUSB_ERROR_TIMEOUT). The
-# Kconfig depends was widened (patch 0016) to allow this on USB_MUSB_SUNXI.
-CONFIG_USB_UX500_DMA=y
+# MUSB DMA via the SoC dedicated-DMA engine (patches 0016/0017) -- DISABLED,
+# PARKED 2026-08-08. It does not work on this silicon, and where it does run it
+# is slower than the PIO it replaces. Measured on hardware, kernel 6.18.42
+# (full write-up: docs/musb-dma-fix-plan.md):
+#
+#   storage 64 MiB  PIO 10.05 MiB/s, 10.03 cs/MiB | DDMA 3.28 MiB/s, 29.17 cs/MiB
+#   wired CarPlay   PIO full session, 28-30 fps   | DDMA never establishes at all
+#
+# Two independent reasons, either one sufficient on its own:
+#
+# 1. CORRECTNESS. The FIFO RAM is single-port and muxed CPU-vs-DMA by a GLOBAL
+#    VEND0 BUS_SEL bit (reg 0x43) with NO hardware arbiter -- Allwinner's own BSP
+#    says arbitration only arrived in "1667 1673 and later ic". A CPU FIFO write
+#    issued while a DMA owns the datapath is silently lost: the controller still
+#    sets TXPKTRDY, the URB completes reporting the full byte count, and the
+#    phone reports a usbmux sequence gap. usbmux has no retransmission, so one
+#    drop kills the session -- "carkit open failed", reproduced 11x under DDMA
+#    and gone the moment the same board reboots into PIO.
+#
+# 2. PERFORMANCE. musb_host.c pins RX DMA to mode 0 (USE_MODE1 is #ifdef'd out
+#    upstream), so the engine is armed and torn down once per 512-byte packet
+#    and the per-packet MUSB interrupt is NOT suppressed: 2074 musb irq/MiB in
+#    PIO vs 2079 in DMA, with 2062 DDMA irq/MiB added on top. DMA eliminates
+#    nothing and pays a second interrupt plus two kzallocs per packet to replace
+#    a FIFO copy worth ~128 load/store pairs. Mode 1 would fix the economics but
+#    is precisely what the missing arbiter forbids -- it would hold BUS_SEL for
+#    ~1 ms while the device paces the stream.
+#
+# Patches 0016/0017 are deliberately KEPT, not dropped, so this can be revisited
+# if better documentation for the suniv MUSB DMA path ever surfaces. They are
+# guarded by #ifdef CONFIG_USB_SUNXI_DMA and fall back to mainline's NULL stubs,
+# so the tree builds clean with this off. To revive: flip both symbols to =y.
+# musb_hdrc.use_dma=0 in uboot-sdcard.fragment stays as belt-and-braces.
+# CONFIG_USB_SUNXI_DMA is not set
+# USB_UX500_DMA only ever existed here to make sunxi_dma's MUSB_DMA_UX500 quirk
+# bit live (patch 0016 widened its Kconfig depends to allow it on sunxi). With
+# the backend off nothing sets that bit, so it goes off with it.
+# CONFIG_USB_UX500_DMA is not set
 
 # USB Ethernet: Realtek RTL8153 (Lenovo 17ef:720c USB-C to LAN + kin).
 # Primary use: stress-test the MUSB host DMA path locally -- iperf --bidir over
