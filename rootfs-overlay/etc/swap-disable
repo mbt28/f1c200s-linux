@@ -1,0 +1,31 @@
+# Presence of this file makes /etc/init.d/S02swap exit immediately: no zram, no
+# SD swap, no VM sysctl changes. The board runs exactly as it did before the
+# swap work landed.
+#
+# Shipped present because Stage 0 measured the board (2026-08-08, kernel
+# 6.18.42, old image, app running) and the numbers do not justify swap:
+#
+#   OOM events, ever      0          <- docs/memory.md gates zram on this
+#   AnonPages       8520 kB          <- the ENTIRE swappable working set
+#   MemAvailable   23936 kB          <- healthy
+#   allocstall_*         1  total    <- essentially no reclaim pressure
+#   pgscan_direct       63  total
+#   compact_stall        0
+#   fastcarplay RssAnon 7192 kB      <- 84% of all anon memory
+#
+# A 24 MiB zram is ~3x the entire anonymous working set. Even swapping 100% of
+# it at 2.5x compression nets ~5 MiB, and in practice far less because most of
+# those 8.5 MiB are hot -- while costing CPU on the single 408 MHz core that is
+# already the bottleneck for video decode.
+#
+# The real pressure on this board is CMA (CmaFree was 196 kB of 16384 kB at
+# idle), and CMA is not swappable, so none of this would have helped it.
+#
+# The machinery is kept, tested and ready. To enable:
+#
+#   rm /etc/swap-disable && touch /etc/swap-sd && reboot     # zram + SD tier
+#   rm /etc/swap-disable && reboot                           # zram only
+#
+# No rebuild needed for either -- p4 is already reserved on the card.
+# Re-measure the numbers above before turning it on; if they still look like
+# this, the answer is still no.
