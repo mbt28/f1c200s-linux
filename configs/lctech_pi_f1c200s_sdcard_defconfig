@@ -95,6 +95,12 @@ BR2_PACKAGE_DROPBEAR=y
 # the board, which is the wrong direction for deployment.
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_OPENSSH_SERVER=y
+# rsync for the deploy loop: the fastcarplay binary is ~3 MB and changes only
+# slightly per build, so rsync-over-SSH delta transfer should cut most of the
+# measured 6.0 s push at ~516 KB/s over the AP. Target-side only -- rsync must
+# exist at both ends. Selects zlib + popt (zlib is already in via other
+# packages). Costs disk, not RAM: nothing runs until a push starts.
+BR2_PACKAGE_RSYNC=y
 # Boot splash: no psplash -- S00psplash was replaced by S00splash, which blits
 # a raw theme from /etc/splash/ into /dev/fb0. Runtime-selectable on the board
 # via /etc/splash-theme (persists; shows from the next boot).
