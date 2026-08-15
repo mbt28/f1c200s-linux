@@ -82,6 +82,20 @@ rm -f "${TARGET_DIR}/etc/init.d/S30dbus-daemon" \
       "${TARGET_DIR}/etc/init.d/S40bluetoothd" \
       "${TARGET_DIR}/etc/init.d/S80dnsmasq"
 
+# OpenSSH is enabled solely for /usr/libexec/sftp-server (the path dropbear
+# already exec's for SFTP). Its S50sshd would start a SECOND ssh daemon next to
+# S50dropbear -- same S50 slot, same port 22, and sshd would win or clash
+# depending on ordering. Drop it: dropbear stays the only daemon and just gains
+# SFTP. Fail loudly if the binary we enabled the package FOR is missing, since
+# a silent absence means scp keeps failing exactly as it does today.
+rm -f "${TARGET_DIR}/etc/init.d/S50sshd"
+if [ ! -x "${TARGET_DIR}/usr/libexec/sftp-server" ]; then
+	echo "ERROR: /usr/libexec/sftp-server missing from the target" >&2
+	echo "       BR2_PACKAGE_OPENSSH_SERVER is enabled only to provide it;" >&2
+	echo "       without it dropbear's SFTP subsystem fails and scp needs -O." >&2
+	exit 1
+fi
+
 # The overlay wpa_supplicant.conf / hostapd.conf (plaintext PSKs once
 # edited) land 0644.
 chmod 600 "${TARGET_DIR}/etc/wpa_supplicant.conf" \

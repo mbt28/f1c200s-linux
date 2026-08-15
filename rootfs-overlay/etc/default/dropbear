@@ -1,4 +1,16 @@
 # Sourced by /etc/init.d/S50dropbear. Networking (and sshd with it) is opt-in
 # on this appliance: `net on` creates /etc/network-enabled and starts the
 # services. The exit below aborts the init script when networking is off.
+
+# -s: refuse password authentication outright. Root's password is locked
+# ("*" in the defconfig) so a password login could never succeed anyway; this
+# makes the daemon reject the attempt rather than prompt for a credential that
+# cannot match. It matters now that the AP is on by default and anyone in radio
+# range can reach port 22.
+#
+# Public-key auth is unaffected, and rootfs-overlay/root/.ssh/authorized_keys is
+# therefore the ONLY way in over the network. If you lock yourself out, the
+# serial console still auto-logs-in as root -- keep that cable findable.
+DROPBEAR_ARGS="-s"
+
 [ "$1" = "stop" ] || [ -f /etc/network-enabled ] || exit 0
