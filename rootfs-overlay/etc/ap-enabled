@@ -1,0 +1,11 @@
+# Presence of this file makes S44ap start the SoftAP on every boot.
+# Shipped present so a freshly flashed card is reachable over WiFi with no
+# serial cable and no hand-provisioning: SSID f1c200s-ap, board at
+# 192.168.9.1, DHCP leases from 192.168.9.10-.50.
+#
+# `ap off` removes it (and leaves the ESP32 transport up for wireless Android
+# Auto and Bluetooth); `ap on` puts it back. STA mode is mutually exclusive --
+# `wifi on` clears this flag, because both modes share the single wlan0.
+#
+# The passphrase is public; see the header of /etc/hostapd.conf for what that
+# does and does not expose.

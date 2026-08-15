@@ -16,19 +16,25 @@ on)
 off)
 	rm -f /etc/ap-enabled
 	/etc/init.d/S44ap stop
-	if [ ! -f /etc/wifi-enabled ]; then
-		modprobe -r esp32_spi 2>/dev/null
-		modprobe -r bluetooth 2>/dev/null
-		modprobe -r cfg80211 2>/dev/null
-	fi
-	echo "ap: off"
+	# Deliberately does NOT unload esp32_spi/bluetooth/cfg80211 any more.
+	# It used to, gated on /etc/wifi-enabled being absent -- which is the NORMAL
+	# case, because S45aa-stack brings the transport up with `wifi up`, and that
+	# sets no flag by design. So `ap off` was taking wlan0 away from wireless
+	# Android Auto and Bluetooth as a side effect of stopping the AP.
+	# Unloading the modules to reclaim the RAM is `wifi off`'s job; it already
+	# skips the unload while /etc/ap-enabled exists, which is the correct guard.
+	echo "ap: off (transport left up; use \`wifi off\` to unload the modules)"
 	;;
 status)
 	[ -f /etc/ap-enabled ] && echo "flag:      enabled (autostarts)" || echo "flag:      disabled"
 	if [ -f /var/run/hostapd.pid ] && kill -0 "$(cat /var/run/hostapd.pid)" 2>/dev/null; then
 		echo "hostapd:   running (SSID $(sed -n 's/^ssid=//p' /etc/hostapd.conf))"
+		# `iw station dump` is ALWAYS empty on this hardware -- the ESP32
+		# firmware owns auth/assoc, so the host cfg80211 never sees a station.
+		# Reporting it as "0 associated" read as a fault when clients were in
+		# fact connected. The DHCP leases are the honest signal.
 		n=$(iw dev wlan0 station dump 2>/dev/null | grep -c "^Station")
-		echo "stations:  $n associated"
+		echo "stations:  $n via iw (always 0 here -- ESP32 owns assoc; use leases)"
 	else
 		echo "hostapd:   not running"
 	fi

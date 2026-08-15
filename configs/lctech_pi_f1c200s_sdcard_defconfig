@@ -4,10 +4,20 @@ BR2_TARGET_GENERIC_HOSTNAME="lctech-f1c200s"
 BR2_TARGET_GENERIC_ISSUE="Welcome to CarPlay Linux (Lctech Pi F1C200s)"
 BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
-# Root password (hashed into /etc/shadow at build). NOTE: this repo is
-# public, so the password is public with it -- fine for a dev appliance
-# (SSH is opt-in via `net on`; the serial console auto-logs-in anyway).
-BR2_TARGET_GENERIC_ROOT_PASSWD="carplay1234"
+# Root password LOCKED. "*" is not an empty password -- it is a hash no input
+# can ever match, so password login is impossible while public-key auth still
+# works. Do NOT "remove the password" by setting this to "": that yields
+# PASSWORDLESS root, which with the always-on AP would let anyone in radio
+# range log in with no credential at all.
+#
+# It was "carplay1234", published in this public repo, on a board that now
+# starts an AP and dropbear on every boot.
+#
+# CONSEQUENCE: rootfs-overlay/root/.ssh/authorized_keys is the ONLY way in over
+# the network. Anyone flashing a card must have their key in it beforehand or
+# their sole access is the serial console. Dropbear also runs with -s (see
+# rootfs-overlay/etc/default/dropbear) so it refuses password auth outright.
+BR2_TARGET_GENERIC_ROOT_PASSWD="*"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/genimage-sdcard.cfg"
@@ -65,9 +75,26 @@ BR2_PACKAGE_FASTCARPLAY=y
 BR2_PACKAGE_I2C_TOOLS=y
 BR2_PACKAGE_LIBV4L_UTILS=y
 BR2_PACKAGE_LIBUDEV_ZERO=y
-# Dropbear SSH server for the dev loop: scp cedrus.ko + ssh-run tests over the
-# USB-hub DM9601 ethernet, no reflashing. Key auth via overlay authorized_keys.
+# Dropbear SSH server for the dev loop: push a binary + ssh-run tests over the
+# AP (or the USB-hub DM9601 ethernet), no reflashing. Key auth via overlay
+# authorized_keys; password auth refused (-s) and root's password is locked.
 BR2_PACKAGE_DROPBEAR=y
+# OpenSSH is enabled ONLY for /usr/libexec/sftp-server, which is the exact path
+# dropbear already exec's for SFTP -- today `scp` fails with
+# "sh: line 0: /usr/libexec/sftp-server: not found" and only `scp -O` (legacy
+# protocol) works. Buildroot's openssh installs the binary to that path under
+# _SERVER (package/openssh/openssh.mk).
+#
+# _SERVER also installs sshd and an S50sshd init script, which would run a
+# SECOND ssh daemon alongside S50dropbear -- both at S50. post-build.sh deletes
+# S50sshd, following the same pattern already used for S30dbus-daemon /
+# S40bluetoothd / S80dnsmasq. Dropbear stays the only daemon and simply gains
+# SFTP.
+#
+# _CLIENT is deliberately NOT enabled: it installs ssh/scp/sftp *clients* on
+# the board, which is the wrong direction for deployment.
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_SERVER=y
 # Boot splash: no psplash -- S00psplash was replaced by S00splash, which blits
 # a raw theme from /etc/splash/ into /dev/fb0. Runtime-selectable on the board
 # via /etc/splash-theme (persists; shows from the next boot).
@@ -112,10 +139,13 @@ BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
 # launches `bluealsa -p hfp-ag` right after bluetoothd (the daemon is named
 # `bluealsa` in v4.3.1; `bluealsad` only in later releases).
 BR2_PACKAGE_BLUEZ_ALSA=y
-# SoftAP userspace (roadmap P5 -> wireless Android Auto needs the head unit
-# to be the AP): hostapd drives the NG driver's cfg80211 AP mode (compiled in
-# with CONFIG_AP_SUPPORT); dnsmasq hands out the leases. Both default-off --
-# post-build.sh drops the S80dnsmasq autostart; the `ap` switch starts them.
+# SoftAP userspace (wireless Android Auto needs the head unit to be the AP,
+# and the wireless dev loop rides the same AP): hostapd drives the NG driver's
+# cfg80211 AP mode (compiled in with CONFIG_AP_SUPPORT); dnsmasq hands out the
+# leases. The AP is now DEFAULT-ON -- rootfs-overlay/etc/ap-enabled ships in
+# the image so a freshly flashed card is reachable with no provisioning.
+# post-build.sh still drops the S80dnsmasq autostart; S44ap runs the AP's own
+# dnsmasq with -C /etc/dnsmasq-ap.conf.
 BR2_PACKAGE_HOSTAPD=y
 BR2_PACKAGE_HOSTAPD_DRIVER_NL80211=y
 BR2_PACKAGE_DNSMASQ=y

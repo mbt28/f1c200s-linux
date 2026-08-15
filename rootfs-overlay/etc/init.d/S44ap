@@ -1,37 +1,61 @@
 #!/bin/sh
-# SoftAP via the ESP32 (hostapd on the NG driver's cfg80211 AP mode +
-# dnsmasq for leases; docs/wireless-esp-hosted.md P5). Opt-in: `ap on`
-# creates the flag below. Mutually exclusive with STA mode (S43wifi) --
-# both share wlan0; the `wifi`/`ap` switches clear each other's flag.
+# SoftAP via the ESP32 (hostapd on the NG driver's cfg80211 AP mode + dnsmasq
+# for leases; docs/wireless-esp-hosted.md P5). Enabled by default: /etc/ap-enabled
+# ships in the image so a freshly flashed board is reachable over WiFi with no
+# provisioning. `ap off` clears the flag. Mutually exclusive with STA mode
+# (S43wifi) -- both share wlan0, and the `wifi`/`ap` switches clear each other.
+#
+# TRANSPORT COMES FROM `wifi up`, NOT FROM A LOCAL modprobe. This script used to
+# modprobe esp32_spi itself and wait 10 s with no retry, which lost the race on a
+# cold boot: the ESP needs 10-20 s, S44ap gave up and exited 0, then S45aa-stack's
+# `wifi up` brought wlan0 back later and nothing ever started hostapd for that
+# boot. `wifi up` owns the only retry loop (4 x 8 s, re-pulsing the ESP32 reset
+# on PE4 each round), so use it. It is idempotent -- if wlan0 already exists it
+# skips straight to bringing the link up -- which is why S45aa-stack calling it
+# again a moment later is harmless.
+#
+# Backgrounded for the same reason S45aa-stack is: the retry loop can take ~40 s
+# and rcS must not block on the radio.
 [ "$1" != "start" ] || [ -f /etc/ap-enabled ] || exit 0
 case "$1" in
 start)
-	modprobe esp32_spi resetpin=132 clockspeed=10 2>/dev/null
-	i=0
-	while [ $i -lt 10 ] && [ ! -d /sys/class/net/wlan0 ]; do sleep 1; i=$((i + 1)); done
-	[ -d /sys/class/net/wlan0 ] || {
-		echo "ap: no wlan0 (ESP32 transport failed -- check wiring + dmesg)" > /dev/console
-		exit 0
-	}
-	if grep -q "CHANGEME_AP_PASS" /etc/hostapd.conf 2>/dev/null; then
-		echo "ap: edit /etc/hostapd.conf (placeholder passphrase), then: ap off; ap on" > /dev/console
-		exit 0
-	fi
-	ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up
-	ip addr flush dev wlan0 2>/dev/null
-	ip addr add 192.168.9.1/24 dev wlan0
-	hostapd -B -P /var/run/hostapd.pid /etc/hostapd.conf || {
-		echo "ap: hostapd failed to start (see dmesg / hostapd output)" > /dev/console
-		exit 0
-	}
-	dnsmasq -C /etc/dnsmasq-ap.conf -x /var/run/dnsmasq-ap.pid
-	echo "============ ap: SSID $(sed -n 's/^ssid=//p' /etc/hostapd.conf) up at 192.168.9.1 ============" > /dev/console
+	(
+		wifi up
+		[ -d /sys/class/net/wlan0 ] || {
+			echo "ap: no wlan0 after wifi up (ESP32 transport failed -- check wiring + dmesg)" > /dev/console
+			exit 0
+		}
+		# Anchored: an unanchored match blocked startup whenever the token
+		# appeared anywhere in the file, including in a comment explaining it.
+		if grep -q '^wpa_passphrase=CHANGEME_AP_PASS' /etc/hostapd.conf 2>/dev/null; then
+			echo "ap: edit /etc/hostapd.conf (placeholder passphrase), then: ap off; ap on" > /dev/console
+			exit 0
+		fi
+		# NEVER `ip link set wlan0 down` here. On esp-hosted that calls ndo_stop,
+		# which deinitialises the interface on the ESP32 side, and nothing brings
+		# the firmware back -- cfg80211 and hostapd then both report an ENABLED AP
+		# that never beacons.
+		ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up
+		# -4: an unqualified flush also destroys the IPv6 link-local, and wireless
+		# CarPlay hands the phone the fe80 address as its endpoint. (Measured: it
+		# falls back to IPv4 and still works, so this is hygiene, not a fix.)
+		ip -4 addr flush dev wlan0 2>/dev/null
+		ip addr add 192.168.9.1/24 dev wlan0
+		hostapd -B -P /var/run/hostapd.pid /etc/hostapd.conf || {
+			echo "ap: hostapd failed to start (see dmesg / hostapd output)" > /dev/console
+			exit 0
+		}
+		dnsmasq -C /etc/dnsmasq-ap.conf -x /var/run/dnsmasq-ap.pid
+		echo "============ ap: SSID $(sed -n 's/^ssid=//p' /etc/hostapd.conf) up at 192.168.9.1 ============" > /dev/console
+	) &
 	;;
 stop)
 	for f in /var/run/hostapd.pid /var/run/dnsmasq-ap.pid; do
 		[ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && rm -f "$f"
 	done
-	ip addr flush dev wlan0 2>/dev/null
+	# -4 again, and note this deliberately leaves the transport loaded: taking
+	# wlan0 away is `wifi off`'s job, not a side effect of stopping the AP.
+	ip -4 addr flush dev wlan0 2>/dev/null
 	;;
 *)
 	echo "usage: $0 {start|stop}"
