@@ -4,11 +4,16 @@ BR2_TARGET_GENERIC_HOSTNAME="lctech-f1c200s"
 BR2_TARGET_GENERIC_ISSUE="Welcome to CarPlay Linux (Lctech Pi F1C200s)"
 BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
-# Root password LOCKED. "*" is not an empty password -- it is a hash no input
-# can ever match, so password login is impossible while public-key auth still
-# works. Do NOT "remove the password" by setting this to "": that yields
-# PASSWORDLESS root, which with the always-on AP would let anyone in radio
-# range log in with no credential at all.
+# Root password LOCKED -- but NOT by this line alone. Buildroot only treats a
+# value as pre-hashed if it starts with $1$/$5$/$6$ (system/Config.in:380);
+# anything else is taken as CLEAR TEXT and crypt-encoded. So "*" here does not
+# lock the account, it sets the password to a single asterisk -- verified in a
+# built image, which had a live $5$ hash in /etc/shadow. The actual locking is
+# done in post-build.sh, which rewrites root's shadow field to "*" and asserts
+# it. This value is only the pre-lock input and never survives to the image.
+#
+# Do NOT set this to "": that yields PASSWORDLESS root, which alongside the
+# always-on AP would let anyone in radio range log in with no credential.
 #
 # It was "carplay1234", published in this public repo, on a board that now
 # starts an AP and dropbear on every boot.

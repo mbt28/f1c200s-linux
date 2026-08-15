@@ -66,6 +66,26 @@ printf 'tmpfs\t/dev/shm\ttmpfs\tmode=1777,size=4M,noatime\t0\t0\n'              
 sed -i '\#^/dev/mmcblk0p4#d' "${FSTAB}"
 printf '/dev/mmcblk0p4\tnone\tswap\tnoauto,pri=10\t0\t0\n' >> "${FSTAB}"
 
+# LOCK root's password. This cannot be done from BR2_TARGET_GENERIC_ROOT_PASSWD:
+# Buildroot only passes a value through verbatim when it starts with $1$/$5$/$6$
+# (system/Config.in:380), so "*" there is taken as CLEAR TEXT and crypt-encoded
+# -- a built image came out with a live $5$ hash, i.e. root's password was
+# literally one asterisk. Rewrite the field directly instead.
+#
+# "*" matches no input, so password login is impossible while public-key auth is
+# unaffected. This is NOT an empty field, which would mean passwordless root.
+# The serial console is unaffected because it is not a getty: inittab runs
+# `-/bin/sh` directly (see the auto-login block above), so it never authenticates
+# -- which is what keeps a locked board recoverable.
+SHADOW="${TARGET_DIR}/etc/shadow"
+sed -i 's|^root:[^:]*:|root:*:|' "${SHADOW}"
+if ! grep -q '^root:\*:' "${SHADOW}"; then
+	echo "ERROR: failed to lock root's password in ${SHADOW}" >&2
+	echo "       Shipping with a guessable or empty root password alongside the" >&2
+	echo "       always-on AP is exactly what this is meant to prevent." >&2
+	exit 1
+fi
+
 # Dropbear key auth: the overlay copy of authorized_keys/.ssh lands 0644/0755;
 # tighten to the conventional 0600/0700 so dropbear never refuses the dev key.
 if [ -d "${TARGET_DIR}/root/.ssh" ]; then
