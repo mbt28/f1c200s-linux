@@ -141,6 +141,27 @@ CONFIG_PHY_SUN4I_USB=y
 # so the tree builds clean with this off. To revive: flip both symbols to =y.
 # musb_hdrc.use_dma=0 in uboot-sdcard.fragment stays as belt-and-braces.
 # CONFIG_USB_SUNXI_DMA is not set
+
+# ...and here is the third belt. musb_hdrc.use_dma=0 is REQUIRED for wired
+# CarPlay, and until now it lived only in bootargs we control. On the NAND boot
+# path we deliberately keep the STOCK bootloader (mainline's SPL cannot read SPI
+# NAND on suniv), and its saved bootargs are the vendor's:
+#
+#   console=ttyS0,115200 rootwait init=/preinit root=/dev/mtdblock2 \
+#     rootfstype=squashfs overlayfsdev=/dev/mtdblock3 net.ifnames=0 \
+#     vt.global_cursor_default=0
+#
+# -- no use_dma=0. So a NAND boot would silently come up with DMA enabled and
+# wired CarPlay would break, with no error pointing at the cause. CMDLINE_EXTEND
+# makes the KERNEL append CONFIG_CMDLINE to whatever the bootloader passed, so
+# the setting travels with the kernel instead of with the bootloader. On the SD
+# path the parameter then appears twice with the same value, which is harmless:
+# the parser takes the last occurrence.
+#
+# EXTEND, never FORCE: FORCE would discard the bootloader's root= and
+# overlayfsdev= and make the board unbootable from either medium.
+CONFIG_CMDLINE="musb_hdrc.use_dma=0"
+CONFIG_CMDLINE_EXTEND=y
 # USB_UX500_DMA only ever existed here to make sunxi_dma's MUSB_DMA_UX500 quirk
 # bit live (patch 0016 widened its Kconfig depends to allow it on sunxi). With
 # the backend off nothing sets that bit, so it goes off with it.
@@ -243,9 +264,28 @@ CONFIG_MTD_OF_PARTS=y
 # These are needed on the SD image too, not just NAND -- one kernel serves both,
 # and the SD-booted system is what flashes the NAND.
 CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
+# gzip, matching what mksquashfs produces (BR2_TARGET_ROOTFS_SQUASHFS4_GZIP)
+# and what the vendor image uses. See the defconfig for why not xz: the
+# partition has room to spare and gzip is far cheaper to decompress on every
+# cold page-in on a 408 MHz ARMv5. ZLIB_INFLATE is already =y in the base.
+CONFIG_SQUASHFS_ZLIB=y
+# Single core: per-CPU decompressor workspaces would be wasted memory.
+CONFIG_SQUASHFS_DECOMP_SINGLE=y
+# WRITEBUFFER is what makes jffs2 legal on NAND at all -- without it jffs2
+# issues sub-page writes the chip cannot accept. It is default y and would
+# arrive on its own, which is exactly why it is spelled out.
 CONFIG_JFFS2_FS=y
+CONFIG_JFFS2_FS_WRITEBUFFER=y
+# Summary nodes let mount read ~384 per-block summaries instead of scanning the
+# whole 48 MiB over a 40 MHz SPI bus. This is the knob that decides whether
+# NAND boot time is acceptable -- measure the preinit jffs2 mount on first boot.
+CONFIG_JFFS2_SUMMARY=y
 CONFIG_OVERLAY_FS=y
+# /preinit reads /dev/mtdblock3 and /dev/console before anything mounts /dev,
+# so the KERNEL must have mounted devtmpfs already. Both are inherited but
+# load-bearing enough to state.
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
 
 # System DMA (A10-class NDMA/DDMA, backported by patch 0014): spi-sun6i picks
 # the channels up from the DT and stops burning ~25 FIFO IRQs per ESP frame.

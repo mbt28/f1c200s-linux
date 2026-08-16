@@ -1,4 +1,4 @@
-lctech f1c200s: partition the on-board SPI NAND
+lctech f1c200s: partition the on-board SPI NAND, and carry NAND bootargs
 
 The board .dts declares the GigaDevice 128 MiB SPI NAND under &spi0 but defines
 no partitions, so the chip enumerates as a single whole-device /dev/mtd0. That
@@ -13,12 +13,36 @@ Mirrors the vendor layout exactly, read off the stock firmware's own /proc/mtd:
   0x04600000   48 MiB  overlay       jffs2,    read-write -> overlayfs upper
 
 Leaving the last 10 MiB unpartitioned, as stock does. Mirroring rather than
-inventing a layout means our artifacts are known to fit (measured: u-boot
-457.8 KiB of 512 KiB, kernel.itb 4.52 MiB of 5.5 MiB, squashfs ~25 MiB of
-64 MiB) and the stock backup maps onto it 1:1 for restore.
+inventing a layout means our artifacts are known to fit (measured: kernel.itb
+4.54 MiB of 5.5 MiB, squashfs ~30 MiB of 64 MiB) and the stock backup maps onto
+it 1:1 for restore.
 
 CONFIG_MTD_OF_PARTS=y is already set in linux.fragment specifically to parse
 this once it existed.
+
+The second half of this patch is the non-obvious one. We keep the STOCK
+bootloader in mtd0, because mainline U-Boot's SPL cannot boot SPI NAND on suniv
+(board.c returns SUNXI_INVALID_BOOT_SOURCE for SUNIV_BOOTED_FROM_NAND). So the
+kernel's command line on the NAND path is whatever that bootloader supplies --
+and it supplies NOTHING. Its script is:
+
+  nand_boot=echo "Booting from SPI-NAND..."; \
+            mtd read spi-nand0 ${kernel_addr_r} 0x80000 0x580000; \
+            bootm ${kernel_addr_r};
+
+with kernel_addr_r=0x81000000, and its environment defines no "bootargs"
+variable at all -- confirmed with strings(1) over the stock mtd0 dump. The
+vendor gets its command line from the chosen node of the DTB inside its own
+FIT; carving that DTB out of the stock mtd1 dump and decompiling it shows
+exactly the string added here. So: no bootargs in the tree means an empty
+kernel command line, no console, no root=, and a panic with nothing on the
+serial line to explain it.
+
+Adding it to chosen{} costs the SD path nothing. U-Boot's fdt_chosen()
+overwrites chosen/bootargs whenever the "bootargs" env var is non-empty, and
+our own U-Boot sets CONFIG_BOOTARGS, so on SD this property is replaced before
+the kernel ever sees it. It takes effect precisely when the bootloader offers
+nothing, which is the case it exists for.
 
 Note this affects the SD image too -- one kernel and one .dts serve both -- so
 an SD-booted system now sees /dev/mtd0..3 instead of a single mtd0. That is
@@ -27,9 +51,43 @@ partitions by name.
 
 Signed-off-by: mbt28 <btekbas@gmail.com>
 
---- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
-+++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
-@@ -52,6 +52,32 @@
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts	2026-08-16 16:53:19.994210564 +0200
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts	2026-08-16 17:33:27.862016227 +0200
+@@ -21,6 +21,33 @@
+ 
+ 	chosen {
+ 		stdout-path = "serial0:115200n8";
++
++		/*
++		 * Default cmdline for the SPI-NAND boot path. It has to live
++		 * HERE, in the device tree, because the on-board bootloader
++		 * passes none: its nand_boot is exactly
++		 *
++		 *   mtd read spi-nand0 ${kernel_addr_r} 0x80000 0x580000;
++		 *   bootm ${kernel_addr_r};
++		 *
++		 * and its environment defines no "bootargs" variable at all
++		 * (verified with strings(1) on the stock mtd0 dump). The
++		 * vendor's own FIT carries the identical string in its own
++		 * chosen node, which is where the running stock system's
++		 * /proc/cmdline came from. Without this the NAND boot reaches
++		 * the kernel with an EMPTY command line -- no console, no
++		 * root= -- and panics with nothing on the wire to explain it.
++		 *
++		 * The SD path is unaffected: our own U-Boot sets CONFIG_BOOTARGS,
++		 * and a non-empty "bootargs" env makes U-Boot's fdt_chosen()
++		 * overwrite this property before handing the tree to the kernel.
++		 * So this string is what runs iff the bootloader supplies nothing.
++		 *
++		 * musb_hdrc.use_dma=0 is deliberately NOT here -- CMDLINE_EXTEND
++		 * appends it to whichever of the two command lines wins, so it
++		 * cannot be lost by editing only one of them.
++		 */
++		bootargs = "console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3";
+ 	};
+ 
+ 	reg_vcc3v3: regulator-3v3 {
+@@ -52,6 +79,32 @@
  		compatible = "spi-nand";
  		reg = <0>;
  		spi-max-frequency = <40000000>;

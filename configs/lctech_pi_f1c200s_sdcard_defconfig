@@ -44,11 +44,17 @@ BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
 # squashfs for the NAND rootfs (mtd2 "rom"), built ALONGSIDE ext4 -- one build
 # emits both rootfs.ext4 (SD) and rootfs.squashfs (NAND). host-squashfs is
-# pulled in automatically. XZ because the target is a 64 MiB partition and the
-# rootfs is 64 MiB of content: measured tar.xz = 21.8 MiB, so xz lands ~25 MiB
-# with room to spare. Note the SQUASHFS4 infix in the compression symbol.
+# pulled in automatically. Note the SQUASHFS4 infix in the compression symbol.
+#
+# GZIP, not xz, and deliberately so. xz would give ~22 MiB against gzip's
+# ~28-30 MiB -- but the partition is 64 MiB, so the saving buys nothing we need,
+# and squashfs decompresses per 128 KiB block on EVERY cold page-in. On a
+# 408 MHz ARMv5 paging in a 12.4 MiB libavcodec, xz costs several times gzip's
+# CPU for space we are not short of. The vendor firmware made the same call:
+# `unsquashfs -s` on the stock mtd2 reports "Compression gzip / Block size
+# 131072".
 BR2_TARGET_ROOTFS_SQUASHFS=y
-BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
+BR2_TARGET_ROOTFS_SQUASHFS4_GZIP=y
 # mkimage, to build the kernel FIT for mtd1. Buildroot has NO kernel-FIT
 # option of its own, so post-image-nand.sh calls mkimage with our hand-written
 # board/lctech/pi-f1c200s/kernel.its. FIT_SUPPORT selects host-dtc.
