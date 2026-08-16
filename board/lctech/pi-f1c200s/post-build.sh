@@ -21,7 +21,14 @@ echo 'ttyS0::respawn:-/bin/sh'             >> "${INITTAB}"
 # why a chatty one ate into the 64 MiB. Replace the symlink with a real
 # mountpoint. It stays EMPTY in the rootfs image -- the contents only ever
 # exist on p3.
-rm -f "${TARGET_DIR}/var/log"
+#
+# rm -rf, not rm -f: on a clean build /var/log is the skeleton SYMLINK (rm -f
+# would do), but on an INCREMENTAL rebuild it is already the real directory a
+# previous run of this script created, and `rm -f` cannot remove a directory --
+# it errors, and with set -e that aborts target-finalize. -rf handles both; the
+# directory is always empty at this point (nothing writes target/var/log during
+# a build), so there is nothing to lose.
+rm -rf "${TARGET_DIR}/var/log"
 mkdir -p "${TARGET_DIR}/var/log"
 
 # noatime: a log write should not also cost a metadata write.
