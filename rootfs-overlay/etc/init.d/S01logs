@@ -15,7 +15,7 @@
 # failure.
 case "$1" in
 start)
-	# On the NAND boot path / is an overlayfs union whose upper layer is jffs2
+	# On the NAND boot path / is an overlayfs union whose upper layer is UBIFS
 	# on mtd3, so /var/log is ALREADY a persistent writable directory and the
 	# rootfs is already protected (the squashfs lower layer is never written).
 	# Mounting a tmpfs over it there would be actively harmful: logs would

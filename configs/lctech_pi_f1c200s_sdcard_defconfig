@@ -215,8 +215,15 @@ BR2_PACKAGE_MUSB_COLLISION_TEST=y
 # The rest are the write path we need afterwards: flash_erase (NAND must be
 # erased before programming and erase is per 128 KiB block), nandwrite (skips
 # bad blocks, unlike dd), flashcp, and mtdinfo/mtd_debug for inspection.
-# Deliberately NOT enabling the UBI/UBIFS or JFFS2 utils yet -- the stock layout
-# is squashfs+jffs2 rather than UBI, and which of those we mirror is still open.
+#
+# The UBI tools (ubiattach/ubiformat/ubimkvol/...) default to y with
+# BR2_PACKAGE_MTD, so they are not listed here but ARE in the image -- /preinit
+# uses them to provision the writable overlay as UBI + UBIFS on mtd3. We chose
+# UBIFS over the vendor's jffs2 because jffs2 is unusable on this chip: mainline
+# spinand_isbad() reads two OOB bytes while the GigaDevice ooblayout reserves
+# only one for the bad-block marker, so jffs2's cleanmarker in byte 1 makes every
+# block it formats read back bad (HW-proven). UBI keeps its headers off the OOB.
+# post-build.sh asserts the three tools are present.
 BR2_PACKAGE_MTD=y
 BR2_PACKAGE_MTD_NANDDUMP=y
 BR2_PACKAGE_MTD_NANDWRITE=y

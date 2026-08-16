@@ -10,7 +10,7 @@ Mirrors the vendor layout exactly, read off the stock firmware's own /proc/mtd:
   0x00000000  512 KiB  u-boot
   0x00080000  5.5 MiB  kernel.itb    FIT (kernel + dtb)
   0x00600000   64 MiB  rom           squashfs, read-only  -> overlayfs lower
-  0x04600000   48 MiB  overlay       jffs2,    read-write -> overlayfs upper
+  0x04600000   48 MiB  overlay       UBI/UBIFS, read-write -> overlayfs upper
 
 Leaving the last 10 MiB unpartitioned, as stock does. Mirroring rather than
 inventing a layout means our artifacts are known to fit (measured: kernel.itb
@@ -83,7 +83,7 @@ Signed-off-by: mbt28 <btekbas@gmail.com>
 +		 * appends it to whichever of the two command lines wins, so it
 +		 * cannot be lost by editing only one of them.
 +		 */
-+		bootargs = "console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3";
++		bootargs = "console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3";
  	};
  
  	reg_vcc3v3: regulator-3v3 {

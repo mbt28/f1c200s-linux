@@ -37,13 +37,24 @@
 # mtd0 show "U-Boot SPL 2020.07" with "SPI-NAND: GigaDevice GD5F1GQ4UAYIG"),
 # but mainline does not have it.
 #
-# WHY NOT FROM U-BOOT: U-Boot's `mtd bad` reports 514 bad blocks on this chip
-# where Linux reports zero -- three perfectly contiguous runs totalling 64 MiB,
-# which is not what real bad blocks look like and is contradicted by the vendor
-# firmware happily using 118 MiB of the part. Its bad-block marker
-# interpretation disagrees with vendor-written data. A write driven off that map
-# would skip 64 MiB of good blocks, and bad-block skipping is the entire reason
-# nandwrite is safer than dd. Linux's view is the correct one, so flash here.
+# FALSE BAD BLOCKS -- read this before touching the overlay. Both U-Boot AND
+# Linux report ~512 bad blocks on this chip (mtd2 "rom" ~128, mtd3 "overlay" all
+# 384) where the vendor happily used the whole part. They are NOT worn: mainline
+# spinand_isbad() reads two OOB bytes and calls a block bad if either is
+# non-0xff, but the GigaDevice ooblayout reserves only ONE byte for the marker
+# and gives byte 1 to the filesystem. The vendor's old jffs2 left its cleanmarker
+# (0x1985) in byte 1 of every block it used, so those blocks now read bad. See
+# linux.fragment and docs -- HW-proven 2026-08-17.
+#
+# Consequence for THIS script: mtd1 (kernel) and mtd2 (squashfs) flash fine with
+# nandwrite here -- nandwrite skips blocks it reads as bad and the readback
+# verify below confirms each write landed. But mtd3 (the writable overlay) is a
+# different matter: every one of its blocks reads bad, so nothing Linux does can
+# prepare it -- the kernel refuses to erase a block it reads as bad. The false
+# markers must be cleared with a force-erase from U-Boot, which this script
+# CANNOT do from Linux. So mtd3 is left untouched here and provisioned later;
+# the closing message spells out the one U-Boot command and preinit does the
+# rest on first boot.
 #
 # NEVER use dd on a NAND device: it does not skip bad blocks.
 set -e
@@ -112,11 +123,13 @@ flash_erase --quiet /dev/mtd2 0 0
 nandwrite -p /dev/mtd2 "$SQUASH"
 verify 2 "$SQUASH"
 
-echo "== mtd3 overlay (erase only) =="
-# Deliberately not written: jffs2 formats itself on first mount of an erased
-# partition, so an image would be wasted bytes. Erasing also discards whatever
-# the vendor firmware left there.
-flash_erase --quiet /dev/mtd3 0 0
+echo "== mtd3 overlay: LEFT UNTOUCHED (provisioned from U-Boot + preinit) =="
+# Not erased here on purpose. Every block in mtd3 reads bad (false markers from
+# the vendor's old jffs2 -- see the header), and Linux refuses to erase a bad
+# block, so `flash_erase /dev/mtd3` would just fail with EIO. The overlay is a
+# UBI volume created by /preinit on first boot, AFTER the false markers are
+# cleared with a one-time force-erase from U-Boot. The closing message has the
+# exact command.
 
 echo "== mtd1 kernel =="
 flash_erase --quiet /dev/mtd1 0 0
@@ -134,6 +147,18 @@ fi
 
 sync
 echo
-echo "done. Remove the SD card and reboot to boot from NAND."
-echo "If it does not come up: hold BOOT with no SD card inserted and the board"
+echo "kernel + rootfs written. ONE MORE STEP before the writable overlay works:"
+echo
+echo "  The overlay partition (mtd3) still carries FALSE bad-block markers that"
+echo "  Linux cannot clear. Clear them once from the U-Boot prompt:"
+echo
+echo "    1. reboot; interrupt autoboot (any key during the 2s countdown)"
+echo "    2. at =>  mtd erase.dontskipbad spi-nand0 0x4600000 0x3000000"
+echo "    3. boot   (or: remove the SD card and power-cycle)"
+echo
+echo "  On the first NAND boot, /preinit formats mtd3 as UBI + UBIFS and mounts"
+echo "  the writable overlay. Subsequent boots just attach it. This is a"
+echo "  one-time step -- once scrubbed, the markers stay cleared."
+echo
+echo "If the board does not come up: hold BOOT with no SD card inserted and it"
 echo "enters FEL, where sunxi-fel can load a working U-Boot into RAM."
