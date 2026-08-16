@@ -86,6 +86,21 @@ if ! grep -q '^root:\*:' "${SHADOW}"; then
 	exit 1
 fi
 
+# /preinit assembles the overlay root on the NAND boot path, and it needs its
+# mountpoint to ALREADY EXIST: by the time it runs, / is a read-only squashfs,
+# so it cannot mkdir /overlay itself. The Buildroot skeleton provides /mnt (the
+# union target) but not /overlay, so create it here. An empty directory in the
+# image, ~0 bytes, and without it the NAND boot silently falls back to
+# read-only.
+mkdir -p "${TARGET_DIR}/overlay"
+if [ ! -x "${TARGET_DIR}/preinit" ]; then
+	echo "ERROR: /preinit is missing or not executable in ${TARGET_DIR}" >&2
+	echo "       The NAND boot passes init=/preinit; without it the kernel" >&2
+	echo "       falls back to /sbin/init and / stays read-only." >&2
+	echo "       Fix: rootfs-overlay/preinit (mode 0755)" >&2
+	exit 1
+fi
+
 # Dropbear key auth: the overlay copy of authorized_keys/.ssh lands 0644/0755;
 # tighten to the conventional 0600/0700 so dropbear never refuses the dev key.
 if [ -d "${TARGET_DIR}/root/.ssh" ]; then
@@ -175,6 +190,54 @@ if [ -n "${KCONFIG}" ]; then
 			exit 1
 		fi
 	done
+
+	# The squashfs decompressor must match what mksquashfs actually produced.
+	# These two live in different files -- the compressor in the defconfig
+	# (BR2_TARGET_ROOTFS_SQUASHFS4_GZIP), the decompressor in linux.fragment --
+	# so flipping one and forgetting the other is easy, and the result is a
+	# kernel that mounts nothing: "squashfs: Filesystem uses <foo> compression,
+	# this is not supported", from PID 1, on a board with no root.
+	if ! grep -q "^CONFIG_SQUASHFS_ZLIB=y\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_SQUASHFS_ZLIB missing from ${KCONFIG}" >&2
+		echo "       The rootfs is built with gzip (BR2_TARGET_ROOTFS_SQUASHFS4_GZIP)," >&2
+		echo "       so the kernel needs the matching decompressor or the NAND root" >&2
+		echo "       fails to mount at all." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+		exit 1
+	fi
+
+	# jffs2 on NAND is illegal without a write buffer: the chip cannot take the
+	# sub-page writes jffs2 would otherwise issue. It is default y and so tends
+	# to be present by accident rather than intent -- assert it.
+	if ! grep -q "^CONFIG_JFFS2_FS_WRITEBUFFER=y\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_JFFS2_FS_WRITEBUFFER missing from ${KCONFIG}" >&2
+		echo "       jffs2 cannot be used on NAND without it (sub-page writes)." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+		exit 1
+	fi
+
+	# musb_hdrc.use_dma=0 is required for wired CarPlay. On the NAND path we boot
+	# under the STOCK bootloader, whose command line we do not control, so the
+	# only way to guarantee the parameter is to have the kernel append it itself.
+	# CMDLINE_EXTEND without a CMDLINE, or CMDLINE_FORCE instead of EXTEND, both
+	# produce a board that boots and then fails only when a phone is plugged in.
+	if ! grep -q "^CONFIG_CMDLINE_EXTEND=y\$" "${KCONFIG}" ||
+	   ! grep -q '^CONFIG_CMDLINE="[^"]*musb_hdrc\.use_dma=0' "${KCONFIG}"; then
+		echo "ERROR: CONFIG_CMDLINE_EXTEND=y with musb_hdrc.use_dma=0 in" >&2
+		echo "       CONFIG_CMDLINE is missing from ${KCONFIG}" >&2
+		echo "       The NAND path boots under the stock bootloader, which passes" >&2
+		echo "       no bootargs of its own, so this is the only place the DMA" >&2
+		echo "       workaround can be guaranteed. Without it wired CarPlay breaks" >&2
+		echo "       ('carkit open failed') with nothing pointing at the cause." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+		exit 1
+	fi
+	if grep -q "^CONFIG_CMDLINE_FORCE=y\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_CMDLINE_FORCE=y in ${KCONFIG}" >&2
+		echo "       FORCE discards the bootloader's root=/overlayfsdev=, which" >&2
+		echo "       makes the board unbootable from BOTH media. Use EXTEND." >&2
+		exit 1
+	fi
 
 	# MTD_SPI_NAND depends on SPI_MASTER, so it is exactly the shape of symbol
 	# that disappears quietly if a dependency moves -- and the failure is only

@@ -1,79 +1,88 @@
 #!/bin/sh
-# PID 1 on the NAND boot path. Assembles the writable root, then hands over to
-# the real init.
+# PID 1 on the NAND boot path (init=/preinit). Assembles the writable root:
 #
-# The kernel mounts mtd2 (squashfs, read-only) as /, then runs us via
-# `init=/preinit`. We mount the jffs2 upper layer, union the two with
-# overlayfs, and switch_root into the union -- so userspace sees a READ-WRITE /
-# while the OS itself lives in a squashfs that is never written. On a board
-# that loses power the instant the ignition goes off, that means a power cut
-# can only ever damage the erasable upper layer, never the system.
+#   lower  /dev/mtdblock2  squashfs, immutable, never written
+#   upper  /dev/mtdblock3  jffs2, every runtime write lands here
+#   union  overlayfs       what userspace sees as / -- READ-WRITE
 #
-# Shape mirrors the vendor firmware (/overlay = jffs2, /overlay/rom/{lower,
-# upper,work}) because that arrangement is proven on this exact hardware.
+# Because nothing ever writes the OS, a power cut at ignition-off can only
+# damage the erasable upper layer, never the system.
 #
 # The SD path never runs this: it boots root=/dev/mmcblk0p2 rw straight into
-# /sbin/init, with no init= override.
+# /sbin/init with no init= override.
 #
-# EVERY APPLET USED HERE IS ALREADY IN THE SHIPPED BUSYBOX -- switch_root,
-# mount (with -o move, gated by CONFIG_FEATURE_MOUNT_FLAGS=y), mkdir. This
-# script needs no busybox config change.
+# --- TWO TRAPS THIS SCRIPT EXISTS TO AVOID, both verified in source ---
+#
+# 1. NOT switch_root. busybox switch_root.c:244 does:
+#        statfs("/", &stfs);
+#        if (f_type != RAMFS_MAGIC && f_type != TMPFS_MAGIC)
+#                bb_simple_error_msg_and_die("root filesystem is not ramfs/tmpfs");
+#    so it REFUSES on a squashfs root. chroot is the only option here, and is
+#    what the vendor firmware does.
+#
+# 2. NOT `mount --rbind`. busybox mount has no long-option table
+#    (util-linux/mount.c calls getopt32 with no applet_long_options), so
+#    --rbind dies as an unrecognised option. The flag exists only as `-o rbind`,
+#    which CONFIG_FEATURE_MOUNT_FLAGS=y enables. The vendor's own script uses
+#    --rbind and would fail on OUR busybox -- do not copy it verbatim.
+#
+# THIS SCRIPT MUST NEVER EXIT. If PID 1 returns, the kernel panics with
+# "Attempted to kill init", which tells you nothing. Every failure path falls
+# through to a plain read-only boot instead: degraded, but the serial console
+# still gives a root shell (inittab runs -/bin/sh directly), so it is fixable.
+#
+# Output goes to the console because the kernel opens /dev/console for PID 1
+# and devtmpfs is already mounted (CONFIG_DEVTMPFS_MOUNT=y). Progress is
+# printed on purpose -- this is the one place where a silent failure would be
+# invisible.
 
-# FIRST, before anything can fail: send our output to the console. The kernel
-# console is already up (console=ttyS0,115200), so from here on every message
-# and every error is visible on serial. Without this line a failure in here is
-# a silent hang, which is the worst way to debug PID 1.
-exec >/dev/console 2>&1
+mount -n -t proc proc /proc
+set -- $(cat /proc/cmdline)
+umount /proc
 
-echo "preinit: assembling overlay root"
+OVL=
+for x in "$@"; do
+	case "$x" in
+	overlayfsdev=*) OVL="${x#overlayfsdev=}" ;;
+	# Escape hatches, settable from the U-Boot prompt without reflashing.
+	preinit=skip) echo "preinit: skipped -- read-only boot"; exec /sbin/init ;;
+	preinit=sh)   echo "preinit: dropping to a shell"; exec /bin/sh ;;
+	esac
+done
 
-mount -t proc     proc     /proc
-mount -t sysfs    sysfs    /sys
-mount -t devtmpfs devtmpfs /dev 2>/dev/null
-
-# Bail out to a shell rather than exiting: if PID 1 exits the kernel panics
-# with "Attempted to kill init", which tells you nothing. A shell on the
-# console tells you everything.
-panic_shell() {
-	echo "preinit: FAILED -- $1"
-	echo "preinit: dropping to a shell on the console."
-	exec /bin/sh
+ro_boot() {
+	echo "preinit: $1"
+	echo "preinit: continuing READ-ONLY -- / will not be writable."
+	echo "preinit: recover with: flash_erase /dev/mtd3 0 0   (from an SD boot)"
+	exec /sbin/init
 }
 
-# The writable layer. A freshly erased jffs2 partition mounts clean and empty,
-# so flashing only ever has to ERASE mtd3, never write an image to it.
-mkdir -p /overlay
-if ! mount -t jffs2 /dev/mtdblock3 /overlay; then
-	# Degrade rather than refuse to boot. Writes will not survive a reboot,
-	# which is bad, but a board that boots and says so is far better than one
-	# that does not boot at all.
-	echo "preinit: WARNING jffs2 on mtdblock3 did not mount"
-	echo "preinit: falling back to tmpfs -- CHANGES WILL NOT PERSIST"
-	mount -t tmpfs tmpfs /overlay || panic_shell "no upper layer at all"
-fi
+[ -n "$OVL" ] || ro_boot "no overlayfsdev= on the cmdline"
+[ -b "$OVL" ] || ro_boot "$OVL is not a block device"
 
-mkdir -p /overlay/rom/lower /overlay/rom/upper /overlay/rom/work
+echo "preinit: mounting $OVL (jffs2) on /overlay"
+mount -n -t jffs2 -o rw,noatime "$OVL" /overlay \
+	|| ro_boot "jffs2 mount of $OVL failed"
 
-# Re-mount the squashfs at its own path instead of using / as the lowerdir.
-# overlayfs objects to a lowerdir that is itself a mount root, and this is what
-# the vendor does.
-mount -t squashfs -o ro /dev/mtdblock2 /overlay/rom/lower \
-	|| panic_shell "squashfs on mtdblock2 did not mount"
+mkdir -p /overlay/rom/lower /overlay/rom/upper /overlay/rom/work \
+	|| ro_boot "cannot create the overlay directories"
 
-mount -t overlay overlay \
-	-o lowerdir=/overlay/rom/lower,upperdir=/overlay/rom/upper,workdir=/overlay/rom/work \
-	/overlay/rom \
-	|| panic_shell "overlayfs union failed"
+# rbind rather than a fresh squashfs mount: / is already the squashfs, and
+# rbind carries any submounts with it.
+mount -n -o rbind / /overlay/rom/lower || ro_boot "rbind of / failed"
 
-# Carry the API filesystems across the pivot; switch_root cannot remount them
-# for us and init will not come up without them.
-mkdir -p /overlay/rom/proc /overlay/rom/sys /overlay/rom/dev /overlay/rom/overlay
-mount -o move /proc /overlay/rom/proc
-mount -o move /sys  /overlay/rom/sys
-mount -o move /dev  /overlay/rom/dev
+mount -n -t overlay overlayfs:/overlay/rom \
+	-o rw,noatime,lowerdir=/overlay/rom/lower,upperdir=/overlay/rom/upper,workdir=/overlay/rom/work \
+	/mnt \
+	|| ro_boot "overlayfs union failed"
 
-echo "preinit: overlay ready, switching root"
-exec switch_root /overlay/rom /sbin/init
+# Carry devtmpfs and the jffs2 into the new root. Without /dev the new init
+# has no console and dies silently.
+mount -n -o rbind /dev     /mnt/dev
+mount -n -o rbind /overlay /mnt/overlay
 
-# Only reached if switch_root itself failed.
-panic_shell "switch_root did not take"
+echo "preinit: union ready, handing over to /sbin/init"
+exec chroot /mnt /sbin/init
+
+# Only reachable if chroot itself failed.
+ro_boot "chroot into the union failed"
