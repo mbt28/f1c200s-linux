@@ -15,7 +15,16 @@
 # failure.
 case "$1" in
 start)
-	if ! grep -q ' /var/log ' /proc/mounts; then
+	# On the NAND boot path / is an overlayfs union whose upper layer is jffs2
+	# on mtd3, so /var/log is ALREADY a persistent writable directory and the
+	# rootfs is already protected (the squashfs lower layer is never written).
+	# Mounting a tmpfs over it there would be actively harmful: logs would
+	# silently stop surviving reboots on exactly the configuration where we most
+	# want them. The tmpfs fallback is for the SD path only, where / is ext4 and
+	# a missing p3 really does mean logs would land on the rootfs.
+	if grep -q ' / overlay ' /proc/mounts; then
+		:   # NAND: /var/log lives on the overlay, nothing to do
+	elif ! grep -q ' /var/log ' /proc/mounts; then
 		echo "logs: /dev/mmcblk0p3 not mounted on /var/log -- using tmpfs"
 		echo "logs: logs will NOT persist across reboot (rootfs protected)"
 		mount -t tmpfs -o size=8M,mode=0755,noatime logs /var/log

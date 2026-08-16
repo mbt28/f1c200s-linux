@@ -1,0 +1,79 @@
+#!/bin/sh
+# PID 1 on the NAND boot path. Assembles the writable root, then hands over to
+# the real init.
+#
+# The kernel mounts mtd2 (squashfs, read-only) as /, then runs us via
+# `init=/preinit`. We mount the jffs2 upper layer, union the two with
+# overlayfs, and switch_root into the union -- so userspace sees a READ-WRITE /
+# while the OS itself lives in a squashfs that is never written. On a board
+# that loses power the instant the ignition goes off, that means a power cut
+# can only ever damage the erasable upper layer, never the system.
+#
+# Shape mirrors the vendor firmware (/overlay = jffs2, /overlay/rom/{lower,
+# upper,work}) because that arrangement is proven on this exact hardware.
+#
+# The SD path never runs this: it boots root=/dev/mmcblk0p2 rw straight into
+# /sbin/init, with no init= override.
+#
+# EVERY APPLET USED HERE IS ALREADY IN THE SHIPPED BUSYBOX -- switch_root,
+# mount (with -o move, gated by CONFIG_FEATURE_MOUNT_FLAGS=y), mkdir. This
+# script needs no busybox config change.
+
+# FIRST, before anything can fail: send our output to the console. The kernel
+# console is already up (console=ttyS0,115200), so from here on every message
+# and every error is visible on serial. Without this line a failure in here is
+# a silent hang, which is the worst way to debug PID 1.
+exec >/dev/console 2>&1
+
+echo "preinit: assembling overlay root"
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+
+# Bail out to a shell rather than exiting: if PID 1 exits the kernel panics
+# with "Attempted to kill init", which tells you nothing. A shell on the
+# console tells you everything.
+panic_shell() {
+	echo "preinit: FAILED -- $1"
+	echo "preinit: dropping to a shell on the console."
+	exec /bin/sh
+}
+
+# The writable layer. A freshly erased jffs2 partition mounts clean and empty,
+# so flashing only ever has to ERASE mtd3, never write an image to it.
+mkdir -p /overlay
+if ! mount -t jffs2 /dev/mtdblock3 /overlay; then
+	# Degrade rather than refuse to boot. Writes will not survive a reboot,
+	# which is bad, but a board that boots and says so is far better than one
+	# that does not boot at all.
+	echo "preinit: WARNING jffs2 on mtdblock3 did not mount"
+	echo "preinit: falling back to tmpfs -- CHANGES WILL NOT PERSIST"
+	mount -t tmpfs tmpfs /overlay || panic_shell "no upper layer at all"
+fi
+
+mkdir -p /overlay/rom/lower /overlay/rom/upper /overlay/rom/work
+
+# Re-mount the squashfs at its own path instead of using / as the lowerdir.
+# overlayfs objects to a lowerdir that is itself a mount root, and this is what
+# the vendor does.
+mount -t squashfs -o ro /dev/mtdblock2 /overlay/rom/lower \
+	|| panic_shell "squashfs on mtdblock2 did not mount"
+
+mount -t overlay overlay \
+	-o lowerdir=/overlay/rom/lower,upperdir=/overlay/rom/upper,workdir=/overlay/rom/work \
+	/overlay/rom \
+	|| panic_shell "overlayfs union failed"
+
+# Carry the API filesystems across the pivot; switch_root cannot remount them
+# for us and init will not come up without them.
+mkdir -p /overlay/rom/proc /overlay/rom/sys /overlay/rom/dev /overlay/rom/overlay
+mount -o move /proc /overlay/rom/proc
+mount -o move /sys  /overlay/rom/sys
+mount -o move /dev  /overlay/rom/dev
+
+echo "preinit: overlay ready, switching root"
+exec switch_root /overlay/rom /sbin/init
+
+# Only reached if switch_root itself failed.
+panic_shell "switch_root did not take"
