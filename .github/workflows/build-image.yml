@@ -97,6 +97,15 @@ jobs:
           xz -T0 -c output/images/sdcard.img > "sdcard-$SLUG-${GITHUB_SHA::8}.img.xz"
           ls -la ./*.img.xz
 
+      # The NAND bundle (u-boot + kernel.itb + rootfs.squashfs + MANIFEST +
+      # flash-nand.sh) is produced by board/lctech/pi-f1c200s/post-image-nand.sh,
+      # the second entry in BR2_ROOTFS_POST_IMAGE_SCRIPT. Renamed here to carry
+      # the branch and sha, exactly as the SD image is.
+      - name: Name the NAND bundle
+        run: |
+          mv output/images/nand-bundle.tar.gz "nand-$SLUG-${GITHUB_SHA::8}.tar.gz"
+          ls -la ./*.tar.gz
+
       - name: Upload image artifact
         uses: actions/upload-artifact@v5
         with:
@@ -105,6 +114,14 @@ jobs:
           retention-days: 30
           compression-level: 0 # already xz
 
+      - name: Upload NAND bundle
+        uses: actions/upload-artifact@v5
+        with:
+          name: nand-${{ env.SLUG }}
+          path: '*.tar.gz'
+          retention-days: 30
+          compression-level: 0 # already gzipped
+
       - name: Attach image to release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -112,4 +129,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" ./*.img.xz --clobber
+          gh release upload "$GITHUB_REF_NAME" ./*.img.xz ./*.tar.gz --clobber

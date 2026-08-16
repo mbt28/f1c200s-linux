@@ -24,7 +24,11 @@ BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 # rootfs-overlay/etc/default/dropbear) so it refuses password auth outright.
 BR2_TARGET_GENERIC_ROOT_PASSWD="*"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
-BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh"
+# Space-separated LIST. genimage.sh builds sdcard.img; post-image-nand.sh then
+# builds kernel.itb and the NAND bundle. NOTE both receive the SAME
+# BR2_ROOTFS_POST_SCRIPT_ARGS below (Buildroot cannot vary args per script),
+# so post-image-nand.sh ignores the stray "-c <genimage cfg>".
+BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-image-nand.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/genimage-sdcard.cfg"
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION=y
@@ -38,9 +42,22 @@ BR2_LINUX_KERNEL_INTREE_DTS_NAME="allwinner/suniv-f1c200s-lctech-pi"
 BR2_LINUX_KERNEL_PATCH="$(BR2_EXTERNAL_CARPLAY_PATH)/patches/linux-lctech"
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-# Bigger rootfs to fit the bundled sample videos (~67M) + OS (~24M).
+# squashfs for the NAND rootfs (mtd2 "rom"), built ALONGSIDE ext4 -- one build
+# emits both rootfs.ext4 (SD) and rootfs.squashfs (NAND). host-squashfs is
+# pulled in automatically. XZ because the target is a 64 MiB partition and the
+# rootfs is 64 MiB of content: measured tar.xz = 21.8 MiB, so xz lands ~25 MiB
+# with room to spare. Note the SQUASHFS4 infix in the compression symbol.
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
+# mkimage, to build the kernel FIT for mtd1. Buildroot has NO kernel-FIT
+# option of its own, so post-image-nand.sh calls mkimage with our hand-written
+# board/lctech/pi-f1c200s/kernel.its. FIT_SUPPORT selects host-dtc.
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y
+# Rootfs partition size for the SD image. (The "bundled sample videos" this
+# once sized for are gone -- rootfs-overlay/ is 260K. Actual usage is ~64M.)
 BR2_TARGET_ROOTFS_EXT2_SIZE="512M"
-# Bundle test video clips into /root/videos via a rootfs overlay.
+# Overlay: init scripts, the runtime switches, and /preinit for the NAND boot.
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_CARPLAY_PATH)/rootfs-overlay"
 # Merged over busybox's default config. Currently only enables swapon -p, which
 # S02swap needs to rank zram above the SD swap; see the fragment for why that
@@ -55,7 +72,12 @@ BR2_PACKAGE_FFMPEG_OUTDEVS=y
 BR2_TARGET_UBOOT=y
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
 BR2_TARGET_UBOOT_CUSTOM_VERSION=y
-BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2026.04"
+# Bumped 2026.04 -> 2026.07 for the SPI NAND work. 2026.07 ships
+# drivers/mtd/nand/spi/gigadevice.c, our exact chip vendor, and a build with
+# CONFIG_MTD_SPI_NAND was FEL-booted on the board with `mtd list` correctly
+# reporting the 128 MiB part. Both patches/uboot/000{1,2} verified to apply
+# cleanly to 2026.07 before the bump.
+BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2026.07"
 BR2_TARGET_UBOOT_BOARD_DEFCONFIG="lctech_pi_f1c200s"
 BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/uboot-sdcard.fragment"
 BR2_TARGET_UBOOT_NEEDS_DTC=y

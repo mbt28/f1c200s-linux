@@ -21,5 +21,40 @@
 # properly serialised and the offload can be re-enabled safely.
 CONFIG_USE_BOOTARGS=y
 CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0"
+
+# --- On-board SPI NAND (spi0): drive it, and boot from it if there is no SD ---
+#
+# CMD_MTD is a plain bool with NO default, so without it the `mtd` command does
+# not exist at all. MTD_SPI_NAND selects MTD_NAND_CORE and SPI_MEM; DM_SPI is
+# already on. Verified on hardware: a build with exactly these three was
+# FEL-booted and `mtd list` correctly reported the GigaDevice 128 MiB chip
+# (128 KiB blocks, 2048 B pages, ECC strength 8).
+#
+# Cost measured at +35.5 KiB, giving 457.8 KiB against mtd0's 512 KiB. That is
+# comfortable but not roomy -- re-measure u-boot-sunxi-with-spl.bin whenever
+# this config grows.
+#
+# CAUTION: U-Boot's `mtd bad` reports 514 FALSE bad blocks on this chip (three
+# perfectly contiguous runs totalling 64 MiB) where Linux reports zero. Its
+# bad-block marker interpretation disagrees with vendor-written data. Never
+# drive a NAND write from U-Boot's bad-block map -- flash from Linux.
+CONFIG_DM_MTD=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_CMD_MTD=y
+
 CONFIG_USE_BOOTCOMMAND=y
-CONFIG_BOOTCOMMAND="load mmc 0:1 0x80008000 zImage; load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000"
+# SD first, NAND as the fallback. Order is deliberate: the SD card is the
+# recovery path, so an inserted card must always win over whatever is on the
+# NAND. The SD branch is byte-identical to what shipped before this fallback
+# existed.
+#
+# The NAND branch sets its own bootargs because the root differs: a squashfs on
+# mtdblock2 with a jffs2 overlay on mtdblock3, assembled by /preinit. Note
+# musb_hdrc.use_dma=0 is repeated and is LOAD-BEARING -- without it wired
+# CarPlay dies on silent bulk-OUT loss (docs/musb-dma-fix-plan.md).
+#
+# `mtd read` uses raw offsets against the whole-chip device rather than a
+# partition name: U-Boot's device tree comes from dts/upstream and has no
+# partitions node, so it sees one "spi-nand0". 0x80000 is where kernel.itb
+# lives; 0x580000 is its 5.5 MiB partition size.
+CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x80800000 0x80000 0x580000 && bootm 0x80800000"

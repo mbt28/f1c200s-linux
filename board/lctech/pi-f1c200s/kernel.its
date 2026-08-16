@@ -1,0 +1,60 @@
+/dts-v1/;
+
+/*
+ * FIT image for booting from the SPI NAND's mtd1 "kernel.itb" partition.
+ * Assembled by post-image-nand.sh with $HOST_DIR/bin/mkimage, which needs
+ * BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y (Buildroot has no kernel-FIT
+ * option of its own, so this file is hand-written on purpose).
+ *
+ * compression = "none" is DELIBERATE. zImage is already self-decompressing, so
+ * gzipping it inside the FIT is pointless -- measured 4,750,240 -> 4,728,606
+ * bytes, i.e. 0.5%, in exchange for a decompression step at boot. An earlier
+ * plan claimed this would buy headroom in the 5.5 MiB partition; it does not.
+ * The real numbers: the FIT lands at ~4.52 MiB against mtd1's 5.5 MiB.
+ *
+ * Load addresses match the SD boot path (uboot-sdcard.fragment): DRAM base is
+ * 0x80000000, kernel at +0x8000, dtb at +0xC00000.
+ */
+
+/ {
+	description = "Lctech Pi F1C200s -- NAND kernel + dtb";
+	#address-cells = <1>;
+
+	images {
+		kernel {
+			description = "Linux zImage";
+			data = /incbin/("zImage");
+			type = "kernel";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <0x80008000>;
+			entry = <0x80008000>;
+			hash-1 {
+				algo = "crc32";
+			};
+		};
+
+		fdt {
+			description = "suniv-f1c200s-lctech-pi";
+			data = /incbin/("suniv-f1c200s-lctech-pi.dtb");
+			type = "flat_dt";
+			arch = "arm";
+			compression = "none";
+			load = <0x80C00000>;
+			hash-1 {
+				algo = "crc32";
+			};
+		};
+	};
+
+	configurations {
+		default = "conf";
+
+		conf {
+			description = "lctech-pi-f1c200s";
+			kernel = "kernel";
+			fdt = "fdt";
+		};
+	};
+};

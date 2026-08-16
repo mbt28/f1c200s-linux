@@ -228,6 +228,25 @@ CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPI_NAND=y
 CONFIG_MTD_OF_PARTS=y
 
+# Filesystems for the NAND root (patch 0024 adds the partitions node):
+#   mtd2 "rom"     squashfs-xz, read-only  -> overlayfs lower
+#   mtd3 "overlay" jffs2,       read-write -> overlayfs upper
+#   /              overlay                 <- what userspace sees, READ-WRITE
+# assembled by /preinit (rootfs-overlay/preinit) before switch_root.
+#
+# Checked for the menu-gate trap that cost this project two rebuilds with
+# CONFIG_VT and again with FTRACE: none of these has one. SQUASHFS depends only
+# on BLOCK, SQUASHFS_XZ auto-selects XZ_DEC, JFFS2_FS depends on MTD (on above)
+# and selects CRC32, OVERLAY_FS has no gate at all. Spelled out regardless,
+# per house style.
+#
+# These are needed on the SD image too, not just NAND -- one kernel serves both,
+# and the SD-booted system is what flashes the NAND.
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_JFFS2_FS=y
+CONFIG_OVERLAY_FS=y
+
 # System DMA (A10-class NDMA/DDMA, backported by patch 0014): spi-sun6i picks
 # the channels up from the DT and stops burning ~25 FIFO IRQs per ESP frame.
 CONFIG_DMADEVICES=y

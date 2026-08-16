@@ -1,0 +1,64 @@
+lctech f1c200s: partition the on-board SPI NAND
+
+The board .dts declares the GigaDevice 128 MiB SPI NAND under &spi0 but defines
+no partitions, so the chip enumerates as a single whole-device /dev/mtd0. That
+was deliberate while all we wanted was a full-chip backup; installing to it
+needs named partitions.
+
+Mirrors the vendor layout exactly, read off the stock firmware's own /proc/mtd:
+
+  0x00000000  512 KiB  u-boot
+  0x00080000  5.5 MiB  kernel.itb    FIT (kernel + dtb)
+  0x00600000   64 MiB  rom           squashfs, read-only  -> overlayfs lower
+  0x04600000   48 MiB  overlay       jffs2,    read-write -> overlayfs upper
+
+Leaving the last 10 MiB unpartitioned, as stock does. Mirroring rather than
+inventing a layout means our artifacts are known to fit (measured: u-boot
+457.8 KiB of 512 KiB, kernel.itb 4.52 MiB of 5.5 MiB, squashfs ~25 MiB of
+64 MiB) and the stock backup maps onto it 1:1 for restore.
+
+CONFIG_MTD_OF_PARTS=y is already set in linux.fragment specifically to parse
+this once it existed.
+
+Note this affects the SD image too -- one kernel and one .dts serve both -- so
+an SD-booted system now sees /dev/mtd0..3 instead of a single mtd0. That is
+wanted: the SD system is what flashes the NAND, and it should address the
+partitions by name.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -52,6 +52,32 @@
+ 		compatible = "spi-nand";
+ 		reg = <0>;
+ 		spi-max-frequency = <40000000>;
++
++		partitions {
++			compatible = "fixed-partitions";
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			partition@0 {
++				label = "u-boot";
++				reg = <0x000000 0x080000>;
++			};
++
++			partition@80000 {
++				label = "kernel.itb";
++				reg = <0x080000 0x580000>;
++			};
++
++			partition@600000 {
++				label = "rom";
++				reg = <0x600000 0x4000000>;
++			};
++
++			partition@4600000 {
++				label = "overlay";
++				reg = <0x4600000 0x3000000>;
++			};
++		};
+ 	};
+ };
+ 

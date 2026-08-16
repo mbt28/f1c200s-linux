@@ -161,6 +161,21 @@ if [ -n "${KCONFIG}" ]; then
 		exit 1
 	done
 
+	# The NAND root is squashfs (mtd2) + jffs2 (mtd3) unioned by overlayfs, all
+	# assembled by /preinit. If any of these three is missing the board does not
+	# boot from NAND at all -- and the failure lands in PID 1 before anything
+	# else runs, which is a miserable way to discover a missing kconfig symbol.
+	# Catch it here instead.
+	for sym in CONFIG_SQUASHFS CONFIG_JFFS2_FS CONFIG_OVERLAY_FS; do
+		if ! grep -q "^${sym}=[ym]\$" "${KCONFIG}"; then
+			echo "ERROR: ${sym} missing from ${KCONFIG}" >&2
+			echo "       The NAND root needs squashfs (lower) + jffs2 (upper) +" >&2
+			echo "       overlayfs (union); /preinit cannot assemble / without it." >&2
+			echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+			exit 1
+		fi
+	done
+
 	# MTD_SPI_NAND depends on SPI_MASTER, so it is exactly the shape of symbol
 	# that disappears quietly if a dependency moves -- and the failure is only
 	# visible on the board, as a missing /dev/mtd0. Without it the on-board
