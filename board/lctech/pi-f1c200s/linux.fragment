@@ -250,15 +250,15 @@ CONFIG_MTD_SPI_NAND=y
 CONFIG_MTD_OF_PARTS=y
 
 # Filesystems for the NAND root (patch 0024 adds the partitions node):
-#   mtd2 "rom"     squashfs-xz, read-only  -> overlayfs lower
-#   mtd3 "overlay" jffs2,       read-write -> overlayfs upper
-#   /              overlay                 <- what userspace sees, READ-WRITE
-# assembled by /preinit (rootfs-overlay/preinit) before switch_root.
+#   mtd2 "rom"     squashfs-gzip, read-only  -> overlayfs lower
+#   mtd3 "overlay" UBI + UBIFS,   read-write -> overlayfs upper
+#   /              overlay                   <- what userspace sees, READ-WRITE
+# assembled by /preinit (rootfs-overlay/preinit) with chroot.
 #
 # Checked for the menu-gate trap that cost this project two rebuilds with
 # CONFIG_VT and again with FTRACE: none of these has one. SQUASHFS depends only
-# on BLOCK, SQUASHFS_XZ auto-selects XZ_DEC, JFFS2_FS depends on MTD (on above)
-# and selects CRC32, OVERLAY_FS has no gate at all. Spelled out regardless,
+# on BLOCK; OVERLAY_FS has no gate; MTD_UBI depends on MTD (on above); UBIFS_FS
+# depends on MTD_UBI and selects its own CRC/compressors. Spelled out regardless,
 # per house style.
 #
 # These are needed on the SD image too, not just NAND -- one kernel serves both,
@@ -271,32 +271,40 @@ CONFIG_SQUASHFS=y
 CONFIG_SQUASHFS_ZLIB=y
 # Single core: per-CPU decompressor workspaces would be wasted memory.
 CONFIG_SQUASHFS_DECOMP_SINGLE=y
-# WRITEBUFFER is what makes jffs2 legal on NAND at all -- without it jffs2
-# issues sub-page writes the chip cannot accept. It is default y and would
-# arrive on its own, which is exactly why it is spelled out.
-CONFIG_JFFS2_FS=y
-CONFIG_JFFS2_FS_WRITEBUFFER=y
-# Summary nodes let mount read ~384 per-block summaries instead of scanning the
-# whole 48 MiB over a 40 MHz SPI bus. This is the knob that decides whether
-# NAND boot time is acceptable -- measure the preinit jffs2 mount on first boot.
-CONFIG_JFFS2_SUMMARY=y
-# XATTR is default n, and overlayfs NEEDS it on the upper layer. Without it the
-# union still mounts -- it warns "failed to set xattr on upper" and sets
-# noxattr -- but it can no longer mark a directory opaque, and fs/overlayfs/dir.c
-# says what that costs, verbatim:
+
+# --- UBI + UBIFS for the writable overlay, NOT jffs2. ---
 #
-#   /*
-#    * Fail with -EIO when trying to create opaque dir and upper doesn't
-#    * support xattrs. ovl_rename() calls ovl_set_opaque_xerr(-EXDEV) to
-#    * return a specific error for noxattr case.
-#    */
+# This was jffs2, and jffs2 is UNUSABLE on this specific chip. mainline's
+# spinand_isbad() (drivers/mtd/nand/spi/core.c) reads TWO OOB bytes at offset 0
+# and calls a block bad if either is non-0xff. But the GigaDevice ooblayout
+# (gigadevice.c) reserves only ONE byte for the bad-block marker and hands byte 1
+# to the filesystem. jffs2 writes its cleanmarker (magic 0x1985) into that byte
+# via MTD_OPS_AUTO_OOB -- so every block jffs2 formats reads back BAD on the next
+# mount. Measured on hardware 2026-08-17: a freshly-erased overlay booted
+# writable once, then after a single reboot all 384 blocks read bad, preinit got
+# ENOSPC, and the write was gone. The kernel then refuses to erase a "bad" block,
+# so it is self-inflicted and permanent.
 #
-# So removing a directory that exists in the squashfs and recreating it (rm -rf
-# then mkdir on anything shipped in the image) returns EIO, and renaming a
-# directory returns EXDEV. Both are things ordinary software does, and neither
-# failure names the overlay as the cause. POSIX_ACL and SECURITY come along by
-# default once XATTR is on.
-CONFIG_JFFS2_FS_XATTR=y
+# UBI does not have this problem: it keeps its erase-counter and volume-ID
+# headers in the PAGE DATA area, never the OOB, so it cannot poison byte 1.
+#
+# One-time prerequisite: the false markers already on the chip must be cleared
+# with a force-erase before the first UBI attach. Linux will not do it (it
+# refuses bad blocks), so it is done from U-Boot -- `mtd erase.dontskipbad
+# spi-nand0 0x4600000 0x3000000`, which the flash bundle documents. After that
+# one erase, byte 1 is 0xff and UBI keeps it that way.
+CONFIG_MTD_UBI=y
+# UBI's own bad-block reserve and wear-levelling. Defaults are fine; listed
+# because they gate UBIFS below.
+CONFIG_UBIFS_FS=y
+# overlayfs needs working xattrs on the upper layer (see the note the jffs2
+# block used to carry: without them, rm -rf + mkdir of a shipped directory
+# returns EIO). UBIFS xattrs are real and unconditional, unlike jffs2's, which
+# were the byte-1 problem in the first place.
+CONFIG_UBIFS_FS_XATTR=y
+# zlib is already =y for squashfs; UBIFS uses it too. LZO would be faster to
+# decompress but is another module for no real gain at 48 MiB.
+CONFIG_UBIFS_FS_ZLIB=y
 CONFIG_OVERLAY_FS=y
 # /preinit reads /dev/mtdblock3 and /dev/console before anything mounts /dev,
 # so the KERNEL must have mounted devtmpfs already. Both are inherited but

@@ -49,8 +49,8 @@ CONFIG_USE_BOOTCOMMAND=y
 # existed.
 #
 # The NAND branch sets its own bootargs because the root differs: a squashfs on
-# mtdblock2 with a jffs2 overlay on mtdblock3, assembled by /preinit. Note
-# musb_hdrc.use_dma=0 is repeated and is LOAD-BEARING -- without it wired
+# mtdblock2 with a UBIFS overlay on mtd3 (overlaymtd=3), unioned by /preinit.
+# Note musb_hdrc.use_dma=0 is repeated and is LOAD-BEARING -- without it wired
 # CarPlay dies on silent bulk-OUT loss (docs/musb-dma-fix-plan.md).
 #
 # `mtd read` uses raw offsets against the whole-chip device rather than a
@@ -79,4 +79,4 @@ CONFIG_USE_BOOTCOMMAND=y
 # above the fdt, which is also exactly what the vendor bootloader does
 # (kernel_addr_r=0x81000000). Any new address must stay above 0x80C00000 plus
 # the fdt size, and below the top of the 64 MiB of DRAM.
-CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
+CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"

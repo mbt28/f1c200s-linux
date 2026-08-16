@@ -176,15 +176,15 @@ if [ -n "${KCONFIG}" ]; then
 		exit 1
 	done
 
-	# The NAND root is squashfs (mtd2) + jffs2 (mtd3) unioned by overlayfs, all
-	# assembled by /preinit. If any of these three is missing the board does not
+	# The NAND root is squashfs (mtd2) + UBIFS on UBI (mtd3) unioned by overlayfs,
+	# all assembled by /preinit. If any of these is missing the board does not
 	# boot from NAND at all -- and the failure lands in PID 1 before anything
 	# else runs, which is a miserable way to discover a missing kconfig symbol.
 	# Catch it here instead.
-	for sym in CONFIG_SQUASHFS CONFIG_JFFS2_FS CONFIG_OVERLAY_FS; do
+	for sym in CONFIG_SQUASHFS CONFIG_MTD_UBI CONFIG_UBIFS_FS CONFIG_OVERLAY_FS; do
 		if ! grep -q "^${sym}=[ym]\$" "${KCONFIG}"; then
 			echo "ERROR: ${sym} missing from ${KCONFIG}" >&2
-			echo "       The NAND root needs squashfs (lower) + jffs2 (upper) +" >&2
+			echo "       The NAND root needs squashfs (lower) + UBI/UBIFS (upper) +" >&2
 			echo "       overlayfs (union); /preinit cannot assemble / without it." >&2
 			echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
 			exit 1
@@ -206,22 +206,14 @@ if [ -n "${KCONFIG}" ]; then
 		exit 1
 	fi
 
-	# jffs2 on NAND is illegal without a write buffer: the chip cannot take the
-	# sub-page writes jffs2 would otherwise issue. It is default y and so tends
-	# to be present by accident rather than intent -- assert it.
-	if ! grep -q "^CONFIG_JFFS2_FS_WRITEBUFFER=y\$" "${KCONFIG}"; then
-		echo "ERROR: CONFIG_JFFS2_FS_WRITEBUFFER missing from ${KCONFIG}" >&2
-		echo "       jffs2 cannot be used on NAND without it (sub-page writes)." >&2
-		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
-		exit 1
-	fi
-
 	# XATTR is default n and overlayfs needs it on the upper layer. This one is
 	# nasty because the union still MOUNTS without it: the breakage only shows
 	# up later, as EIO from mkdir after rm -rf of a directory that exists in the
-	# squashfs, and EXDEV from renaming a directory.
-	if ! grep -q "^CONFIG_JFFS2_FS_XATTR=y\$" "${KCONFIG}"; then
-		echo "ERROR: CONFIG_JFFS2_FS_XATTR missing from ${KCONFIG}" >&2
+	# squashfs, and EXDEV from renaming a directory. (This was the whole reason
+	# jffs2 was unusable here -- its xattrs collided with the bad-block marker;
+	# UBIFS xattrs are real and unconditional, but still assert the symbol.)
+	if ! grep -q "^CONFIG_UBIFS_FS_XATTR=y\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_UBIFS_FS_XATTR missing from ${KCONFIG}" >&2
 		echo "       overlayfs cannot mark directories opaque on an upper layer" >&2
 		echo "       without xattrs, so recreating any directory that exists in" >&2
 		echo "       the lower squashfs fails with EIO. The union still mounts," >&2
@@ -229,6 +221,18 @@ if [ -n "${KCONFIG}" ]; then
 		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
 		exit 1
 	fi
+
+	# The UBI userspace tools must be in the rootfs: /preinit calls ubiattach,
+	# ubiformat and ubimkvol to provision the overlay on first boot. Without
+	# them preinit takes its read-only fallback and the overlay never forms.
+	for t in ubiattach ubiformat ubimkvol; do
+		if [ ! -e "${TARGET_DIR}/usr/sbin/${t}" ] && [ ! -e "${TARGET_DIR}/sbin/${t}" ]; then
+			echo "ERROR: ${t} not found in the rootfs" >&2
+			echo "       /preinit needs the UBI tools (mtd-utils) to provision the" >&2
+			echo "       NAND overlay. Enable BR2_PACKAGE_MTD + its ubi tools." >&2
+			exit 1
+		fi
+	done
 
 	# musb_hdrc.use_dma=0 is required for wired CarPlay. On the NAND path we boot
 	# under the STOCK bootloader, whose command line we do not control, so the

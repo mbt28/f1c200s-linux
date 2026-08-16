@@ -1,9 +1,9 @@
 #!/bin/sh
 # PID 1 on the NAND boot path (init=/preinit). Assembles the writable root:
 #
-#   lower  /dev/mtdblock2  squashfs, immutable, never written
-#   upper  /dev/mtdblock3  jffs2, every runtime write lands here
-#   union  overlayfs       what userspace sees as / -- READ-WRITE
+#   lower  /dev/mtdblock2   squashfs, immutable, never written
+#   upper  ubi0:overlay     UBIFS, every runtime write lands here
+#   union  overlayfs        what userspace sees as / -- READ-WRITE
 #
 # Because nothing ever writes the OS, a power cut at ignition-off can only
 # damage the erasable upper layer, never the system.
@@ -11,39 +11,54 @@
 # The SD path never runs this: it boots root=/dev/mmcblk0p2 rw straight into
 # /sbin/init with no init= override.
 #
+# --- WHY UBIFS AND NOT JFFS2 (this is not a style choice) ---
+#
+# jffs2 is unusable on this chip. mainline spinand_isbad() reads two OOB bytes
+# and calls a block bad if either is non-0xff, but the GigaDevice ooblayout
+# reserves only ONE byte for the marker and gives byte 1 to the filesystem.
+# jffs2 writes its cleanmarker (magic 0x1985) into byte 1, so every block it
+# formats reads back BAD next mount -- measured: writable for one boot, then all
+# 384 blocks bad and the write gone. UBI keeps its headers in the page data
+# area, never the OOB, so it does not poison byte 1. See linux.fragment.
+#
+# One-time prerequisite: the false bad-block markers already on the chip must be
+# cleared from U-Boot before the first attach here -- `mtd erase.dontskipbad
+# spi-nand0 0x4600000 0x3000000`. Linux refuses to erase blocks it reads as bad,
+# so it cannot do this itself. If it was not done, ubiformat below finds no good
+# blocks and we fall through to a read-only boot rather than hanging.
+#
 # --- TWO TRAPS THIS SCRIPT EXISTS TO AVOID, both verified in source ---
 #
-# 1. NOT switch_root. busybox switch_root.c:244 does:
-#        statfs("/", &stfs);
-#        if (f_type != RAMFS_MAGIC && f_type != TMPFS_MAGIC)
-#                bb_simple_error_msg_and_die("root filesystem is not ramfs/tmpfs");
-#    so it REFUSES on a squashfs root. chroot is the only option here, and is
-#    what the vendor firmware does.
+# 1. NOT switch_root. busybox switch_root.c refuses unless / is ramfs/tmpfs, so
+#    it dies on a squashfs root. chroot is the only option, and is what the
+#    vendor firmware does.
 #
-# 2. NOT `mount --rbind`. busybox mount has no long-option table
-#    (util-linux/mount.c calls getopt32 with no applet_long_options), so
-#    --rbind dies as an unrecognised option. The flag exists only as `-o rbind`,
-#    which CONFIG_FEATURE_MOUNT_FLAGS=y enables. The vendor's own script uses
-#    --rbind and would fail on OUR busybox -- do not copy it verbatim.
+# 2. NOT `mount --rbind`. busybox mount has no long-option table, so --rbind
+#    dies as an unrecognised option. The flag exists only as `-o rbind`, which
+#    CONFIG_FEATURE_MOUNT_FLAGS=y enables.
 #
 # THIS SCRIPT MUST NEVER EXIT. If PID 1 returns, the kernel panics with
-# "Attempted to kill init", which tells you nothing. Every failure path falls
-# through to a plain read-only boot instead: degraded, but the serial console
-# still gives a root shell (inittab runs -/bin/sh directly), so it is fixable.
+# "Attempted to kill init". Every failure path falls through to a plain
+# read-only boot instead: degraded, but the serial console still gives a root
+# shell (inittab runs -/bin/sh directly), so it is fixable.
 #
-# Output goes to the console because the kernel opens /dev/console for PID 1
-# and devtmpfs is already mounted (CONFIG_DEVTMPFS_MOUNT=y). Progress is
-# printed on purpose -- this is the one place where a silent failure would be
-# invisible.
+# Output goes to the console because the kernel opens /dev/console for PID 1 and
+# devtmpfs is already mounted (CONFIG_DEVTMPFS_MOUNT=y) -- which is also what
+# gives us /dev/ubi_ctrl and /dev/ubi0 without an mdev run.
 
 mount -n -t proc proc /proc
 set -- $(cat /proc/cmdline)
 umount /proc
 
-OVL=
+# The overlay lives on this MTD partition (mtd3 "overlay" from patch 0024).
+# Default it rather than trust the bootloader: the stock loader passes no
+# cmdline of its own and pasted cmdlines have been seen to drop characters, so
+# a hard default is what keeps the writable root working when the cmdline does
+# not. Override with overlaymtd=N.
+MTD=3
 for x in "$@"; do
 	case "$x" in
-	overlayfsdev=*) OVL="${x#overlayfsdev=}" ;;
+	overlaymtd=*) MTD="${x#overlaymtd=}" ;;
 	# Escape hatches, settable from the U-Boot prompt without reflashing.
 	preinit=skip) echo "preinit: skipped -- read-only boot"; exec /sbin/init ;;
 	preinit=sh)   echo "preinit: dropping to a shell"; exec /bin/sh ;;
@@ -53,16 +68,35 @@ done
 ro_boot() {
 	echo "preinit: $1"
 	echo "preinit: continuing READ-ONLY -- / will not be writable."
-	echo "preinit: recover with: flash_erase /dev/mtd3 0 0   (from an SD boot)"
+	echo "preinit: to (re)provision, from U-Boot: mtd erase.dontskipbad spi-nand0 0x4600000 0x3000000"
+	echo "preinit: then reboot; this script formats the overlay on first attach."
 	exec /sbin/init
 }
 
-[ -n "$OVL" ] || ro_boot "no overlayfsdev= on the cmdline"
-[ -b "$OVL" ] || ro_boot "$OVL is not a block device"
+# --- attach UBI to the overlay MTD, formatting it on first boot ---
+# ubiattach fails cleanly if the partition carries no UBI (a fresh, scrubbed
+# chip), which is exactly how we detect first boot: format, then attach.
+echo "preinit: attaching UBI to mtd$MTD"
+if ! ubiattach -m "$MTD" -d 0 >/dev/null 2>&1; then
+	echo "preinit: no UBI on mtd$MTD -- formatting (first boot)"
+	# -y: no prompt. If the chip was not scrubbed, every block reads bad and
+	# this fails; ro_boot then tells the user how to scrub.
+	ubiformat "/dev/mtd$MTD" -y -q \
+		|| ro_boot "ubiformat of mtd$MTD failed (was the chip scrubbed?)"
+	ubiattach -m "$MTD" -d 0 \
+		|| ro_boot "ubiattach of mtd$MTD failed after format"
+fi
 
-echo "preinit: mounting $OVL (jffs2) on /overlay"
-mount -n -t jffs2 -o rw,noatime "$OVL" /overlay \
-	|| ro_boot "jffs2 mount of $OVL failed"
+# The overlay volume; created once, on the same first boot as the format.
+if [ ! -c /dev/ubi0_0 ]; then
+	echo "preinit: creating UBIFS volume 'overlay'"
+	ubimkvol /dev/ubi0 -N overlay -m \
+		|| ro_boot "ubimkvol failed"
+fi
+
+echo "preinit: mounting ubi0:overlay (ubifs) on /overlay"
+mount -n -t ubifs -o rw,noatime ubi0:overlay /overlay \
+	|| ro_boot "ubifs mount failed"
 
 mkdir -p /overlay/rom/lower /overlay/rom/upper /overlay/rom/work \
 	|| ro_boot "cannot create the overlay directories"
@@ -76,8 +110,8 @@ mount -n -t overlay overlayfs:/overlay/rom \
 	/mnt \
 	|| ro_boot "overlayfs union failed"
 
-# Carry devtmpfs and the jffs2 into the new root. Without /dev the new init
-# has no console and dies silently.
+# Carry devtmpfs and the ubifs into the new root. Without /dev the new init has
+# no console and dies silently.
 mount -n -o rbind /dev     /mnt/dev
 mount -n -o rbind /overlay /mnt/overlay
 

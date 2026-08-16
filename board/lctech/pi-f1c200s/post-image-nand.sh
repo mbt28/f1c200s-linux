@@ -81,7 +81,7 @@ check_fit "${SQUASH}" 67108864  2
 	echo "# mtd0     0x00000000  512 KiB     ${UBOOT}   (NOT written by default)"
 	echo "# mtd1     0x00080000  5.5 MiB     kernel.itb"
 	echo "# mtd2     0x00600000  64 MiB      ${SQUASH}"
-	echo "# mtd3     0x04600000  48 MiB      (erased only -- jffs2 self-formats)"
+	echo "# mtd3     0x04600000  48 MiB      (UBI/UBIFS -- U-Boot scrub + preinit format)"
 	echo "#"
 	echo "# Flash with ./flash-nand.sh from Linux booted off the SD card."
 	echo "# By default it writes mtd1/mtd2/mtd3 and KEEPS the stock bootloader in"
