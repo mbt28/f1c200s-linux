@@ -161,6 +161,19 @@ if [ -n "${KCONFIG}" ]; then
 		exit 1
 	done
 
+	# MTD_SPI_NAND depends on SPI_MASTER, so it is exactly the shape of symbol
+	# that disappears quietly if a dependency moves -- and the failure is only
+	# visible on the board, as a missing /dev/mtd0. Without it the on-board
+	# GigaDevice SPI NAND cannot be dumped or written at all, which is the
+	# whole point of shipping mtd-utils alongside it.
+	if ! grep -q "^CONFIG_MTD_SPI_NAND=[ym]\$" "${KCONFIG}"; then
+		echo "ERROR: CONFIG_MTD_SPI_NAND missing from ${KCONFIG}" >&2
+		echo "       The on-board 128 MiB SPI NAND on spi0 would not be probed," >&2
+		echo "       so /dev/mtd0 never appears and nanddump/nandwrite are inert." >&2
+		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
+		exit 1
+	fi
+
 	# zram is =m, not =y, so it needs its own check -- the loop above matches
 	# "=y" exactly and would pass a silently-missing module straight through.
 	if ! grep -q "^CONFIG_ZRAM=[ym]\$" "${KCONFIG}"; then

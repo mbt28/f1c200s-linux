@@ -201,6 +201,33 @@ CONFIG_BLK_DEV_SD=y
 # symbol dependencies -- zero resident cost while wifi is off.
 CONFIG_SPI=y
 CONFIG_SPI_SUN6I=y
+
+# --- On-board SPI NAND on spi0 (the chip the stock firmware boots from) ---
+# Measured on the board's own vendor firmware:
+#   spi-nand spi0.0: GigaDevice SPI NAND was found.
+#   128 MiB, block size: 128 KiB, page size: 2048, OOB size: 64
+# Stock lays it out as u-boot(512K) / kernel.itb(5.5M) / rom(64M, squashfs) /
+# overlay(48M, jffs2) via DT fixed-partitions.
+#
+# Our board .dts already declares the chip (compatible = "spi-nand" under
+# &spi0) but defines NO partitions node, so this kernel will present the WHOLE
+# 128 MiB as a single /dev/mtd0. That is deliberate for now and is exactly what
+# a full backup wants -- one nanddump of the entire chip, bad-block info and
+# OOB included. Partitions come later, when we actually install to it.
+#
+# MTD_SPI_NAND pulls in MTD_NAND_CORE, MTD_NAND_ECC and SPI_MEM by select, so
+# none of those need listing. MTD_OF_PARTS is `default y` and would arrive on
+# its own; it is spelled out because it is what will parse the partition map
+# once the .dts grows one, and a silent default is how the CONFIG_VT trap bit
+# us twice.
+#
+# Probing is read-only (chip ID + parameter page), so enabling this cannot
+# disturb the vendor firmware sitting on the chip.
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_MTD_OF_PARTS=y
+
 # System DMA (A10-class NDMA/DDMA, backported by patch 0014): spi-sun6i picks
 # the channels up from the DT and stops burning ~25 FIFO IRQs per ESP frame.
 CONFIG_DMADEVICES=y
