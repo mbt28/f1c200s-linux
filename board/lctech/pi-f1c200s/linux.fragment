@@ -280,6 +280,23 @@ CONFIG_JFFS2_FS_WRITEBUFFER=y
 # whole 48 MiB over a 40 MHz SPI bus. This is the knob that decides whether
 # NAND boot time is acceptable -- measure the preinit jffs2 mount on first boot.
 CONFIG_JFFS2_SUMMARY=y
+# XATTR is default n, and overlayfs NEEDS it on the upper layer. Without it the
+# union still mounts -- it warns "failed to set xattr on upper" and sets
+# noxattr -- but it can no longer mark a directory opaque, and fs/overlayfs/dir.c
+# says what that costs, verbatim:
+#
+#   /*
+#    * Fail with -EIO when trying to create opaque dir and upper doesn't
+#    * support xattrs. ovl_rename() calls ovl_set_opaque_xerr(-EXDEV) to
+#    * return a specific error for noxattr case.
+#    */
+#
+# So removing a directory that exists in the squashfs and recreating it (rm -rf
+# then mkdir on anything shipped in the image) returns EIO, and renaming a
+# directory returns EXDEV. Both are things ordinary software does, and neither
+# failure names the overlay as the cause. POSIX_ACL and SECURITY come along by
+# default once XATTR is on.
+CONFIG_JFFS2_FS_XATTR=y
 CONFIG_OVERLAY_FS=y
 # /preinit reads /dev/mtdblock3 and /dev/console before anything mounts /dev,
 # so the KERNEL must have mounted devtmpfs already. Both are inherited but
