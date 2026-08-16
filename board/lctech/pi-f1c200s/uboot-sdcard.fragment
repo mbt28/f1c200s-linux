@@ -57,4 +57,26 @@ CONFIG_USE_BOOTCOMMAND=y
 # partition name: U-Boot's device tree comes from dts/upstream and has no
 # partitions node, so it sees one "spi-nand0". 0x80000 is where kernel.itb
 # lives; 0x580000 is its 5.5 MiB partition size.
-CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x80800000 0x80000 0x580000 && bootm 0x80800000"
+#
+# 0x81000000 IS NOT ARBITRARY -- DO NOT LOWER IT. The FIT buffer must not
+# overlap the load address of any NON-KERNEL sub-image, because boot/image-fit.c
+# refuses the boot outright:
+#
+#     if (image_type != IH_TYPE_KERNEL &&
+#         load < image_end && load_end > image_start) {
+#             printf("Error: %s overwritten\n", prop_name);
+#
+# The buffer spans [addr, addr + 0x580000). This first read used 0x80800000,
+# which spans 0x80800000-0x80D80000 and therefore swallows the fdt's own load
+# address of 0x80C00000 (kernel.its), giving on a real boot:
+#
+#     Error: fdt overwritten
+#     Could not find a valid device tree
+#
+# The kernel sub-image is exempt from that test, which is why it loaded and
+# verified fine and only the fdt tripped it -- an easy failure to misread as a
+# problem with the device tree itself. At 0x81000000 the buffer sits entirely
+# above the fdt, which is also exactly what the vendor bootloader does
+# (kernel_addr_r=0x81000000). Any new address must stay above 0x80C00000 plus
+# the fdt size, and below the top of the 64 MiB of DRAM.
+CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlayfsdev=/dev/mtdblock3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
