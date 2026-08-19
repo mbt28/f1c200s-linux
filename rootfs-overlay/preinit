@@ -46,9 +46,14 @@
 # devtmpfs is already mounted (CONFIG_DEVTMPFS_MOUNT=y) -- which is also what
 # gives us /dev/ubi_ctrl and /dev/ubi0 without an mdev run.
 
-mount -n -t proc proc /proc
+# /proc for the cmdline, and /sys because the UBI tools below (ubiformat,
+# ubiattach, ubimkvol via libmtd) locate the MTD devices through
+# /sys/class/mtd -- without it they fail with "MTD subsystem is not present"
+# and the overlay never forms. Both are unmounted again before the union is
+# assembled, so /sbin/init mounts them fresh in the new root.
+mount -n -t proc  proc  /proc
+mount -n -t sysfs sysfs /sys
 set -- $(cat /proc/cmdline)
-umount /proc
 
 # The overlay lives on this MTD partition (mtd3 "overlay" from patch 0024).
 # Default it rather than trust the bootloader: the stock loader passes no
@@ -97,6 +102,12 @@ fi
 echo "preinit: mounting ubi0:overlay (ubifs) on /overlay"
 mount -n -t ubifs -o rw,noatime ubi0:overlay /overlay \
 	|| ro_boot "ubifs mount failed"
+
+# /proc and /sys were only needed for the UBI tools above. Unmount them now, so
+# the rbind of / below does not drag them into the overlay lower layer;
+# /sbin/init mounts them fresh inside the union.
+umount /sys  2>/dev/null
+umount /proc 2>/dev/null
 
 mkdir -p /overlay/rom/lower /overlay/rom/upper /overlay/rom/work \
 	|| ro_boot "cannot create the overlay directories"
