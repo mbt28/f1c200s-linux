@@ -103,11 +103,13 @@ is confirmed workable with the target phone.
 Pin-to-pin (ESP32 side fixed by the NG firmware, `docs/setup.md` §2.1):
 
 All F1C200s pins below sit on the P1 header (schematic-verified). The
-ESP32-side pins are from the **firmware's own boot log** (`FW_SPI: ... HS: 3
-DR: 4`) — the setup.md table upstream says IO2 for handshake and is WRONG for
-the ng-1.0.6 esp32 build; it cost a debugging round (2026-07-08: data-ready
-IRQ count 1, handshake stuck at 0 until the wire moved to IO3). When in
-doubt, trust the `FW_SPI:` line on the ESP console.
+ESP32-side pins are the **firmware's own boot log** (`FW_SPI:` line) — always
+trust it over any table, because the handshake pin has moved between firmware
+builds. The old ng-1.0.6 esp32 build reported `HS: 3` and needed the wire on
+IO3 (upstream setup.md's IO2 default was wrong for it). The **shipping
+NG-1.0.6.0.4 build reports `HS: 2 DR: 4`** — handshake back on **IO2** (the
+setup.md default). Hardware-validated 2026-09-20: `wlan0` + `hci0` both up, AP
+mode beaconing, with the mapping below.
 
 | F1C200s (header P1) | dir | ESP32-DevKitC | function |
 |---|:---:|---|---|
@@ -115,7 +117,7 @@ doubt, trust the `FW_SPI:` line on the ESP console.
 | PE7 (SPI1_CS) | → | IO15 | CS0 (optional ext. 10 kΩ pull-up) |
 | PE10 (SPI1_MISO) | ← | IO12 | MISO — **no pull-up: IO12 is the flash-voltage strap** |
 | PE8 (SPI1_MOSI) | → | IO13 | MOSI |
-| PE2 (gpio 130) | ← | **IO3** | handshake (yes, the ESP console RX pin — console output still works, input doesn't; **USB must stay unplugged in operation**: the CP2102 fights this line) |
+| PE2 (gpio 130) | ← | **IO2** | handshake (NG-1.0.6.0.4 `FW_SPI: HS: 2`; IO2 is a boot-strap pin, so nothing may pull it high at ESP reset — the host holds PE2 hi-Z, which is fine. IO3 is console-only now, so the DevKitC USB may stay plugged in operation) |
 | PE3 (gpio 131) | ← | IO4 | data ready (IRQ on host) |
 | PE4 (gpio 132) | → | EN | ESP reset (`resetpin=132`) |
 | PE0 (UART0_RX, ttyS1) | ← | IO5 | BT HCI: ESP TX (custom spi+uart firmware, 230400) |
