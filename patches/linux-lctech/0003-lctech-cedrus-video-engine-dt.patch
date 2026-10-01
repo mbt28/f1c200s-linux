@@ -1,7 +1,7 @@
 --- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
 +++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
 @@ -276,3 +276,35 @@
- 		touchscreen-size-y = <272>;
+ 		touchscreen-size-y = <480>;
  	};
  };
 +
