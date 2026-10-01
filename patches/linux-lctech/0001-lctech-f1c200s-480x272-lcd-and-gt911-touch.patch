@@ -6,7 +6,7 @@
  };
 +
 +/*
-+ * 4.3" 480x272 RGB LCD (QiaoDian QD43003C0-40) on the 40-pin FPC, plus a
++ * 5.0" 800x480 IPS RGB LCD (EastRising ER-TFT050-6) on the 40-pin FPC, plus a
 + * Goodix GT911 capacitive touch controller on TWI0 (I2C0).
 + *
 + * The suniv display pipeline (DE1: frontend -> backend -> TCON0 -> panel) is
@@ -169,7 +169,7 @@
 +	};
 +
 +	panel: panel {
-+		compatible = "qiaodian,qd43003c0-40", "simple-panel";
++		compatible = "eastrising,er-tft050-6", "simple-panel";
 +		power-supply = <&reg_vcc3v3>;
 +		backlight = <&backlight>;
 +		#address-cells = <1>;
@@ -202,7 +202,7 @@
 +		irq-gpios   = <&pio 4 12 GPIO_ACTIVE_HIGH>;	/* PE12 */
 +		reset-gpios = <&pio 0 0  GPIO_ACTIVE_HIGH>;	/* PA0 */
 +		AVDD28-supply = <&reg_vcc3v3>;
-+		touchscreen-size-x = <480>;
-+		touchscreen-size-y = <272>;
++		touchscreen-size-x = <800>;
++		touchscreen-size-y = <480>;
 +	};
 +};

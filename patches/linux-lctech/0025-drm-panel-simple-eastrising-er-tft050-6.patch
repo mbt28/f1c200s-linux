@@ -1,0 +1,54 @@
+drm/panel/panel-simple: add EastRising ER-TFT050-6 (800x480 IPS RGB)
+
+5" 800x480 IPS panel (EastRising ER-TFT050-6, ST7265) on the Lctech Pi
+F1C200s 40-pin FPC, replacing the 4.3" 480x272 QiaoDian. The board wires the
+16 RGB565 lines (lcd_rgb565_pins), so the desc uses RGB565_1X16 / bpc 6 and
+the suniv TCON drives 5/6/5 straight onto those pins -- unlike qd43003c0_40,
+which over-drove RGB888_1X24 and relied on the LSBs falling off at the FPC.
+
+Timing is the datasheet typical (DCLK 25 MHz; H front/sync/back 8/4/8,
+V 16/4/8; back porches kept at 8 per the panel's sync-mode note) -> ~60 Hz,
+every value inside the panel's min/max window.
+
+--- a/drivers/gpu/drm/panel/panel-simple.c
++++ b/drivers/gpu/drm/panel/panel-simple.c
+@@ -4034,6 +4034,29 @@
+ 	.bus_format = MEDIA_BUS_FMT_RGB888_1X24,
+ };
+ 
++static const struct drm_display_mode er_tft050_6_mode = {
++	.clock = 25000,
++	.hdisplay = 800,
++	.hsync_start = 800 + 8,
++	.hsync_end = 800 + 8 + 4,
++	.htotal = 800 + 8 + 4 + 8,
++	.vdisplay = 480,
++	.vsync_start = 480 + 16,
++	.vsync_end = 480 + 16 + 4,
++	.vtotal = 480 + 16 + 4 + 8,
++};
++
++static const struct panel_desc er_tft050_6 = {
++	.modes = &er_tft050_6_mode,
++	.num_modes = 1,
++	.bpc = 6,
++	.size = {
++		.width = 108,
++		.height = 65,
++	},
++	.bus_format = MEDIA_BUS_FMT_RGB565_1X16,
++};
++
+ static const struct drm_display_mode qishenglong_gopher2b_lcd_modes[] = {
+ 	{ /* 60 Hz */
+ 		.clock = 10800,
+@@ -5341,6 +5364,9 @@
+ 		.compatible = "qiaodian,qd43003c0-40",
+ 		.data = &qd43003c0_40,
+ 	}, {
++		.compatible = "eastrising,er-tft050-6",
++		.data = &er_tft050_6,
++	}, {
+ 		.compatible = "qishenglong,gopher2b-lcd",
+ 		.data = &qishenglong_gopher2b_lcd,
+ 	}, {

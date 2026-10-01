@@ -3,7 +3,7 @@
 [![build-image](https://github.com/mbt28/f1c200s-linux/actions/workflows/build-image.yml/badge.svg?branch=dev)](https://github.com/mbt28/f1c200s-linux/actions/workflows/build-image.yml)
 
 Mainline-Linux + Buildroot for the **Lctech Pi F1C200s** (Allwinner F1C200S /
-suniv, ARM926EJ-S / ARMv5TE, 64 MiB DDR, 480×272 LCD) — a wireless **CarPlay /
+suniv, ARM926EJ-S / ARMv5TE, 64 MiB DDR, 800×480 LCD) — a wireless **CarPlay /
 Android-Auto** receiver.
 
 <img src="docs/img/carplay.jpg" width="610" alt="FastCarPlay dashboard on the F1C200s">
