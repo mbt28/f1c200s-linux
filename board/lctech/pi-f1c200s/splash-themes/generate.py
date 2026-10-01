@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Generate the FastCarPlay psplash themes (480x272, bottom ~40px kept calm
-for the progress bar). Pick one by pointing BR2_PACKAGE_PSPLASH_IMAGE at it
-and rebuilding psplash (psplash-dirclean). Requires Pillow + the FastCarPlay
-font (path via FCP_FONT env or ../../../FastCarPlay/src/resource/font.ttf)."""
+"""Generate the FastCarPlay psplash themes. The art is authored at 480x272
+(bottom ~40px kept calm for the progress bar) and scaled on save to the panel's
+real resolution (FB_W x FB_H = 800x480, EastRising ER-TFT050-6). Pick one by
+pointing BR2_PACKAGE_PSPLASH_IMAGE at it and rebuilding psplash
+(psplash-dirclean). Requires Pillow + the FastCarPlay font (path via FCP_FONT
+env or ../../../FastCarPlay/src/resource/font.ttf)."""
 
 import os
 import math
 import random
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 480, 272
+W, H = 480, 272            # art is authored at this native size,
+FB_W, FB_H = 800, 480      # then scaled to the real panel (EastRising ER-TFT050-6)
 OUT = os.path.dirname(os.path.abspath(__file__))
 FONT = os.environ.get("FCP_FONT",
                       os.path.join(OUT, "../../../../FastCarPlay/src/resource/font.ttf"))
@@ -42,17 +45,20 @@ FBDIR = os.path.join(OUT, "../../../../rootfs-overlay/etc/splash")
 
 
 def save(img, name):
-    img.save(os.path.join(OUT, name), optimize=True)
+    # Authored at W x H; scale the finished frame to the real panel resolution
+    # (FB_W x FB_H) for both the PNG and the framebuffer dump.
+    out = img if (FB_W, FB_H) == (W, H) else img.resize((FB_W, FB_H), Image.LANCZOS)
+    out.save(os.path.join(OUT, name), optimize=True)
     # raw XRGB8888 framebuffer dump (little-endian BGRX bytes), gzipped, for
     # the runtime-switchable boot splash: S00splash zcats the selected theme
-    # straight into /dev/fb0. ~30-60 KB per theme.
+    # straight into /dev/fb0.
     import gzip
     os.makedirs(FBDIR, exist_ok=True)
-    raw = img.convert("RGB").tobytes("raw", "BGRX")
+    raw = out.convert("RGB").tobytes("raw", "BGRX")
     with gzip.open(os.path.join(FBDIR, name.replace(".png", ".fb.gz")), "wb",
                    compresslevel=9) as f:
         f.write(raw)
-    print("saved", name, "+ fb.gz")
+    print("saved", name, "+ fb.gz", "%dx%d" % (FB_W, FB_H))
 
 
 # 01 — play ring + motion lines (the original theme)
