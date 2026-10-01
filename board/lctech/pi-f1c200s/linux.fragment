@@ -26,8 +26,8 @@ CONFIG_UEVENT_HELPER=y
 # start without it.
 CONFIG_IPV6=y
 
-# 480x272 RGB LCD via the sun4i DRM driver (binds the suniv DE/TCON through
-# their sun4i-a10 fallback compatibles; panel qd43003c0-40 is in panel-simple).
+# 800x480 RGB LCD via the sun4i DRM driver (binds the suniv DE/TCON through
+# their sun4i-a10 fallback compatibles; panel er-tft050-6 added in patch 0025).
 # Display nodes are added by patches/linux-lctech/0001-...-lcd-and-gt911-touch.patch
 CONFIG_DRM=y
 CONFIG_DRM_SUN4I=y

@@ -11,7 +11,7 @@ tiled NV12  ──►  DEFE (front-end: de-tile MB32/NV12_32L32 + BT.601 CSC + s
                       │
 UI / fb0    ──►  DEBE (back-end: 4 layers, ARGB blending, zpos 0-3)
                       │
-                  TCON (RGB666 parallel) ──► 4.3" 480×272 panel (qd43003c0-40)
+                  TCON (RGB666 parallel) ──► 5.0" 800×480 panel (er-tft050-6)
 ```
 
 - **Panel timings** (kernel `panel-simple` entry, mirrored in U-Boot): 9 MHz
@@ -68,7 +68,7 @@ scribbles on it), until the sun4i DRM probe takes the pipeline over ~1 s in.
 
 ## Boot splash (Linux, runtime-selectable)
 
-No psplash: themes are raw 480×272 XRGB8888 framebuffer dumps (gzipped,
+No psplash: themes are raw 800×480 XRGB8888 framebuffer dumps (gzipped,
 ~9 KB each) that `S00splash` blits straight into `/dev/fb0` at the first rcS
 step (with a short wait for the defer-probed DRM pipeline to create fb0).
 
