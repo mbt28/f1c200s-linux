@@ -165,7 +165,38 @@ the app running is normal, not the CMA leak (that was fixed 2026-07-19, patch
 - Shared libs (ffmpeg ~9 MiB on disk) cost only their *used* code pages
   (file-backed, evictable) — not a real RAM lever.
 
-## 4. zram swap — MEASURED AND DECLINED 2026-08-08
+## 4. zram swap — declined 2026-08-08, RE-MEASURED AND ENABLED 2026-10-03
+
+**Update 2026-10-03.** The table below was re-measured as this section demands,
+on the 800x480 panel (CMA 24 MiB) with the audio codec enabled and wireless
+CarPlay playing audio — and the numbers no longer look like August:
+
+| | 2026-08-08 | 2026-10-03 | |
+| --- | ---: | ---: | --- |
+| MemAvailable | 23 936 kB | **2–3 MB** | page cache squeezed to 3 MiB |
+| AnonPages | 8 520 kB | **14 MB** | FastCarPlay RSS 12–13 MiB (LVGL UI, bigger frames) |
+| CmaFree (session) | 196 kB / 16 MiB | **0 / 24 MiB** | video owns the whole pool |
+| `pgmajfault` | — | **58 000+** and climbing | code pages re-read from SD on every call |
+| load average | — | **7–12** on one core | D-state tasks waiting on the card |
+
+That is page-cache thrash: with ~28 MiB outside CMA for kernel + 14 MiB anon
++ 8 MiB slab, nothing is left to cache executables, so the UI "freezes
+whenever audio plays" (audio adds a few MiB of library and decoder code to
+the working set exactly when CMA is full). Enabling the zram tier live moved
+2 MiB of idle anonymous memory into 0.85 MiB of compressed RAM within ten
+seconds and CMA free went 0 → 2 MiB; after a minute 5 MiB was swapped and
+AnonPages sat at 9 MiB with the board idle at load 0.2. **Swap now ships
+enabled, zram tier only** (`/etc/swap-disable` no longer in the overlay; the
+SD tier still needs `touch /etc/swap-sd`). To go back: `touch /etc/swap-disable`.
+
+The second lever is on the kernel command line:
+`snd_soc_core.prealloc_buffer_size_kbytes=64` — the ASoC dmaengine PCM
+preallocates 512 KiB per direction from CMA at boot; 64 KiB covers the
+periods SDL/alsa-lib use and anything larger is grown at hw_params. See
+`docs/audio.md`.
+
+The August measurement, kept for the record:
+
 
 The gate this section used to set ("only worth it if userspace actually hits
 OOM") was finally evaluated on hardware. **It is not met, and swap ships
@@ -196,8 +227,8 @@ rm /etc/swap-disable && touch /etc/swap-sd && reboot   # zram + SD tier
 rm /etc/swap-disable && reboot                         # zram only
 ```
 
-Neither needs a rebuild. **Re-measure the table above before enabling** — if it
-still looks like this, the answer is still no.
+Neither needs a rebuild. The table was re-measured on 2026-10-03 (top of this
+section) and no longer looks like this, which is why the default flipped.
 
 ## 5. Debug instrumentation removed — controlled A/B, 2026-08-09
 
