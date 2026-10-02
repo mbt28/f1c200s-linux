@@ -1,0 +1,33 @@
+lctech f1c200s: enable the on-chip audio codec (headphone + speaker, mic)
+
+The suniv codec driver (CONFIG_SND_SUN4I_CODEC=y) and its DMA engine are
+already built, but the mainline dtsi leaves codec@1c23c00 disabled, so the
+board booted with "No soundcards found". Enable it with the routing proven
+on mainline's LicheePi Nano (same SoC): Headphone <- HP/HPCOM, MIC <- Mic,
+plus Speaker <- HP for the board's PAM8301 amplifier (always on; no enable
+GPIO, so no allwinner,pa-gpios). FastCarPlay plays through SDL's ALSA
+backend on the "default" device, which is this card.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -398,3 +398,20 @@
+ 		status = "okay";
+ 	};
+ };
++
++/*
++ * On-chip audio codec (sun4i-codec, suniv variant). The board brings out the
++ * headphone pair HPL/HPR (AC-coupled, R3/R4 + 1 uF) -- which also feeds the
++ * on-board PAM8301 speaker amplifier (always on, no enable GPIO) -- and MICIN.
++ * Routing mirrors mainline's LicheePi Nano (same SoC) plus the speaker sink.
++ * No pinmux: these are dedicated analog pins. The codec's DMA channels are
++ * already declared in the suniv dtsi (DMA_SUN4I).
++ */
++&codec {
++	allwinner,audio-routing =
++		"Headphone", "HP",
++		"Headphone", "HPCOM",
++		"Speaker", "HP",
++		"MIC", "Mic";
++	status = "okay";
++};
