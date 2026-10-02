@@ -29,8 +29,11 @@ start)
 	set_ctl "Headphone Playback Switch" 1 1
 	# capture: mic for Siri / calls
 	set_ctl "ADC Mixer Mic Capture Switch" 1
+	# Measured 2026-10-03: ADC Capture Volume 5 saturates the ADC on the codec's
+	# own DC offset (every sample ~+32600); 2 keeps it centred (~-470 +/- noise)
+	# with headroom for speech. Put the gain in the mic boost instead.
 	set_ctl "Mic Boost Volume" 5
-	set_ctl "ADC Capture Volume" 5
+	set_ctl "ADC Capture Volume" 2
 	echo "audio: codec mixer configured (headphone/speaker + mic)"
 	;;
 stop)
