@@ -21,7 +21,7 @@ Memory: 35788K/65536K available
          12944K reserved, 16384K cma-reserved)
 ```
 
-So of 64 MiB: **~35 MiB for userspace**, **16 MiB CMA** (decode + display
+So of 64 MiB: **~35 MiB for userspace**, **24 MiB CMA** (decode + display
 buffers), **~12.6 MiB resident kernel**. The kernel image and CMA were the two
 places with real headroom; both have now been worked (§1, §2) and the largest
 remaining lever is in userspace, not the kernel (§3).
@@ -100,12 +100,21 @@ prompt is just invisible). The fragment now sets EXPERT=y, which only unhides
 prompts (config-diff audited: no other built code changes) and selects
 DEBUG_KERNEL as a bare menu gate, neutralized by keeping DEBUG_MISC off.
 
-## 2. CMA: 16 MiB reserved, fully used, do not reduce
+## 2. CMA: 24 MiB reserved (800x480 panel) -- and 24 is the ceiling
+
+Raised from 16 MiB on 2026-10-02 for the 800x480 ER-TFT050-6: each decode frame
+became 576 KiB (NV12) and each framebuffer 1.5 MiB, roughly 3x the 480x272 values,
+and the 16 MiB pool fragmented under wireless CarPlay (`cma_alloc ... -EBUSY`,
+`cedrus: dma alloc of size 589824 failed`). **28 and 32 MiB do not reserve** --
+the kernel logs `cma: Failed to reserve` and boots with *zero* CMA, which is far
+worse. So 24 is the maximum on this 64 MiB layout; beyond it, reduce buffer
+counts or use a dedicated VE carveout. CMA pages stay usable by movable
+allocations, so this is not 24 MiB of dead RAM.
 
 The pool serves cedrus/cedar decode buffers, ffmpeg's right-sized coded
-buffers (~1 MiB × DPB), the DRM dumb buffers (UI overlay 2×510 KiB + fb0
-~510 KiB), and DEFE scanout. Earlier estimates put streaming use at
-~8–12 MiB. **Measure before cutting** — on the board, while streaming
+buffers (~1 MiB × DPB), the DRM dumb buffers (UI overlay 2×1.5 MiB + fb0
+~1.5 MiB at 800x480; these were ~510 KiB each at 480x272), and DEFE scanout. Earlier estimates put streaming use at
+~8–12 MiB at 480x272 (~12–15 MiB at 800x480). **Measure before cutting** — on the board, while streaming
 CarPlay (worst case: video + UI overlay visible):
 
 ```sh
