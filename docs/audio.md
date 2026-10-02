@@ -54,19 +54,36 @@ Capture Volume 5 rails every sample at about +32600 even in silence; 2 keeps
 the input centred (about −470 ± 90 LSB). Mic Boost 5 still clipped normal
 speech, hence 4.
 
+## CPU: decode AAC in fixed point (the real "struggles when music plays")
+
+Wireless CarPlay's media stream is **AAC-LC 44.1 kHz stereo**, about 35 KB/s
+on the wire (the Siri/nav channels are Opus or PCM). The expensive part is not
+moving it but decoding it: the toolchain is soft-float (`BR2_SOFT_FLOAT=y`,
+the ARM926 has no FPU) and ffmpeg's default `aac` decoder is floating point,
+so every sample ran through float emulation. Measured 2026-10-03 with music
+playing: FastCarPlay's main thread 61 %, core 0 % idle, 850 timer wakeups/s
+from the frame loop overrunning its budget, UI unresponsive.
+
+FastCarPlay (branch `f1c200s-cedrus`) now asks libavcodec for `aac_fixed`
+first — integer-only, full-scale S32P output, so the sample conversion takes
+the top 16 bits (reading those as floats was the "noisy audio" first
+attempt). Same board, same music: main thread 16 %, core 43 % idle, zero
+ALSA underruns, 240 timer wakeups/s. `CONFIG_AAC_FIXED_DECODER=1` is already
+in the image's ffmpeg; `libopus` (fixed-point) is not built, so Opus
+channels still use the float decoder — `BR2_PACKAGE_OPUS` + ffmpeg
+`--enable-libopus` is the follow-up if Siri/nav audio ever shows the same
+symptom. What remains on the audio path is SDL's output thread at ~20 %
+(mostly kernel time in the ALSA write).
+
 ## Memory footprint (matters on 64 MiB)
 
-Audio is cheap in CPU (the DMA paces itself, about 50 interrupts/s) but not
-free in memory, and this board runs at the edge: with the 24 MiB CMA fully
-taken by 800x480 wireless CarPlay video, the rest of the system has about
-28 MiB. Measured 2026-10-03 with CarPlay audio active: MemAvailable 2–3 MiB,
-page cache squeezed to 3 MiB, 58 000 major page faults — the kernel evicted
-executable pages and re-read them from the SD card on every call, which is
-what "the UI freezes whenever audio plays" looks like. Audio makes it worse
-because it pulls in several MiB of extra code (libasound, SDL audio, the
-ffmpeg audio decoders) exactly when CMA is full.
-
-Two levers ship in this tree:
+Audio is cheap in link bandwidth but not free in memory, and this board runs
+at the edge: with the 24 MiB CMA fully taken by 800x480 wireless CarPlay
+video, the rest of the system has about 28 MiB. Measured 2026-10-03:
+MemAvailable 2–3 MiB, page cache squeezed to 3 MiB, 58 000 major page faults
+— the kernel evicted executable pages and re-read them from the SD card on
+every call, which compounded the decode cost above. Two levers ship in this
+tree:
 
 * `snd_soc_core.prealloc_buffer_size_kbytes=64` on the kernel command line
   (`board/lctech/pi-f1c200s/uboot-sdcard.fragment`, SD and NAND branches):

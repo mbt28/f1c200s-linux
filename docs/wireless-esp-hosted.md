@@ -295,9 +295,11 @@ counted in dmesg (`timed out`, `Drop invalid pkt`):
 The 17 build is flashed; bundles with READMEs live outside this repo in
 `~/projects/f1c200s/firmware/esp32-spi-uart-noflow-230400-v3-spi{15,17,20}/`.
 Cost model is unchanged: the F1C200s spends about 1 % CPU per 10 KB/s moved
-over this link (59 % sys + 17 % softirq at 722 KB/s), so the per-transaction
-overhead, not the clock, is what makes wireless CarPlay's uncompressed PCM
-audio (176 KB/s) expensive — see `docs/audio.md`.
+over this link (59 % sys + 17 % softirq at 722 KB/s). A live wireless
+CarPlay session with music needs only ~40 KB/s (the media audio is AAC-LC),
+so the link was never the bottleneck — the CPU cost that looked like
+"bandwidth" was floating-point AAC decoding on a soft-float core; see
+`docs/audio.md`.
 
 Reload recipe after a flash or an ESP wedge (the `wifi` helper has no AP
 verb; `S44ap` only runs at boot): `killall hostapd dnsmasq; modprobe -r
