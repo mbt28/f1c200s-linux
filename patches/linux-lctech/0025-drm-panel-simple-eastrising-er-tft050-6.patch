@@ -12,7 +12,7 @@ every value inside the panel's min/max window.
 
 --- a/drivers/gpu/drm/panel/panel-simple.c
 +++ b/drivers/gpu/drm/panel/panel-simple.c
-@@ -4034,6 +4034,29 @@
+@@ -4034,6 +4034,30 @@
  	.bus_format = MEDIA_BUS_FMT_RGB888_1X24,
  };
  
@@ -37,12 +37,13 @@ every value inside the panel's min/max window.
 +		.height = 65,
 +	},
 +	.bus_format = MEDIA_BUS_FMT_RGB565_1X16,
++	.connector_type = DRM_MODE_CONNECTOR_DPI,
 +};
 +
  static const struct drm_display_mode qishenglong_gopher2b_lcd_modes[] = {
  	{ /* 60 Hz */
  		.clock = 10800,
-@@ -5341,6 +5364,9 @@
+@@ -5341,6 +5365,9 @@
  		.compatible = "qiaodian,qd43003c0-40",
  		.data = &qd43003c0_40,
  	}, {
