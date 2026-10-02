@@ -19,8 +19,15 @@
 # This is the conservative fix: it also disables the DDMA offload that patches
 # 0016-0019 added for wired Android Auto. Drop this once the datapath is
 # properly serialised and the offload can be re-enabled safely.
+#
+# snd_soc_core.prealloc_buffer_size_kbytes=64: the ASoC dmaengine PCM
+# preallocates a DMA buffer per direction at boot, 512 KiB each by default,
+# out of CMA -- the pool the video decoder is already starved of (CmaFree 0
+# with 800x480 wireless CarPlay). 64 KiB covers the ~23 ms periods SDL /
+# alsa-lib use; anything bigger is grown on demand at hw_params. Saves ~0.9 MiB
+# of CMA for as long as nobody plays audio (docs/audio.md).
 CONFIG_USE_BOOTARGS=y
-CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0"
+CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64"
 
 # --- On-board SPI NAND (spi0): drive it, and boot from it if there is no SD ---
 #
@@ -79,4 +86,4 @@ CONFIG_USE_BOOTCOMMAND=y
 # above the fdt, which is also exactly what the vendor bootloader does
 # (kernel_addr_r=0x81000000). Any new address must stay above 0x80C00000 plus
 # the fdt size, and below the top of the 64 MiB of DRAM.
-CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
+CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
