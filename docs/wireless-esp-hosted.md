@@ -268,6 +268,43 @@ Re-measure RAM (docs/memory.md — expect ~3–5 MiB for module+supplicant+
 bluetoothd, post-diet headroom covers it); CI builds the new packages; docs;
 promote dev → main + tag.
 
+## SPI clock: measured ceiling 16.7 MHz (2026-10-03)
+
+The ESP32 announces its SPI clock in the boot-up event and the host driver
+reprograms itself to that value unconditionally (`adjust_spi_clock`), so the
+`clockspeed=` modprobe parameter in `/usr/bin/wifi` is only the clock used
+until that event arrives — raising the link clock means rebuilding the ESP
+firmware with `SPI_CLK_MHZ` changed in the `CONFIG_IDF_TARGET_ESP32` branch
+of `esp/esp_driver/network_adapter/main/spi_slave_api.c` (Espressif's tested
+limit for the classic ESP32 slave is 10 MHz; C3/S3 do 30–40).
+
+The suniv SPI1 has no module clock of its own (the DT feeds the 200 MHz AHB
+gate to spi-sun6i as "mod"), so the bus runs at 200/(2n) MHz: an announced
+15 gives 14.3, 17 gives 16.7, 20 gives 20.
+
+Stepped on the soldered prototype PCB, iperf3 Pi → board, transport errors
+counted in dmesg (`timed out`, `Drop invalid pkt`):
+
+| announced | bus clock | throughput | errors |
+|---|---|---|---|
+| 10 (stock) | 10 MHz | 3.75 Mbit/s | 0 |
+| 15 | 14.3 MHz | 5.24 Mbit/s | 0 |
+| **17** | **16.7 MHz** | **5.96 Mbit/s** (30 s soak 5.75) | **0** |
+| 20 | 20 MHz | — | every command times out, RX frames dropped; identical with the host forced to half-cycle delayed MISO sampling (`SUN6I_TFR_CTL_SDM` threshold 24 → 18 MHz), so it is the ESP32 slave, not host sampling |
+
+The 17 build is flashed; bundles with READMEs live outside this repo in
+`~/projects/f1c200s/firmware/esp32-spi-uart-noflow-230400-v3-spi{15,17,20}/`.
+Cost model is unchanged: the F1C200s spends about 1 % CPU per 10 KB/s moved
+over this link (59 % sys + 17 % softirq at 722 KB/s), so the per-transaction
+overhead, not the clock, is what makes wireless CarPlay's uncompressed PCM
+audio (176 KB/s) expensive — see `docs/audio.md`.
+
+Reload recipe after a flash or an ESP wedge (the `wifi` helper has no AP
+verb; `S44ap` only runs at boot): `killall hostapd dnsmasq; modprobe -r
+esp32_spi; modprobe esp32_spi resetpin=132 clockspeed=10; ip link set wlan0
+up; ip addr add 192.168.9.1/24 dev wlan0; hostapd -B -P /var/run/hostapd.pid
+/etc/hostapd.conf; dnsmasq -C /etc/dnsmasq-ap.conf -x /var/run/dnsmasq-ap.pid`.
+
 ## Risks
 
 - **2.4 GHz-only wireless AA** (ESP32 has no 5 GHz; the only 5 GHz ESP —
