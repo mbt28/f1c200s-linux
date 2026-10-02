@@ -178,6 +178,12 @@ BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
 # launches `bluealsa -p hfp-ag` right after bluetoothd (the daemon is named
 # `bluealsa` in v4.3.1; `bluealsad` only in later releases).
 BR2_PACKAGE_BLUEZ_ALSA=y
+# tinyalsa + tools (tinymix/tinyplay/tinycap, ~100 KB): S41audio sets up the
+# on-chip codec's mixer at boot (headphone/speaker out, mic in) and they give a
+# tiny on-target test path. alsa-lib is already present via bluez-alsa, and
+# SDL2 is built with its ALSA backend, which is how FastCarPlay plays audio.
+BR2_PACKAGE_TINYALSA=y
+BR2_PACKAGE_TINYALSA_TOOLS=y
 # SoftAP userspace (wireless Android Auto needs the head unit to be the AP,
 # and the wireless dev loop rides the same AP): hostapd drives the NG driver's
 # cfg80211 AP mode (compiled in with CONFIG_AP_SUPPORT); dnsmasq hands out the

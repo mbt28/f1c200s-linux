@@ -1,0 +1,47 @@
+#!/bin/sh
+# On-chip audio codec (sun4i-codec, suniv) mixer setup. The card comes up with
+# the headphone path muted and the DAC not routed, so nothing is audible until
+# these are set. Runs before the app stack (S45) so FastCarPlay (SDL -> ALSA
+# "default" = this card) and the CarPlay mic work from the first session.
+#
+# Playback: DAC -> headphone (HPL/HPR), which also drives the board's PAM8301
+# speaker amp (always on, no enable GPIO). Capture: MICIN -> boost -> ADC.
+# Values are ALSA-side: max 63 for DAC/HP volume, 7 for the mic/ADC gains.
+# Supports both tinymix syntaxes (new `tinymix set NAME V..`, old `tinymix NAME V..`).
+# Never fails the boot: a missing card or tool just logs and exits 0.
+
+CARD=0
+set_ctl() {
+	n="$1"; shift
+	tinymix -D "$CARD" set "$n" "$@" >/dev/null 2>&1 \
+		|| tinymix -D "$CARD" "$n" "$@" >/dev/null 2>&1 \
+		|| echo "audio: failed to set '$n'"
+}
+
+case "$1" in
+start)
+	command -v tinymix >/dev/null 2>&1 || { echo "audio: tinymix missing"; exit 0; }
+	[ -e "/dev/snd/controlC$CARD" ] || { echo "audio: no sound card (codec not enabled?)"; exit 0; }
+	# playback: DAC straight to the headphone driver, unmuted
+	set_ctl "Headphone Source Playback Route" DAC
+	set_ctl "DAC Playback Volume" 63
+	set_ctl "Headphone Playback Volume" 58
+	set_ctl "Headphone Playback Switch" 1 1
+	# capture: mic for Siri / calls
+	set_ctl "Mic Capture Switch" 1
+	set_ctl "Mic Boost Volume" 5
+	set_ctl "ADC Capture Volume" 5
+	echo "audio: codec mixer configured (headphone/speaker + mic)"
+	;;
+stop)
+	command -v tinymix >/dev/null 2>&1 && [ -e "/dev/snd/controlC$CARD" ] \
+		&& set_ctl "Headphone Playback Switch" 0 0
+	;;
+restart|reload)
+	"$0" stop; "$0" start
+	;;
+*)
+	echo "usage: $0 {start|stop|restart}"
+	;;
+esac
+exit 0
