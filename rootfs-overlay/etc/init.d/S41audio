@@ -28,7 +28,7 @@ start)
 	set_ctl "Headphone Playback Volume" 58
 	set_ctl "Headphone Playback Switch" 1 1
 	# capture: mic for Siri / calls
-	set_ctl "Mic Capture Switch" 1
+	set_ctl "ADC Mixer Mic Capture Switch" 1
 	set_ctl "Mic Boost Volume" 5
 	set_ctl "ADC Capture Volume" 5
 	echo "audio: codec mixer configured (headphone/speaker + mic)"
