@@ -103,10 +103,15 @@ define FASTCARPLAY_BUILD_CMDS
 endef
 
 define FASTCARPLAY_INSTALL_TARGET_CMDS
+	# The app's `install` rule strips the binary (app c02b3b8: `install -s
+	# --strip-program=$(STRIP)`, STRIP defaulting to the host `strip`, which
+	# cannot read an ARM ELF -- "Unable to recognise the format"). Hand it the
+	# cross strip. Buildroot would strip the target binary anyway.
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) \
 		DESTDIR="$(TARGET_DIR)" \
 		PREFIX=/usr \
 		SYSCONFDIR=/etc \
+		STRIP="$(TARGET_STRIP)" \
 		install
 	# Ship the app's preset files (settings_*.txt): since app d58e335 that is
 	# settings_drm.txt (head units -- what S99carplay boots) and
