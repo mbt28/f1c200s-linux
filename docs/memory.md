@@ -165,7 +165,7 @@ the app running is normal, not the CMA leak (that was fixed 2026-07-19, patch
 - Shared libs (ffmpeg ~9 MiB on disk) cost only their *used* code pages
   (file-backed, evictable) — not a real RAM lever.
 
-## 4. zram swap — declined 2026-08-08, enabled then disabled again 2026-10-03
+## 4. Swap — SD tier by default since 2026-10-03 (zram opt-in)
 
 **Update 2026-10-03.** The table below was re-measured as this section demands,
 on the 800x480 panel (CMA 24 MiB) with the audio codec enabled and wireless
@@ -198,6 +198,40 @@ FastCarPlay, the kernel diet in §5). Without any swap a session + call still
 OOM-killed the app once, so the SD partition p4 is the candidate tier (no RAM
 involved): `swapon -p 10 /dev/mmcblk0p4` with `vm.swappiness` raised; S02swap
 needs an SD-only mode before that can ship.
+
+**The "freeze" (2026-10-03 evening) and how it was pinned down.** Both the
+slim and the pre-diet kernel "froze Linux" the moment wireless CarPlay started
+video: display stuck, SSH dead, Bluetooth gone. It is not a hang. A heartbeat
+script writing `/proc/meminfo` figures to the serial console every 5 s showed
+the last healthy line at 13.6 MiB available / 52 % idle, then nothing for
+three minutes — and when the line finally came out it carried **35 241 major
+faults** for the interval, load 12.5, page cache 2.6 MiB, 4.2 MiB available.
+Meanwhile the kernel answered pings in 22 ms and printed its own messages:
+only user space was starved, every process faulting its code back in from the
+card. Capping realtime CPU at 30 % changed nothing (no realtime thread is
+involved in the wireless path), and the pre-diet kernel froze identically, so
+neither the kernel diet nor the app's scheduling is the cause: it is the
+memory budget. The sequence was 6 MiB CMA free → the decoder pins the rest →
+anon grows 11 → 14 MiB → cache collapses.
+
+The fix that measured well is the SD tier alone (`swapon -p 10
+/dev/mmcblk0p4`, `vm.swappiness=60`, `vm.page-cluster=3`): a 15-minute video
+session swapped out 3–4 MiB of cold anonymous memory, took **1 600** major
+faults in total, kept 19–25 MiB available and the heartbeat never came late;
+a second 10-minute session with audio closed cleanly; a third ran on the slim
+kernel. `S02swap` therefore brings up p4 by default (`/etc/swap-sd` ships),
+no longer requires zram to be live first, applies the SD tuning when it is the
+only tier, and zram is opt-in (`touch /etc/swap-zram`) because of the CMA
+failures described above. The earlier "never make the card primary swap"
+reasoning assumed the card was otherwise idle; measured, the card is hammered
+far harder by re-reading executables than by parking a few MiB of anon.
+
+Diagnosis toolkit, worth keeping: a persistent serial logger on the Pi (one
+reader only — a second terminal on the same `/dev/ttyUSB0` splits the bytes
+and garbles both), a builtin-only heartbeat on the card (`/root/hb.sh`,
+started by `S98hb`), `S99carplay` keeping the previous run's log as
+`carplay.log.0`, and `CONFIG_MAGIC_SYSRQ_SERIAL` in the kernel so a BREAK can
+request `l`/`t`/`w` dumps when no shell gets CPU.
 
 The second lever is on the kernel command line:
 `snd_soc_core.prealloc_buffer_size_kbytes=64` — the ASoC dmaengine PCM
