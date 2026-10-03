@@ -548,3 +548,11 @@ CONFIG_LD_DEAD_CODE_DATA_ELIMINATION=y
 # tethering, see the USB block above.)
 # CONFIG_PCS_XPCS is not set
 # CONFIG_PHYLINK is not set
+
+# Freeze hunt (2026-10-03): user space starves while the kernel keeps running.
+# SysRq over a serial BREAK lets the Pi ask for the running task's backtrace
+# (l), all tasks (t) and blocked tasks (w) without a working shell. SysRq
+# changes no kernel structures, so the installed modules stay valid.
+CONFIG_MAGIC_SYSRQ=y
+CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1
+CONFIG_MAGIC_SYSRQ_SERIAL=y
