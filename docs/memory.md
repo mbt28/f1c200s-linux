@@ -165,7 +165,7 @@ the app running is normal, not the CMA leak (that was fixed 2026-07-19, patch
 - Shared libs (ffmpeg ~9 MiB on disk) cost only their *used* code pages
   (file-backed, evictable) — not a real RAM lever.
 
-## 4. zram swap — declined 2026-08-08, RE-MEASURED AND ENABLED 2026-10-03
+## 4. zram swap — declined 2026-08-08, enabled then disabled again 2026-10-03
 
 **Update 2026-10-03.** The table below was re-measured as this section demands,
 on the 800x480 panel (CMA 24 MiB) with the audio codec enabled and wireless
@@ -185,9 +185,19 @@ whenever audio plays" (audio adds a few MiB of library and decoder code to
 the working set exactly when CMA is full). Enabling the zram tier live moved
 2 MiB of idle anonymous memory into 0.85 MiB of compressed RAM within ten
 seconds and CMA free went 0 → 2 MiB; after a minute 5 MiB was swapped and
-AnonPages sat at 9 MiB with the board idle at load 0.2. **Swap now ships
-enabled, zram tier only** (`/etc/swap-disable` no longer in the overlay; the
-SD tier still needs `touch /etc/swap-sd`). To go back: `touch /etc/swap-disable`.
+AnonPages sat at 9 MiB with the board idle at load 0.2.
+
+**Reverted the same evening.** With zram live the hardware decoder failed
+three times to allocate its CMA buffers (`cedrus: dma alloc of size 1048576
+failed`, ~10 MiB CMA "free" but no contiguous block; `cma: range 0:
++63@65+128@384+137@887…`): zsmalloc's pages are movable allocations that
+land in the CMA pool and did not migrate out. No video is worse than a slow
+UI, so `/etc/swap-disable` ships again and zram stays off. The thrash it had
+papered over was fixed at the source instead (fixed-point AAC decoding in
+FastCarPlay, the kernel diet in §5). Without any swap a session + call still
+OOM-killed the app once, so the SD partition p4 is the candidate tier (no RAM
+involved): `swapon -p 10 /dev/mmcblk0p4` with `vm.swappiness` raised; S02swap
+needs an SD-only mode before that can ship.
 
 The second lever is on the kernel command line:
 `snd_soc_core.prealloc_buffer_size_kbytes=64` — the ASoC dmaengine PCM
