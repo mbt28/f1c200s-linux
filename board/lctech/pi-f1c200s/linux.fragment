@@ -434,3 +434,117 @@ CONFIG_IKCONFIG_PROC=y
 # and one of those threads is the SCHED_FIFO video reader. zstd's better ratio
 # is not worth 5-10x the compress time in that position.
 CONFIG_ZRAM=m
+
+# ---------------------------------------------------------------------------
+# Kernel diet (2026-10-03). The base config is the multi-SoC sunxi defconfig,
+# so ~1.3 MB of .text was drivers for hardware this chip/board does not have.
+# Measured before: vmlinux text 7.9 MB, data 2.9 MB, "reserved" 12.9 MB of the
+# 64 MB. Every group below was chosen explicitly (docs/memory.md). KEPT on
+# purpose: USB storage, SIT tunnel, CSI/IR/legacy input, PMIC/RTC, KALLSYMS
+# and the debug aids (IKCONFIG, DEBUG_FS, SLUB_DEBUG, ARM_UNWIND).
+
+# GPU: the F1C200s has none (Lima + its scheduler + shmem GEM helper).
+# CONFIG_DRM_LIMA is not set
+# CONFIG_DRM_SCHED is not set
+# CONFIG_DRM_GEM_SHMEM_HELPER is not set
+
+# HDMI: no encoder/PHY on this SoC; the panel is parallel RGB.
+# CONFIG_DRM_SUN4I_HDMI is not set
+# CONFIG_DRM_SUN4I_HDMI_CEC is not set
+# CONFIG_DRM_SUN8I_DW_HDMI is not set
+# CONFIG_DRM_DW_HDMI is not set
+# CONFIG_DRM_DISPLAY_HDMI_HELPER is not set
+# CONFIG_DRM_DISPLAY_HDMI_AUDIO_HELPER is not set
+# CONFIG_DRM_DISPLAY_HDMI_STATE_HELPER is not set
+# CONFIG_CEC_CORE is not set
+# CONFIG_CEC_PIN is not set
+# CONFIG_MEDIA_CEC_SUPPORT is not set
+
+# Display Engine 2 (A64/H3 mixer, TCON TOP): this chip is DE1 (sun4i backend
+# + frontend, which stay).
+# CONFIG_DRM_SUN8I_MIXER is not set
+# CONFIG_DRM_SUN8I_TCON_TOP is not set
+
+# DSI / LVDS / eDP / DP / dumb bridges: the ER-TFT050-6 is a DPI panel via
+# panel-simple + panel-bridge (both stay).
+# CONFIG_DRM_SUN6I_DSI is not set
+# CONFIG_DRM_MIPI_DSI is not set
+# CONFIG_PHY_SUN6I_MIPI_DPHY is not set
+# CONFIG_DRM_PANEL_LVDS is not set
+# CONFIG_DRM_PANEL_EDP is not set
+# CONFIG_DRM_DISPLAY_DP_HELPER is not set
+# CONFIG_DRM_DISPLAY_DP_AUX_BUS is not set
+# CONFIG_DRM_SIMPLE_BRIDGE is not set
+# CONFIG_DRM_PANEL_ORIENTATION_QUIRKS is not set
+
+# SATA/PATA: no controller.
+# CONFIG_ATA is not set
+
+# EHCI/OHCI: the only USB controller is the MUSB OTG (kept).
+# CONFIG_USB_EHCI_HCD is not set
+# CONFIG_USB_OHCI_HCD is not set
+# CONFIG_PHY_SUN9I_USB is not set
+
+# USB NICs: keep ipheth (iPhone), CDC Ethernet (Android) and the RNDIS/ECM
+# gadget for `net on`; drop Realtek and the legacy usbnet variants.
+# CONFIG_USB_RTL8152 is not set
+# CONFIG_USB_RTL8153_ECM is not set
+# CONFIG_USB_NET_CDC_NCM is not set
+# CONFIG_USB_NET_NET1080 is not set
+# CONFIG_USB_NET_ZAURUS is not set
+# CONFIG_USB_NET_CDC_SUBSET is not set
+# CONFIG_USB_BELKIN is not set
+
+# Wired Ethernet MAC/PHY: the F1C200s has no EMAC and the board no RJ45.
+# CONFIG_SUN4I_EMAC is not set
+# CONFIG_MDIO_SUN4I is not set
+# CONFIG_MDIO_BUS_MUX is not set
+# CONFIG_PHYLIB is not set
+# CONFIG_ETHERNET is not set
+
+# Blocks of other Allwinner SoCs.
+# CONFIG_SUN6I_MSGBOX is not set
+# CONFIG_SUN20I_PPU is not set
+# CONFIG_SUN55I_PCK600 is not set
+# CONFIG_PINCTRL_SUN4I_A10 is not set
+# CONFIG_PINCTRL_SUN5I is not set
+# CONFIG_PINCTRL_SUN6I_A31 is not set
+# CONFIG_PINCTRL_SUN6I_A31_R is not set
+# CONFIG_PINCTRL_SUN8I_A23 is not set
+# CONFIG_PINCTRL_SUN8I_A23_R is not set
+# CONFIG_PINCTRL_SUN8I_A33 is not set
+# CONFIG_PINCTRL_SUN8I_A83T is not set
+# CONFIG_PINCTRL_SUN8I_A83T_R is not set
+# CONFIG_PINCTRL_SUN8I_H3 is not set
+# CONFIG_PINCTRL_SUN8I_H3_R is not set
+# CONFIG_PINCTRL_SUN8I_V3S is not set
+# CONFIG_PINCTRL_SUN9I_A80 is not set
+# CONFIG_PINCTRL_SUN9I_A80_R is not set
+# CONFIG_PINCTRL_SUN20I_D1 is not set
+
+# Thermal / DVFS / sensors / crypto engines: none of it exists on this chip.
+# CONFIG_THERMAL is not set
+# CONFIG_SUN8I_THERMAL is not set
+# CONFIG_HWMON is not set
+# CONFIG_CPU_FREQ is not set
+# CONFIG_PM_DEVFREQ is not set
+# CONFIG_IIO is not set
+# CONFIG_CRYPTO_DEV_ALLWINNER is not set
+
+# Single-application box: no containers, and 64 MB never needs highmem.
+# CONFIG_CGROUPS is not set
+# CONFIG_NAMESPACES is not set
+# CONFIG_HIGHMEM is not set
+
+# printk ring: 16 KB (the static descriptor tables scale with it, ~450 KB
+# saved); boot messages still reach the serial console and syslogd.
+CONFIG_LOG_BUF_SHIFT=14
+
+# Let the linker drop unreferenced functions/data (binutils 2.45).
+CONFIG_LD_DEAD_CODE_DATA_ELIMINATION=y
+
+# Leftover found after the first merge: the Synopsys XPCS PHY driver kept
+# PHYLINK -> PHYLIB -> MDIO_BUS alive. (USB_NET_CDC_NCM stays: Android NCM
+# tethering, see the USB block above.)
+# CONFIG_PCS_XPCS is not set
+# CONFIG_PHYLINK is not set

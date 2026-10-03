@@ -284,3 +284,46 @@ cleanly, checking for the tracepoints and exiting with a message.
 7. **Still open, and now the largest single lever:** `S45aa-stack` starts
    ~11 MiB of daemons on every boot (§3). Needs a product decision, not a
    cleanup — see the caveat there.
+
+## 5. Kernel diet (2026-10-03)
+
+Where the 64 MiB go: the kernel image is resident uncompressed (zImage is only
+the storage form). Measured on the 6.18.42 build before the diet: `.text`
+7.9 MB, `.data` 2.9 MB (kallsyms tables 1.3 MB, printk ring + descriptors
+0.53 MB, ARM unwind index 0.23 MB), `.bss` 0.2 MB; the boot line's
+"12 964K reserved" is that image plus `mem_map`, page tables and the DTB; CMA
+is the separate 24 MiB. The base config is the multi-SoC sunxi defconfig, so
+about 1.3 MB of text was drivers for hardware this chip or board does not
+have (text per group measured with `size -t <dir>/built-in.a`).
+
+What was dropped, decided group by group (the "Kernel diet" block at the end
+of `board/lctech/pi-f1c200s/linux.fragment`): Lima GPU + DRM scheduler, the
+whole HDMI stack and CEC, the DE2 mixer/TCON-TOP, DSI/LVDS/eDP/DP and dumb
+bridges, libata, EHCI/OHCI, the Realtek and legacy usbnet drivers, the EMAC
+/MDIO/PHY library (plus the XPCS/PHYLINK leftovers that re-selected it),
+mailbox/power-domain/pinctrl blocks of other Allwinner SoCs, thermal/hwmon
+/cpufreq/devfreq/IIO/Allwinner crypto engines, cgroups, namespaces and
+highmem; `LOG_BUF_SHIFT` 17 → 14; `LD_DEAD_CODE_DATA_ELIMINATION=y`.
+
+Kept on purpose: USB mass storage, the SIT tunnel, CSI/camera plumbing, the
+IR receiver, legacy input (resistive TP, LRADC, PS/2), the AXP/AC100 PMIC and
+RTC drivers, `USB_NET_CDC_NCM` (Android NCM tethering), KALLSYMS, the debug
+aids (`IKCONFIG`, `DEBUG_FS`, `SLUB_DEBUG`, `ARM_UNWIND`) and
+`STRICT_KERNEL_RWX`. Note that with `STRICT_KERNEL_RWX` the code section is
+rounded up to 1 MiB ("7168K kernel code" in the boot line either way), so
+text savings only show once `.text` crosses a 1 MiB boundary; rodata, data
+and bss savings show immediately.
+
+Result (same board, same image otherwise): vmlinux text 7.88 → 6.85 MB,
+data 2.94 → 2.06 MB, bss 216 → 85 KB; boot line "available" 27 576 →
+28 308 KB; idle `MemAvailable` 12.2 → 13.0 MB; sysfs nodes 16 979 → 14 548.
+Modules are ABI-bound to the config: after such a change every `.ko` on the
+card (including the out-of-tree `esp32_spi`) must come from the same build,
+or `cfg80211` fails with `Unknown symbol __put_net / page_address`.
+
+Swap status after this day: zram fragments CMA (three `cedrus: dma alloc
+failed` events, all with zram live) and no swap at all OOM-killed the app in
+a call, so `/etc/swap-disable` is back on the card and the reserved SD
+partition p4 is being evaluated as the only tier (`swapon -p 10
+/dev/mmcblk0p4`, `vm.swappiness=100`); S02swap still ties the SD tier to a
+live zram and needs an SD-only mode if the experiment holds.

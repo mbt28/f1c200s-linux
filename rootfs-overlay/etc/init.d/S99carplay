@@ -38,6 +38,13 @@ start)
 	;;
 stop)
 	killall fastcarplay 2>/dev/null
+	# The app does not always finish its SIGTERM shutdown (threads stuck on a
+	# futex were seen 2026-10-03); a half-dead instance keeps :7000 and the
+	# next start reports "device error". Escalate, and wait for the port.
+	i=0
+	while pidof fastcarplay >/dev/null 2>&1 && [ $i -lt 6 ]; do sleep 0.5; i=$((i + 1)); done
+	pidof fastcarplay >/dev/null 2>&1 && killall -9 fastcarplay 2>/dev/null
+	sleep 1
 	;;
 *)
 	echo "Usage: $0 {start|stop}"
