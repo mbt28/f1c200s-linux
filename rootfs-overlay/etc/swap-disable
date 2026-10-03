@@ -1,0 +1,22 @@
+# Presence of this file makes /etc/init.d/S02swap exit immediately: no zram, no
+# SD swap, no VM sysctl changes.
+#
+# History. Shipped present 2026-08-08 (Stage 0: 24 MB available, swap not
+# needed). Removed 2026-10-03 morning when the 800x480 panel + audio pushed the
+# board into page-cache thrash (MemAvailable 2-3 MB, 58 000 major faults) --
+# zram fixed the thrash within seconds. Restored the same evening: with zram
+# live, the hardware video decoder failed three times to allocate its CMA
+# buffers ("cedrus: dma alloc of size 1048576 failed" with ~10 MB CMA free but
+# no contiguous block): zsmalloc's pages are movable allocations, they land in
+# the CMA pool and did not migrate out when cedrus needed the range. No video
+# is worse than slow UI, so zram stays off. The thrash itself was then solved
+# where it came from (float AAC decoding on a soft-float core -> aac_fixed in
+# FastCarPlay; kernel diet; see docs/memory.md s4-s5).
+#
+# Candidates if memory gets tight again, in this order:
+#   - the reserved SD partition p4 as the ONLY tier (no RAM, so no CMA
+#     interference): swapon -p 10 /dev/mmcblk0p4 with vm.swappiness raised;
+#     S02swap still ties p4 to a live zram and needs an SD-only mode first
+#   - FastCarPlay footprint (~12 MB) and the 24 MB CMA sizing
+#
+# To enable zram anyway (knowing the CMA risk):  rm /etc/swap-disable && reboot
