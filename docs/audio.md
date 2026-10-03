@@ -72,8 +72,30 @@ ALSA underruns, 240 timer wakeups/s. `CONFIG_AAC_FIXED_DECODER=1` is already
 in the image's ffmpeg; `libopus` (fixed-point) is not built, so Opus
 channels still use the float decoder — `BR2_PACKAGE_OPUS` + ffmpeg
 `--enable-libopus` is the follow-up if Siri/nav audio ever shows the same
-symptom. What remains on the audio path is SDL's output thread at ~20 %
-(mostly kernel time in the ALSA write).
+symptom. Two follow-ups measured with exact scheduler runtimes (`/proc/<tid>/sched`,
+not the tick-sampled `stat` fields, which on this HZ=100 kernel over-charge a
+thread that wakes on the DMA period interrupt):
+
+* SDL's audio output thread (`SDLAudioP2`) costs **1.4 %**, not the 16–20 %
+  the tick counters suggested — it is blocked in the ALSA write 99 % of the
+  time at ~22 wakeups/s. A plain tinyalsa writer on the same path costs ~4 %.
+  Nothing to fix there.
+* SDL's ALSA **hotplug poller** (`SDLHotplugALSA`) re-enumerated every PCM
+  device through `snd_device_name_hint()` every 5 s, ~300 ms per scan on this
+  core = **6 %** permanently, for an event that cannot happen with a soldered
+  codec. `patches/sdl2/0001-audio-alsa-no-hotplug-poll-thread.patch` turns the
+  compile-time switch off (devices are still enumerated once at start-up).
+* Opus channels (Siri, nav, telephony) now decode through fixed-point
+  `libopus`: `BR2_PACKAGE_OPUS=y` in the defconfig (Buildroot forces
+  `--enable-fixed-point` on soft-float targets and `ffmpeg.mk` adds
+  `--enable-libopus`), and FastCarPlay asks for `libopus` by name before the
+  float decoder.
+
+Related, outside the audio path but found with the same tooling: with no
+phone connected FastCarPlay's main thread ran at **99 %** because the LVGL home
+screen was cleared, copied and presented every loop iteration (longer than
+the frame budget on the software renderer, so the pacing branch never
+slept). FastCarPlay now presents only when LVGL flushed something.
 
 ## Memory footprint (matters on 64 MiB)
 

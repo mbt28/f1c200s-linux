@@ -73,6 +73,10 @@ BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lc
 # OUTDEVS pulls in the fbdev output device: ffmpeg ... -f fbdev /dev/fb0
 # (the ffmpeg CLI is default-y; swscale handles scaling/pixfmt for the panel).
 BR2_PACKAGE_FFMPEG=y
+# libopus (fixed-point on this soft-float target): ffmpeg.mk turns on
+# --enable-libopus with it, so FastCarPlay's CarPlay Opus channels (Siri,
+# nav) decode in integers like AAC does via aac_fixed (docs/audio.md).
+BR2_PACKAGE_OPUS=y
 BR2_PACKAGE_FFMPEG_SWSCALE=y
 BR2_PACKAGE_FFMPEG_OUTDEVS=y
 BR2_TARGET_UBOOT=y
