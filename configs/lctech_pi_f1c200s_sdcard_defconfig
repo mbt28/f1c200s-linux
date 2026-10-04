@@ -77,6 +77,11 @@ BR2_PACKAGE_FFMPEG=y
 # --enable-libopus with it, so FastCarPlay's CarPlay Opus channels (Siri,
 # nav) decode in integers like AAC does via aac_fixed (docs/audio.md).
 BR2_PACKAGE_OPUS=y
+# libogg + opusfile (fixed-point, same as libopus) for Ogg Opus files/streams
+# in FastCarPlay; opusfile's http part (libopusurl) comes along because
+# openssl is in the image.
+BR2_PACKAGE_LIBOGG=y
+BR2_PACKAGE_OPUSFILE=y
 BR2_PACKAGE_FFMPEG_SWSCALE=y
 BR2_PACKAGE_FFMPEG_OUTDEVS=y
 BR2_TARGET_UBOOT=y
