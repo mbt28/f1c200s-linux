@@ -1,0 +1,174 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] ASoC: sun4i-codec: survive DAC underruns, keep both directions in one clock family
+
+Three robustness changes found while bringing up full-duplex audio
+(48 kHz dmix playback + 24 kHz mic capture) on the F1C200s:
+
+- Hold the last sample on a TX FIFO underrun (SEND_LASAT) instead of
+  sending zeros, so a DMA hiccup is a brief glitch, not silence plus a pop.
+- Raise the TX FIFO empty trigger level from 15 to 64 of 128 samples (and
+  use the full 7-bit field) so DMA refills start with half a FIFO of margin
+  when the ADC channel is being serviced at the same time.
+- Playback and capture share PLL_AUDIO. Constrain the rate list of a
+  stream opened while the other direction runs to the same clock family
+  (24.576 MHz: 8/12/16/24/32/48/96/192 k; 22.5792 MHz: 11.025/22.05/44.1 k)
+  and refuse a clashing rate in hw_params, instead of retuning the PLL
+  under the running stream.
+---
+--- a/sound/soc/sunxi/sun4i-codec.c
++++ b/sound/soc/sunxi/sun4i-codec.c
+@@ -341,6 +341,13 @@
+ 
+ 	struct snd_dmaengine_dai_dma_data	capture_dma_data;
+ 	struct snd_dmaengine_dai_dma_data	playback_dma_data;
++
++	/*
++	 * Rate of each open stream (0 = closed). Both directions share the
++	 * module clock (PLL_AUDIO), so a stream may only use a rate from the
++	 * same clock family (22.5792 vs 24.576 MHz) as the other open one.
++	 */
++	unsigned int stream_rate[2];
+ };
+ 
+ static void sun4i_codec_start_playback(struct sun4i_codec *scodec)
+@@ -459,10 +466,16 @@
+ 	regmap_field_set_bits(scodec->reg_dac_fifoc,
+ 			      BIT(SUN4I_CODEC_DAC_FIFOC_FIFO_FLUSH));
+ 
+-	/* Set TX FIFO Empty Trigger Level */
++	/*
++	 * Set TX FIFO Empty Trigger Level: request DMA once the FIFO has
++	 * drained to 64 of its 128 samples instead of 15, so a transient
++	 * bus/DMA stall (e.g. the ADC channel being serviced in full duplex)
++	 * has half a FIFO of margin before the DAC runs dry. TXTL is 7 bits
++	 * wide (14:8).
++	 */
+ 	regmap_field_update_bits(scodec->reg_dac_fifoc,
+-				 0x3f << SUN4I_CODEC_DAC_FIFOC_TX_TRIG_LEVEL,
+-				 0xf << SUN4I_CODEC_DAC_FIFOC_TX_TRIG_LEVEL);
++				 0x7f << SUN4I_CODEC_DAC_FIFOC_TX_TRIG_LEVEL,
++				 0x40 << SUN4I_CODEC_DAC_FIFOC_TX_TRIG_LEVEL);
+ 
+ 	if (substream->runtime->rate > 32000)
+ 		/* Use 64 bits FIR filter */
+@@ -475,9 +488,13 @@
+ 				 BIT(SUN4I_CODEC_DAC_FIFOC_FIR_VERSION),
+ 				 val);
+ 
+-	/* Send zeros when we have an underrun */
+-	regmap_field_clear_bits(scodec->reg_dac_fifoc,
+-				BIT(SUN4I_CODEC_DAC_FIFOC_SEND_LASAT));
++	/*
++	 * Hold the last sample when we have an underrun instead of sending
++	 * zeros: a short DMA hiccup then stays a brief glitch rather than a
++	 * drop to silence (and a step/pop back on recovery).
++	 */
++	regmap_field_set_bits(scodec->reg_dac_fifoc,
++			      BIT(SUN4I_CODEC_DAC_FIFOC_SEND_LASAT));
+ 
+ 	return 0;
+ };
+@@ -655,16 +672,41 @@
+ 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+ 	struct sun4i_codec *scodec = snd_soc_card_get_drvdata(rtd->card);
+ 	unsigned long clk_freq;
++	unsigned int other_rate;
+ 	int ret, hwrate;
+ 
+ 	clk_freq = sun4i_codec_get_mod_freq(params);
+ 	if (!clk_freq)
+ 		return -EINVAL;
+ 
++	/*
++	 * The other direction may already be streaming off PLL_AUDIO; a rate
++	 * from the other clock family would retune the PLL under it and
++	 * corrupt that stream, so refuse it here (startup() also constrains
++	 * the rate list so well-behaved clients never get this far).
++	 */
++	other_rate = scodec->stream_rate[!substream->stream];
++	if (other_rate) {
++		struct snd_pcm_hw_params tmp = *params;
++
++		hw_param_interval(&tmp, SNDRV_PCM_HW_PARAM_RATE)->min = other_rate;
++		hw_param_interval(&tmp, SNDRV_PCM_HW_PARAM_RATE)->max = other_rate;
++		if (sun4i_codec_get_mod_freq(&tmp) != clk_freq) {
++			dev_err(scodec->dev,
++				"rate %u clashes with the open %s stream at %u (shared PLL)\n",
++				params_rate(params),
++				substream->stream ? "playback" : "capture",
++				other_rate);
++			return -EINVAL;
++		}
++	}
++
+ 	ret = clk_set_rate(scodec->clk_module, clk_freq);
+ 	if (ret)
+ 		return ret;
+ 
++	scodec->stream_rate[substream->stream] = params_rate(params);
++
+ 	hwrate = sun4i_codec_get_hw_rate(params);
+ 	if (hwrate < 0)
+ 		return hwrate;
+@@ -677,11 +719,29 @@
+ 					     hwrate);
+ }
+ 
++/* Rates served by the 24.576 MHz / 22.5792 MHz module clock respectively */
++static const unsigned int sun4i_codec_rates_24576k_list[] = {
++	8000, 12000, 16000, 24000, 32000, 48000, 96000, 192000,
++};
++static const unsigned int sun4i_codec_rates_22579k_list[] = {
++	11025, 22050, 44100,
++};
++static const struct snd_pcm_hw_constraint_list sun4i_codec_rates_24576k = {
++	.count = ARRAY_SIZE(sun4i_codec_rates_24576k_list),
++	.list = sun4i_codec_rates_24576k_list,
++};
++static const struct snd_pcm_hw_constraint_list sun4i_codec_rates_22579k = {
++	.count = ARRAY_SIZE(sun4i_codec_rates_22579k_list),
++	.list = sun4i_codec_rates_22579k_list,
++};
++
+ static int sun4i_codec_startup(struct snd_pcm_substream *substream,
+ 			       struct snd_soc_dai *dai)
+ {
+ 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+ 	struct sun4i_codec *scodec = snd_soc_card_get_drvdata(rtd->card);
++	unsigned int other_rate;
++	int ret;
+ 
+ 	/*
+ 	 * Stop issuing DRQ when we have room for less than 16 samples
+@@ -690,6 +750,23 @@
+ 	regmap_field_set_bits(scodec->reg_dac_fifoc,
+ 			      3 << SUN4I_CODEC_DAC_FIFOC_DRQ_CLR_CNT);
+ 
++	/*
++	 * Keep both directions in one clock family while the other one is
++	 * open (see sun4i_codec_hw_params): offer only the rates that share
++	 * PLL_AUDIO with the running stream.
++	 */
++	other_rate = scodec->stream_rate[!substream->stream];
++	if (other_rate) {
++		const struct snd_pcm_hw_constraint_list *list =
++			(other_rate % 11025) ? &sun4i_codec_rates_24576k
++					     : &sun4i_codec_rates_22579k;
++
++		ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
++						 SNDRV_PCM_HW_PARAM_RATE, list);
++		if (ret < 0)
++			return ret;
++	}
++
+ 	return clk_prepare_enable(scodec->clk_module);
+ }
+ 
+@@ -699,6 +776,7 @@
+ 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+ 	struct sun4i_codec *scodec = snd_soc_card_get_drvdata(rtd->card);
+ 
++	scodec->stream_rate[substream->stream] = 0;
+ 	clk_disable_unprepare(scodec->clk_module);
+ }
+ 

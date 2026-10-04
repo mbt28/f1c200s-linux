@@ -139,6 +139,28 @@ with its module tree. Check it is working with `ls /proc/sysvipc`, `ipcs`,
 and `/proc/asound/card0/pcm0p/sub0/hw_params` showing `rate: 48000` while
 the app plays.
 
+### Full-duplex robustness (patches 0028, 0029)
+
+Found while running 48 kHz dmix playback together with the 24 kHz mic
+uplink:
+
+* `0028-sun4i-codec-…`: the DAC holds the **last sample** on a TX FIFO
+  underrun (`SEND_LASAT`) instead of sending zeros, so a DMA hiccup is a
+  brief glitch rather than silence plus a pop; the TX FIFO empty **trigger
+  level** goes from 15 to 64 of 128 samples (full 7-bit field) so refills
+  start with half a FIFO of margin when the ADC channel is being serviced
+  at the same time; and because both directions share **PLL_AUDIO**, a
+  stream opened while the other direction runs is constrained to the same
+  clock family (24.576 MHz: 8/12/16/24/32/48/96/192 k; 22.5792 MHz:
+  11.025/22.05/44.1 k) and a clashing rate is refused in `hw_params`
+  instead of retuning the PLL under the running stream. Keep playback and
+  capture in one family: 48 k play + 24 k capture is fine, 48 k play +
+  44.1 k capture is not.
+* `0029-sun4i-dma-…`: NDMA arbitrates by channel index (0 wins). Device-to-
+  memory transfers now take the highest free channel, so the DAC (memory-
+  to-device) keeps the better channel in full duplex no matter which side
+  was started first.
+
 ## Testing
 
 ```sh
