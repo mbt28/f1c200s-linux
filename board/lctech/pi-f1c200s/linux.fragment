@@ -556,3 +556,11 @@ CONFIG_LD_DEAD_CODE_DATA_ELIMINATION=y
 CONFIG_MAGIC_SYSRQ=y
 CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1
 CONFIG_MAGIC_SYSRQ_SERIAL=y
+
+# dmix needs System V IPC (2026-10-04). FastCarPlay mixes its music and
+# voice sinks through ALSA dmix, which keeps its state in SysV shared memory
+# guarded by a SysV semaphore; without this every dmix open fails with
+# "unable to create IPC semaphore: Function not implemented". NOTE: SYSVIPC
+# adds sysvsem/sysvshm to task_struct, so the module tree must be installed
+# together with this kernel.
+CONFIG_SYSVIPC=y

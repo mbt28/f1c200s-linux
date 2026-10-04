@@ -7,8 +7,10 @@ Pi routes HPL/HPR through a PAM8301 class-D amplifier to the speaker header
 (always on, no PA-enable GPIO) and MICIN to the on-board microphone.
 
 Hardware-validated 2026-10-03 on the kernel-6.18 image: a 44.1 kHz / 16-bit
-stereo WAV plays through the speaker, the mic records real audio, and both
-DMA directions stay perfectly real-time paced over minutes of back-to-back
+stereo WAV plays through the speaker, the ADC captures real audio (proven
+2026-10-04 with a DAC→output-mixer→ADC-mixer loopback of a 1 kHz tone, and
+with the on-board electret once its bias network was fixed), and both DMA
+directions stay perfectly real-time paced over minutes of back-to-back
 streams.
 
 ## What it took
@@ -117,14 +119,40 @@ tree:
   2 MiB of idle FastCarPlay memory into 0.85 MiB of compressed RAM within
   ten seconds. See `docs/memory.md` §4 for the re-measurement.
 
+## Mixing two streams: ALSA dmix (since 2026-10-04)
+
+The codec has a single playback PCM. FastCarPlay drives two sinks (music,
+and Siri/nav/telephony), and with a plain `hw` default device the second
+open got `EBUSY`, so the app closed the device on every idle gap and chopped
+live calls. `rootfs-overlay/etc/asound.conf` (same file as FastCarPlay's
+`board/asound.conf`) makes `default` an `asym` device: playback goes to a
+`dmix` slave on `hw:0,0` at 48 kHz S16 stereo (the app streams everything at
+48 kHz on purpose: Opus decodes to 48 k, PCM voice upsamples by an integer
+factor, media is advertised at 48 k), capture stays a plain `plug:hw:0,0`.
+
+dmix keeps its mix ring in System V shared memory guarded by a SysV
+semaphore, so the kernel needs `CONFIG_SYSVIPC=y` (added to
+`linux.fragment`); without it every dmix open fails with
+`unable to create IPC semaphore: Function not implemented`. SYSVIPC adds
+fields to `task_struct`, so a kernel built with it must be installed together
+with its module tree. Check it is working with `ls /proc/sysvipc`, `ipcs`,
+and `/proc/asound/card0/pcm0p/sub0/hw_params` showing `rate: 48000` while
+the app plays.
+
 ## Testing
 
 ```sh
-tinycap /tmp/c.wav -D 0 -d 0 -c 2 -r 48000 -b 16 -t 3   # 3 s from the mic
 tinymix -D 0 set 'Headphone Playback Volume' 40
 ```
 
-**`tinyplay` 2.0.0 (the version Buildroot ships) does not play a WAV file**:
+**Neither `tinyplay` nor `tinycap` 2.0.0 (the versions Buildroot ships) is
+usable for testing.** `tinycap` reads a whole buffer per call, overruns, and
+then returns instantly: a "120 s" capture finishes in 3 s and the file is
+garbage with a DC-settling transient that looks like speech in level stats.
+Use a real tinyalsa or alsa-lib client (`/root/xcap` and `/root/xquiet` on the
+bench card, or any program that reads/writes the device itself).
+
+**`tinyplay` 2.0.0 does not play a WAV file**:
 it parses the RIFF header only when told `-i wav`, otherwise it treats the
 file as raw with an uninitialised data length, so it opens the device,
 powers the amplifier (the ~1 s "hiss"), writes nothing and exits with
