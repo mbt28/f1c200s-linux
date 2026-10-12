@@ -52,10 +52,15 @@ CONFIG_EXPERT=y
 # CONFIG_DEBUG_MISC is not set
 # CONFIG_VT is not set
 # CONFIG_FRAMEBUFFER_CONSOLE is not set
-# Backlight enable on GPIO PE6 (gpio-backlight). Without this the panel is
-# driven but stays dark.
+# Backlight on PE6, muxed to PWM1 (pwm-backlight, patch 0031): dimmable
+# 0..8 via /sys/class/backlight/backlight/brightness. Without this the
+# panel is driven but stays dark. PWM/PWM_SUN4I are already y in
+# sunxi_defconfig; spelled out because the backlight depends on them.
 CONFIG_BACKLIGHT_CLASS_DEVICE=y
-CONFIG_BACKLIGHT_GPIO=y
+CONFIG_BACKLIGHT_PWM=y
+CONFIG_PWM=y
+CONFIG_PWM_SUN4I=y
+# CONFIG_BACKLIGHT_GPIO is not set
 
 # Goodix GT911 capacitive touch on I2C0 (TWI0).
 CONFIG_I2C=y

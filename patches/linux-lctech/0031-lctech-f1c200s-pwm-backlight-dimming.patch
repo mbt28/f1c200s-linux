@@ -1,0 +1,52 @@
+lctech f1c200s: PWM backlight dimming on PE6
+
+The backlight-enable pin PE6 muxes to PWM1 (datasheet pin table; pinctrl
+"pwm1" function 3), and the prototype now wires PE6 to the LED driver.
+Replace the on/off gpio-backlight with pwm-backlight on PWM channel 1:
+same pin, same sysfs node, but /sys/class/backlight/backlight/brightness
+becomes 0..8 (duty roughly doubling per step, 0 = PWM disabled = off).
+
+The drivers are already built: sunxi_defconfig has CONFIG_PWM_SUN4I=y
+(mainline suniv dtsi carries the pwm@1c21000 node, sun7i-a20-pwm
+compatible, disabled) and the board fragment turns on BACKLIGHT_PWM.
+25 kHz keeps the PWM above audible; HW-validated on the bench board
+2026-10-12. PWM0 would clash with the touch IRQ on PE12 anyway.
+
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -193,6 +193,17 @@
+ 		pins = "PE7", "PE8", "PE9", "PE10";
+ 		function = "spi1";
+ 	};
++
++	pwm1_pe6_pin: pwm1-pe6-pin {
++		pins = "PE6";
++		function = "pwm1";
++	};
++};
++
++&pwm {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pwm1_pe6_pin>;
++	status = "okay";
+ };
+ 
+ &{/soc} {
+@@ -323,9 +334,14 @@
+ 
+ / {
+ 	backlight: backlight {
+-		compatible = "gpio-backlight";
+-		gpios = <&pio 4 6 GPIO_ACTIVE_HIGH>;	/* PE6 = backlight enable */
+-		default-on;
++		compatible = "pwm-backlight";
++		/* PE6 = backlight enable, muxed to PWM1: 40 us period (25 kHz,
++		 * above audible). 0 = full off (PWM disabled, pin low). */
++		pwms = <&pwm 1 40000 0>;
++		power-supply = <&reg_vcc3v3>;
++		/* roughly perceptual (duty doubles per step) */
++		brightness-levels = <0 4 8 16 32 64 128 192 255>;
++		default-brightness-level = <8>;
+ 	};
+ 
+ 	panel: panel {
