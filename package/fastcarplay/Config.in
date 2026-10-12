@@ -21,8 +21,8 @@ config BR2_PACKAGE_FASTCARPLAY
 	select BR2_PACKAGE_LIBIMOBILEDEVICE
 	select BR2_PACKAGE_LIBPLIST
 	help
-	  C++ CarPlay and Android Auto receiver for Autobox-compatible
-	  USB dongles.
+	  C++ native CarPlay (wireless/wired) and Android Auto
+	  (wireless/USB) receiver.
 
 	  Needs two kernel options. Buildroot's Kconfig cannot express a Linux
 	  config symbol, so they are not "depends on" here -- the package
