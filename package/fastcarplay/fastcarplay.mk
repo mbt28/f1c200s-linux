@@ -42,8 +42,8 @@ FASTCARPLAY_DEPENDENCIES = \
 	libplist \
 	libusb \
 	openssl \
-	sdl2 \
-	sdl2_ttf
+	\
+	
 
 # Kernel features the app cannot run without. Declared HERE, not just in the
 # board fragment, so they are a real dependency of the package instead of

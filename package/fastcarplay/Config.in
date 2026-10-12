@@ -9,8 +9,6 @@ config BR2_PACKAGE_FASTCARPLAY
 	select BR2_PACKAGE_FFMPEG_SWSCALE
 	select BR2_PACKAGE_LIBUSB
 	select BR2_PACKAGE_OPENSSL
-	select BR2_PACKAGE_SDL2
-	select BR2_PACKAGE_SDL2_TTF
 	select BR2_PACKAGE_LIBDRM
 	# USE_AA_WIRELESS: BT bootstrap talks to BlueZ over D-Bus and links
 	# -lbluetooth (Buildroot requires _DEPENDENCIES to be selected here)
