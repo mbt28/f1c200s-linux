@@ -11,7 +11,7 @@
 #                                   (for scripts: S99carplay's radio wait)
 U=/root/.fastcarplay/usersettings.txt   # matches HOME=/root pinned in S99carplay
 D=/etc/fastcarplay/settings_drm.txt
-VALID="carlinkit aa-usb aa-wireless carplay-wired carplay-wireless"
+VALID="aa-usb aa-wireless carplay-wired carplay-wireless"
 
 get() { sed -n 's/^[ \t]*protocol[ \t]*=[ \t]*//p' "$1" 2>/dev/null | tail -n1; }
 
