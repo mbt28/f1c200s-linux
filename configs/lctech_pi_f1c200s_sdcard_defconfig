@@ -71,10 +71,28 @@ BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_CARPLAY_PATH)/rootfs-overlay"
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/busybox.fragment"
 # ffmpeg for a quick video-playback test (software decode).
 # OUTDEVS pulls in the fbdev output device: ffmpeg ... -f fbdev /dev/fb0
-# (the ffmpeg CLI is default-y; swscale handles scaling/pixfmt for the panel).
+# ffmpeg, trimmed to what FastCarPlay calls (2026-10-05): libavcodec h264/hevc
+# (V4L2-request hwaccels onto cedrus, software fallback), aac_fixed (+ float
+# aac as the documented fallback), the h264/hevc parsers, swscale for the SDL
+# fallback renderer. No encoders, (de)muxers, protocols, filters, devices, no
+# ffmpeg CLI. Stripped libavcodec was 13.0 MB with Buildroot's "all" defaults
+# (~21 MB of ffmpeg in the 29 MiB squashfs) for two decoders -- and executable
+# code paging from SD is what the 64 MiB board thrashes on (docs/memory.md).
+# Opus is decoded with libopus directly, not via ffmpeg; libavformat stays
+# only because the app still links it (no demuxers/protocols -> a stub).
 BR2_PACKAGE_FFMPEG=y
+# BR2_PACKAGE_FFMPEG_FFMPEG is not set
+BR2_PACKAGE_FFMPEG_ENCODERS=""
+BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc aac aac_fixed"
+BR2_PACKAGE_FFMPEG_MUXERS=""
+BR2_PACKAGE_FFMPEG_DEMUXERS=""
+BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_BSFS=""
+BR2_PACKAGE_FFMPEG_PROTOCOLS=""
+BR2_PACKAGE_FFMPEG_FILTERS=""
+# BR2_PACKAGE_FFMPEG_INDEVS is not set
+# BR2_PACKAGE_FFMPEG_OUTDEVS is not set
 BR2_PACKAGE_FFMPEG_SWSCALE=y
-BR2_PACKAGE_FFMPEG_OUTDEVS=y
 BR2_TARGET_UBOOT=y
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
 BR2_TARGET_UBOOT_CUSTOM_VERSION=y
@@ -137,7 +155,7 @@ BR2_PACKAGE_RSYNC=y
 # Boot splash: no psplash -- S00psplash was replaced by S00splash, which blits
 # a raw theme from /etc/splash/ into /dev/fb0. Runtime-selectable on the board
 # via /etc/splash-theme (persists; shows from the next boot).
-BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev"
+BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 
 # Pin the GNU mirror instead of ftpmirror.gnu.org's auto-selector, which can
