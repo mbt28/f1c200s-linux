@@ -6,6 +6,8 @@ config BR2_PACKAGE_SLINT_CPP
 	depends on BR2_USE_MMU
 	depends on !BR2_STATIC_LIBS # fontconfig-dlopen
 	depends on BR2_TOOLCHAIN_GCC_AT_LEAST_12 # C++20 consumers
+	select BR2_PACKAGE_HOST_RUSTC
+	select BR2_HOST_CMAKE_AT_LEAST_3_22 # corrosion's cmake_minimum_required
 	help
 	  Slint GUI toolkit, C++ API. Built as a static library with
 	  only the software renderer (the application owns the DRM
