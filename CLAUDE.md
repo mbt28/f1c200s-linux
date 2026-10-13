@@ -1,7 +1,7 @@
 # f1c200s-linux — working notes for Claude
 
 Patch-only Buildroot external tree for the Lctech Pi F1C200s (Allwinner suniv,
-ARM926EJ-S / ARMv5TE soft-float, **64 MiB DDR**, 480x272 LCD) used as a
+ARM926EJ-S / ARMv5TE soft-float, **64 MiB DDR**, 800x480 LCD) used as a
 CarPlay / Android-Auto head unit. The kernel and Buildroot are fetched from
 upstream by `scripts/fetch-sources.sh`; this repo ships only patches, configs,
 overlay and docs. See `README.md` for the full picture.
