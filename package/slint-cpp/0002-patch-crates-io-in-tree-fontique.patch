@@ -1,0 +1,48 @@
+Resolve the fontique crate from an in-tree patched copy.
+
+armv5te has no 64-bit atomics, so fontique's AtomicCounter falls back to
+AtomicU32 -- but its shared_version field stayed u64 upstream and the
+crate does not build (E0308). The copy lives in fontique-patched/ (the
+pristine crates.io 0.11.1 sources, extracted there by slint-cpp.mk, cast
+fix applied by the next patch); keep it out of the slint workspace and
+drop the registry checksum from the lockfile so the path override is
+accepted.
+
+Upstream-status: https://github.com/linebender/fontique (needs a proper
+portable fix upstream).
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 8159831..d0a18ff 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2501,8 +2501,6 @@ dependencies = [
+ [[package]]
+ name = "fontique"
+ version = "0.11.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6688bc1294fe7117d788937b6c53480169b29c566954af490830d4c09da9516a"
+ dependencies = [
+  "hashbrown 0.17.1",
+  "linebender_resource_handle",
+diff --git a/Cargo.toml b/Cargo.toml
+index 50002c3..12dffda 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -53,7 +53,7 @@ members = [
+ ]
+ 
+ # These subtrees are their own workspaces; keep them out of this one.
+-exclude = ['examples', 'demos', 'tests', 'ui-libraries']
++exclude = ['examples', 'demos', 'tests', 'ui-libraries', 'fontique-patched']
+ 
+ default-members = [
+   'api/rs/build',
+@@ -177,3 +177,8 @@ objc2 = { version = "0.6.3" }
+ 
+ # Not updated because of https://github.com/gluon-lang/lsp-types/issues/284
+ lsp-types = "0.95.0"
++
++[patch.crates-io]
++# armv5te has no 64-bit atomics: fontique's AtomicCounter falls back to
++# AtomicU32 but shared_version stayed u64 upstream. Local copy adds the casts.
++fontique = { path = "fontique-patched" }

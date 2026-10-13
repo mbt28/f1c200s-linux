@@ -1,0 +1,25 @@
+config BR2_PACKAGE_SLINT_CPP
+	bool "slint-cpp"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_USE_MMU
+	depends on !BR2_STATIC_LIBS # fontconfig-dlopen
+	depends on BR2_TOOLCHAIN_GCC_AT_LEAST_12 # C++20 consumers
+	help
+	  Slint GUI toolkit, C++ API. Built as a static library with
+	  only the software renderer (the application owns the DRM
+	  plane and hands Slint an RGB565 buffer) and with all fonts
+	  and images embedded at compile time -- no fontconfig or
+	  image decoders on the target.
+
+	  Installs libslint_cpp.a plus headers into staging and the
+	  hostbuilt slint-compiler into the host tools.
+
+	  https://slint.dev
+
+comment "slint-cpp needs a toolchain w/ C++, threads, gcc >= 12, dynamic library"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_USE_MMU
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS || \
+		!BR2_TOOLCHAIN_GCC_AT_LEAST_12 || BR2_STATIC_LIBS

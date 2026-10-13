@@ -1,0 +1,49 @@
+Re-export fontconfig-dlopen through the cpp/core feature chain, and drop
+the image/svg decoders from the cpp std feature set.
+
+fontconfig-dlopen (i-slint-common) makes font discovery dlopen()
+libfontconfig at runtime instead of linking it -- on this rootfs there is
+no fontconfig and all fonts are compile-time embedded, so the probe just
+soft-fails. The feature exists upstream but is not reachable from the
+C++ API crate; add the two forwarding entries.
+
+The std trim removes the runtime PNG/JPEG/SVG decoders: with
+embed-for-software-renderer every image in .slint markup is pre-rendered
+by the slint compiler, so the decoders are dead weight (~0.9 MB).
+
+Upstream-status: local configuration for this target.
+
+diff --git a/api/cpp/Cargo.toml b/api/cpp/Cargo.toml
+index 291df09..bee3c16 100644
+--- a/api/cpp/Cargo.toml
++++ b/api/cpp/Cargo.toml
+@@ -48,6 +48,7 @@ renderer-vello = ["i-slint-backend-selector/renderer-vello"]
+ renderer-software = ["i-slint-backend-selector/renderer-software", "dep:i-slint-renderer-software"]
+ software-renderer-path = ["i-slint-renderer-software/path"]
+ gettext = ["i-slint-core/gettext-rs"]
++fontconfig-dlopen = ["i-slint-core/fontconfig-dlopen"]
+ accessibility = ["i-slint-backend-selector/accessibility"]
+ # Enable the `SystemTrayIcon` element (pulls `ksni` on Linux/BSD).
+ system-tray = ["i-slint-core/system-tray"]
+@@ -56,9 +57,6 @@ mcp = ["std", "i-slint-backend-selector/mcp"]
+ 
+ std = [
+   "i-slint-core/default",
+-  "i-slint-core/image-decoders",
+-  "i-slint-core/svg",
+-  "i-slint-core/image-default-formats",
+   "i-slint-backend-selector",
+   "i-slint-backend-selector/backend-android-activity",
+   "i-slint-renderer-software?/std",
+diff --git a/internal/core/Cargo.toml b/internal/core/Cargo.toml
+index d5961f5..4c41616 100644
+--- a/internal/core/Cargo.toml
++++ b/internal/core/Cargo.toml
+@@ -59,6 +59,7 @@ box-shadow-cache = []
+ testing = []
+ 
+ shared-fontique = ["i-slint-common/shared-fontique"]
++fontconfig-dlopen = ["i-slint-common/fontconfig-dlopen"]
+ 
+ raw-window-handle-06 = ["dep:raw-window-handle-06"]
+ 
