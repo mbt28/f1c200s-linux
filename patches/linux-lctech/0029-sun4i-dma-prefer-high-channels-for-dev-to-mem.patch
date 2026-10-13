@@ -1,0 +1,72 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] dmaengine: sun4i: prefer high-index NDMA channels for device-to-memory
+
+NDMA channels arbitrate by index (0 wins). Allocate device-to-memory
+transfers from the top so that a memory-to-device stream, in particular
+the audio DAC whose FIFO underrun is audible, keeps the higher-priority
+channel in full duplex no matter which direction was started first.
+---
+--- a/drivers/dma/sun4i-dma.c
++++ b/drivers/dma/sun4i-dma.c
+@@ -198,6 +198,8 @@
+ 	struct sun4i_dma_contract	*contract;
+ 	u8				endpoint;
+ 	int				is_dedicated;
++	/* direction of the last prepared transfer, for pchan preference */
++	enum dma_transfer_direction	dir;
+ };
+ 
+ struct sun4i_dma_promise {
+@@ -325,11 +327,29 @@
+ 	}
+ 
+ 	spin_lock_irqsave(&priv->lock, flags);
+-	for_each_clear_bit_from(i, priv->pchans_used, max) {
+-		pchan = &pchans[i];
+-		pchan->vchan = vchan;
+-		set_bit(i, priv->pchans_used);
+-		break;
++	if (!vchan->is_dedicated && vchan->dir == DMA_DEV_TO_MEM) {
++		/*
++		 * NDMA arbitrates by channel index (0 wins). Hand
++		 * device-to-memory transfers the highest free channel so
++		 * that a memory-to-device stream (e.g. the audio DAC, which
++		 * goes silent if its FIFO runs dry) keeps the better one in
++		 * full duplex regardless of which side was started first.
++		 */
++		for (i = max - 1; i >= 0; i--) {
++			if (test_bit(i, priv->pchans_used))
++				continue;
++			pchan = &pchans[i];
++			pchan->vchan = vchan;
++			set_bit(i, priv->pchans_used);
++			break;
++		}
++	} else {
++		for_each_clear_bit_from(i, priv->pchans_used, max) {
++			pchan = &pchans[i];
++			pchan->vchan = vchan;
++			set_bit(i, priv->pchans_used);
++			break;
++		}
+ 	}
+ 	spin_unlock_irqrestore(&priv->lock, flags);
+ 
+@@ -783,6 +803,8 @@
+ 	int nr_periods, offset, plength, i;
+ 	u8 ram_type, io_mode, linear_mode;
+ 
++	vchan->dir = dir;
++
+ 	if (!is_slave_direction(dir)) {
+ 		dev_err(chan2dev(chan), "Invalid DMA direction\n");
+ 		return NULL;
+@@ -908,6 +930,8 @@
+ 	if (!sgl)
+ 		return NULL;
+ 
++	vchan->dir = dir;
++
+ 	if (!is_slave_direction(dir)) {
+ 		dev_err(chan2dev(chan), "Invalid DMA direction\n");
+ 		return NULL;
