@@ -1,0 +1,4 @@
+# Locally computed
+sha256  fe485305ed303215e76c04918ee9aefbffbe229f18f979098ec36c7fa1dab28b  slint-cpp-1.18.1.tar.gz
+# Matches the checksum in upstream Cargo.lock
+sha256  6688bc1294fe7117d788937b6c53480169b29c566954af490830d4c09da9516a  fontique-0.11.1.crate

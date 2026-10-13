@@ -5,6 +5,8 @@ source "$BR2_EXTERNAL_CARPLAY_PATH/package/libusbmuxd/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libtatsu/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/fastcarplay/Config.in"
+# Slint UI toolkit for fastcarplay (static lib + host slint-compiler).
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/slint-cpp/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/cp-mux-probe/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/musb-collision-test/Config.in"

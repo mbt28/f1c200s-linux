@@ -1,0 +1,34 @@
+fontique: cast shared_version for 32-bit AtomicCounter
+
+On targets without 64-bit atomics (armv5te) AtomicCounter is AtomicU32;
+shared_version is u64. Cast at the two meeting points. Widening back
+with u64::from keeps the comparison exact; the counter only tracks
+collection modifications, so a u32 wrap is of no practical concern.
+
+--- a/fontique-patched/src/collection/mod.rs
++++ b/fontique-patched/src/collection/mod.rs
+@@ -265,7 +265,7 @@
+         if self.shared.is_none() {
+             self.shared = Some(Arc::new(Shared {
+                 data: Mutex::new(self.data.clone()),
+-                version: AtomicCounter::new(self.shared_version),
++                version: AtomicCounter::new(self.shared_version as _),
+             }));
+         }
+     }
+@@ -568,13 +568,13 @@
+         #[cfg(feature = "std")]
+         if let Some(shared) = &self.shared {
+             let version = shared.version.load(Ordering::Acquire);
+-            if self.shared_version != version {
++            if self.shared_version != u64::from(version) {
+                 // This is an ugly deep copy, but the assumption is that
+                 // modifications to font collections are fairly rare.
+                 // If this becomes a problem, do more fine grained tracking
+                 // of changes.
+                 self.data = shared.data.lock().unwrap().clone();
+-                self.shared_version = version;
++                self.shared_version = u64::from(version);
+                 self.fallback_cache.reset();
+             }
+         }
