@@ -4,9 +4,11 @@
 # network, at boot, INDEPENDENT of the FastCarPlay app autostart. WiFi already
 # had its own autostart (S43wifi); this gives Bluetooth the same independence,
 # so `autorun off` (app off) still leaves WiFi + BT up. No gate: since app
-# d58e335 every boot runs the LVGL UI, which offers the wireless sources at
-# runtime, so the radios must be up regardless of the persisted protocol
-# (that was the "ui" arm of the old preset gate -- now the only case).
+# d58e335 every boot runs the settings UI (Slint since native), which
+# offers the wireless sources at runtime, so the radios must be up
+# regardless of the persisted protocol
+# (that was the "ui" arm of the old preset gate -- now the only case). The
+# same always-on stack is what Bluetooth keyboards/remotes need in every mode.
 #
 # Backgrounded: the ESP needs ~10-20 s to boot and rcS must not block. Order is
 # load-bearing -- `wifi up` loads esp32_spi which pulls the ESP out of reset
