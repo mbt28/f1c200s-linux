@@ -1,0 +1,24 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] clk: sunxi-ng: suniv: let the VE clock set its PLL rate
+
+The VE module clock is a bare gate on pll-ve, so cedrus' clk_set_rate()
+of its suniv mod_rate (297 MHz) never reaches the PLL and the engine runs
+at the PLL_VE reset default of 210 MHz. pll-ve has no other consumer on
+this SoC; propagate the rate like the H3 CCU does. The manual specifies
+PLL_VE for 30-600 MHz and rates the VE for H.264 1080p30.
+
+Measured at 210 MHz with an 800x480 CarPlay stream: 10 ms per frame at
+rest, 18-21 ms during fast scrolling -- below the 60 fps the phone sends.
+---
+--- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
++++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
+@@ -311,7 +311,8 @@
+  * TODO: BSP says the parent is pll-audio, however common sense and experience
+  * told us it should be pll-ve. pll-ve is totally not used in BSP code.
+  */
+-static SUNXI_CCU_GATE(ve_clk, "ve", "pll-ve", 0x13c, BIT(31), 0);
++static SUNXI_CCU_GATE(ve_clk, "ve", "pll-ve", 0x13c, BIT(31),
++		      CLK_SET_RATE_PARENT);
+ 
+ static SUNXI_CCU_GATE(codec_clk, "codec", "pll-audio", 0x140, BIT(31),
+ 		      CLK_SET_RATE_PARENT);
