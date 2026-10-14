@@ -14,6 +14,12 @@ on)
 	# crypto autoload is slow.
 	modprobe cmac 2>/dev/null
 	modprobe ecdh_generic 2>/dev/null
+	# Bluetooth keyboards/remotes: bluetoothd's input (classic) and hog
+	# (BLE) plugins create the HID device on /dev/uhid, which exists only
+	# once uhid is loaded; hid_generic then binds it (no udev to autoload
+	# either). The keyboard shows up as a new /dev/input/eventN.
+	modprobe uhid 2>/dev/null
+	modprobe hid_generic 2>/dev/null
 	if ! pidof dbus-daemon >/dev/null; then
 		mkdir -p /var/run/dbus /var/lib/dbus 2>/dev/null
 		# Stale remnants block a restart: THIS build's dbus pidfile

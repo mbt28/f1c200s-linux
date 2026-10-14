@@ -184,6 +184,11 @@ BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
 BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
 # btmon: HCI traffic sniffer -- the aa-wireless debugging microscope.
 BR2_PACKAGE_BLUEZ5_UTILS_MONITOR=y
+# Bluetooth keyboards/remotes: the input plugin (classic BR/EDR HID) and the
+# hog plugin (BLE HID over GATT) are built into bluetoothd (+54 KB); both
+# feed /dev/uhid (kernel side: HID/UHID/HID_GENERIC modules, linux.fragment).
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y
 # bluez-alsa (bluealsad): HFP Audio Gateway (UUID 0x111f) for wireless Android
 # Auto. The phone will NOT start AA unless the head unit exposes a WORKING
 # HFP-AG that completes the RFCOMM service-level connection (it opens a 2nd
