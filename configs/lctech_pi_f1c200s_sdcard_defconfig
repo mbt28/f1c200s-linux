@@ -124,6 +124,12 @@ BR2_PACKAGE_LIBDRM=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_PACKAGE_FASTCARPLAY=y
 BR2_PACKAGE_I2C_TOOLS=y
+# v4l-utils (v4l2-ctl, v4l2-compliance, media-ctl) for the TV decoder: camera
+# controls, input/standard selection and test captures from the shell. The
+# _UTILS option is a child of BR2_PACKAGE_LIBV4L; without the parent Buildroot
+# silently drops it (it did: the image had no v4l2-ctl). Flash-only cost, no
+# resident RAM.
+BR2_PACKAGE_LIBV4L=y
 BR2_PACKAGE_LIBV4L_UTILS=y
 BR2_PACKAGE_LIBUDEV_ZERO=y
 # Dropbear SSH server for the dev loop: push a binary + ssh-run tests over the
