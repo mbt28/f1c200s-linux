@@ -227,6 +227,37 @@ Other measured facts from the same session:
   buffers), `tstat` (temporal noise, line jitter, column pattern), `cstat`
   (chroma statistics). The board's /tmp is only 8 MB: delete captures.
 
+### D1s User Manual (TVD chapter, pp. 528-566): mapping and tests (2026-10-15)
+
+The D1s TVD (2 inputs, 1 decoder, TOP block + TVD0 core, front end
+"TVIN -> clamp -> PGA -> ADC") documents the same core as the V40 with default
+values, which pins down more of the F1C layout:
+
+- F1C `0xE2C` is at the D1s `TVD_ADC_CFG` offset (TOP +0x2C): CLP_STEP [18:16]
+  (vendor `0x00110000` = step 1). D1s TOP `TOP_MAP`/`TOP_CTL`/`ADC_CTL`
+  (`0xE00`/`0xE24`/`0xE28`) are not implemented on the F1C (writes read 0);
+  `0xE0C` = 0x5 matches `ADC_CTL` ADC_EN + LPF_EN with AFE_EN = 0, and `0xE04`
+  = 0x8002AAA8 matches `ADC_CFG` (stage ibias 0xAAA8, CLP_STEP 2, bit 31 ADC_TEST).
+- The F1C 0xF00 core packs the D1s 16-bit halves differently: `0xF38` = HLOCK4
+  swapped, `0xF3C` = HLOCK3 swapped, `0xF40` = HLOCK2 hi + HLOCK5 hi, `0xF84` hi
+  = VLOCK1 hi, `0xF24`/`0xF28` = CLAMP_AGC2, `0x018` = CLOCK2, `0x00C`/`0x010` =
+  ENHANCE1/2, `0xF10` [15:8] = CLOCK1 burst start, [7:0] = CLAMP_AGC1 AGC target.
+- `0xE40` = D1s `TVD_STATUS4` bit for bit.
+
+Tested from it, none changes the picture: AFE enable (`0xE0C` 0x7/0xF/0x17),
+`0xE04` without ADC_TEST, with DATA_DLY, CLP_STEP 0..7; `0x054` as a
+DEBUG1-like AFE gain mode (default 0x00100000, the vendor overwrites it with
+0x200000); chroma gain 0x10..0xFF; chroma enhance. With the vendor clamp
+(`0xE2C` = 0x00110000) the no-signal bit clears but H/V never lock (blue screen),
+with any `0xE0C`/`0xE04` variant.
+
+New measurements (brighter scene, unlocked Y mean 44 instead of 14): colour
+lock still corrupts the luma, but less (temporal noise 30 instead of 67), and a
+blur recovers the scene from the locked Y plane: the corruption is chroma-band
+noise. At the same time the luma mean jumps from 44 to 99, so the decoder
+re-levels and re-scales the luma once locked from its own sync/black-level
+measurements, which the clamp-off front end makes unreliable.
+
 ### Earlier notes
 
 - **Picture quality (wiring):** dark picture even with contrast at 255, fixed
