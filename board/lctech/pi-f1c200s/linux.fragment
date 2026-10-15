@@ -102,6 +102,12 @@ CONFIG_VIDEO_SUNXI_CEDRUS=m
 CONFIG_DMA_SHARED_BUFFER=y
 CONFIG_GENERIC_ALLOCATOR=y
 
+# Composite video input: the suniv TV decoder (TVIN0/TVIN1), patches 0032-0034.
+# A module like cedrus, loaded by S21tvd. ~18 KB resident; the decoder is
+# clock-gated unless /dev/videoN is open, and its buffers (3x 608 KiB NV12 +
+# 2 MiB comb-filter field memory) come from CMA only while streaming.
+CONFIG_VIDEO_SUN4I_TVD=m
+
 # USB host -- needed for the CarPlay / Android Auto dongle (talked to via
 # libusb from FastCarPlay). The musb + usb-phy suniv drivers are mainline
 # since ~6.3.

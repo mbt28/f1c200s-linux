@@ -1,0 +1,19 @@
+#!/bin/sh
+# Load the TV decoder (composite video input, sun4i_tvd) at boot.
+#
+# A module, loaded explicitly like cedrus (S20cedrus): no udev/mdev, so DT
+# modalias coldplug does not load it. Loaded after cedrus so the decoder stays
+# /dev/video0 and the camera is /dev/video1 (FastCarPlay probes /dev/video* for
+# decoders by their OUTPUT formats, so the order is not load-bearing for it).
+# Idle cost: the module only; the TVD is clock-gated until the node is opened.
+case "$1" in
+start)
+	modprobe sun4i_tvd && echo "[tvd] composite video input loaded" > /dev/console
+	;;
+stop)
+	rmmod sun4i_tvd 2>/dev/null
+	;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

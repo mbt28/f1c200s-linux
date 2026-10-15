@@ -1,0 +1,42 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] lctech f1c200s: composite video input (TV decoder) and pll-video at 297 MHz
+
+Add the TVD node (driver sun4i_tvd) and pin pll-video at 297 MHz so the
+decoder gets its 27 MHz (297 / 11); see the CCU patch for why the TCON no
+longer retunes the PLL. The camera is wired to TVIN0 through the board's
+75 ohm termination; TVIN0/1 are dedicated analog pins, no pinmux.
+---
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -431,3 +431,31 @@
+ 		"MIC", "Mic";
+ 	status = "okay";
+ };
++
++/*
++ * PLL_VIDEO is fixed at 297 MHz: the TV decoder (and the TV encoder) need
++ * exactly 27 MHz (297 / 11), and the CCU no longer lets the TCON retune the
++ * PLL for its pixel clock, which it now divides from 297 MHz instead
++ * (25 MHz panel -> 297 / 12 = 24.75 MHz).
++ */
++&ccu {
++	assigned-clocks = <&ccu CLK_PLL_VIDEO>;
++	assigned-clock-rates = <297000000>;
++};
++
++/*
++ * Composite video input (TVD): TVIN0/TVIN1 are dedicated analog pins, no
++ * pinmux. The camera is wired to TVIN0 through the board's 75 ohm
++ * termination. Undocumented block; driver = sun4i_tvd (module).
++ */
++&{/soc} {
++	tvd: video-decoder@1c0b000 {
++		compatible = "allwinner,suniv-f1c100s-tvd";
++		reg = <0x01c0b000 0x1000>;
++		clocks = <&ccu CLK_BUS_TVD>, <&ccu CLK_TVD>, <&ccu CLK_DRAM_TVD>;
++		clock-names = "bus", "mod", "ram";
++		resets = <&ccu RST_BUS_TVD>;
++		interrupts = <27>;
++		status = "okay";
++	};
++};
