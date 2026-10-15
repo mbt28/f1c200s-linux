@@ -15,20 +15,30 @@ Measured on hardware and relied on here:
   the frame boundary for the next frame, so the IRQ handler queues one
   frame ahead with a whole frame of slack;
 - the hardware weaves both fields into one buffer (V4L2_FIELD_INTERLACED);
-- 0x040 bit 4 enables the 3D comb filter, which DMAs on its own into a
-  2 MiB field memory at 0x04c..0x050: never enabled without a valid
-  buffer (the vendor init leaves it pointing at physical 0);
+- the 3D comb filter keeps a 2 MiB field memory at 0x04c..0x050 and is
+  switched as the vendor's BSP_TVD_3D_COMB_Filter() does: 0x048 armed
+  (0x04040001, bits 26/18 self-clear), 0x008 bit 0 cleared (2D comb
+  off) and 0x000 bit 4 set; only while streaming, when the memory exists;
+- colour lock depends on the burst gate (0xf10 [23:16] end, [15:8]
+  start, the V40 TVD_CLOCK1 fields): the vendor end value 0x8a never
+  locked colour on a PAL bench camera, which locked for every end value
+  from 0x46 to 0x7c, so the default is 0x60 and both are controls;
+- 0x00c/0x010 match the V40 enhancement registers: contrast and
+  saturation 0x80 = unity gain, so contrast defaults to 0x80 (the
+  vendor's 0x68 is 0.8x), and the sharpen enable (0x00c bit 24, set at
+  reset) is cleared as the vendor does;
 - the DMA takes full physical addresses.
 
 Formats NV12 and NV16 at 720x576 / 720x480. Inputs, standards (NTSC-M,
 PAL, PAL-M, PAL-Nc, SECAM; the last three unverified), QUERYSTD and the
 input lock status come from the decoder status register. Controls:
 brightness, contrast, saturation, hue, sharpness, plus driver controls
-for blue screen (off/on/auto), the 3D comb filter and chroma enhance.
+for chroma gain (0xf1c [23:16]), chroma enhance (off/mild..high), the
+burst gate start/end, blue screen (off/on/auto) and the 3D comb filter.
 The decoder is powered only while the device is open; the comb filter
 memory is allocated only while streaming.
 
-v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
+v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 ---
 --- a/drivers/media/platform/sunxi/Kconfig
 +++ b/drivers/media/platform/sunxi/Kconfig
@@ -74,7 +84,7 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +obj-$(CONFIG_VIDEO_SUN4I_TVD) += sun4i_tvd.o
 --- a/drivers/media/platform/sunxi/sun4i-tvd/sun4i_tvd.c
 +++ b/drivers/media/platform/sunxi/sun4i-tvd/sun4i_tvd.c
-@@ -0,0 +1,1041 @@
+@@ -0,0 +1,1139 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Allwinner suniv (F1C100s/F1C200s) TV decoder (TVD): composite video capture.
@@ -110,16 +120,25 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +
 +#define TVD_EN				0x000
 +#define TVD_EN_DECODER			BIT(0)
-+#define TVD_EN_CAPTURE			BIT(4)
-+#define TVD_MODE			0x008
-+#define TVD_LUMA			0x00c	/* [23:16] sharpness, [15:8] brightness, [7:0] contrast */
-+#define TVD_CHROMA			0x010	/* [23:16] chroma enhance, [15:8] hue, [7:0] saturation */
++#define TVD_EN_RESET			GENMASK(12, 8)	/* pulsed by the vendor init */
++#define TVD_EN_COMB_3D			BIT(4)
++#define TVD_MODE			0x008	/* [14:12] colour standard (V40 COLOR_STD) */
++#define TVD_MODE_COMB_2D		BIT(0)	/* 1: 2D comb, 0: 3D comb */
++/* [24] sharpen enable, [23:16] sharpness, [15:8] brightness, [7:0] contrast (0x80 = 1x) */
++#define TVD_LUMA			0x00c
++#define TVD_LUMA_INIT			0x00200000
++/* [21:20] chroma enhance strength, [16] enhance enable, [15:8] hue, [7:0] saturation */
++#define TVD_CHROMA			0x010
++#define TVD_CHROMA_INIT			0x00300000
++#define TVD_CHROMA_ENH_EN		BIT(16)
++#define TVD_CHROMA_ENH_STRENGTH		GENMASK(21, 20)
 +#define TVD_PRESCALE			0x014
 +#define TVD_CHROMA_FREQ			0x018	/* subcarrier / 27 MHz * 2^32 */
 +#define TVD_WINDOW			0x01c
 +#define TVD_3D_CTL			0x040
-+#define TVD_3D_CTL_EN			BIT(4)
-+#define TVD_3D_CTL_INIT			0x04000300
++#define TVD_3D_CTL_INIT			0x04000310	/* vendor constant */
++#define TVD_3D_LATCH			0x048
++#define TVD_3D_LATCH_ARM		0x04040001	/* bits 26 and 18 self-clear */
 +#define TVD_3D_START			0x04c
 +#define TVD_3D_END			0x050
 +#define TVD_3D_SIZE			0x054
@@ -147,8 +166,14 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +#define TVD_STATUS_PAL			BIT(16)
 +#define TVD_STATUS_SECAM		BIT(17)
 +#define TVD_STATUS_625			BIT(18)
++/* burst gate (V40 TVD_CLOCK1 fields): [23:16] end, [15:8] start */
++#define TVD_BURST_GATE			0xf10
++#define TVD_BURST_GATE_END		GENMASK(23, 16)
++#define TVD_BURST_GATE_START		GENMASK(15, 8)
 +#define TVD_BLUE			0xf14
 +#define TVD_BLUE_MODE			GENMASK(5, 4)
++#define TVD_CHROMA_AGC			0xf1c	/* [23:16] chroma gain (vendor chrom_gain) */
++#define TVD_CHROMA_GAIN			GENMASK(23, 16)
 +
 +#define TVD_MOD_RATE			27000000
 +#define TVD_WIDTH			720
@@ -162,6 +187,9 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +#define V4L2_CID_SUN4I_TVD_BLUE_SCREEN	(V4L2_CID_USER_SUN4I_TVD_BASE + 0)
 +#define V4L2_CID_SUN4I_TVD_COMB_3D	(V4L2_CID_USER_SUN4I_TVD_BASE + 1)
 +#define V4L2_CID_SUN4I_TVD_CHROMA_ENH	(V4L2_CID_USER_SUN4I_TVD_BASE + 2)
++#define V4L2_CID_SUN4I_TVD_CHROMA_GAIN	(V4L2_CID_USER_SUN4I_TVD_BASE + 3)
++#define V4L2_CID_SUN4I_TVD_BURST_START	(V4L2_CID_USER_SUN4I_TVD_BASE + 4)
++#define V4L2_CID_SUN4I_TVD_BURST_END	(V4L2_CID_USER_SUN4I_TVD_BASE + 5)
 +
 +struct tvd_reg {
 +	u16 reg;
@@ -172,6 +200,7 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	v4l2_std_id std;
 +	unsigned int height;
 +	u8 saturation;
++	u8 chroma_gain;
 +	struct v4l2_fract frame_period;
 +	const struct tvd_reg *regs;
 +	unsigned int num_regs;
@@ -231,18 +260,18 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	{ 0xf84, 0x00c10000 },
 +};
 +
-+#define TVD_STD(_std, _h, _sat, _num, _den, _regs)			\
++#define TVD_STD(_std, _h, _sat, _cgain, _num, _den, _regs)		\
 +	{ .std = _std, .height = _h, .saturation = _sat,		\
-+	  .frame_period = { _num, _den },				\
++	  .chroma_gain = _cgain, .frame_period = { _num, _den },	\
 +	  .regs = _regs, .num_regs = ARRAY_SIZE(_regs) }
 +
 +/* First match wins, so the specific standards go before V4L2_STD_PAL. */
 +static const struct tvd_std tvd_stds[] = {
-+	TVD_STD(V4L2_STD_NTSC_M, 480, 0x80, 1001, 30000, tvd_ntsc_regs),
-+	TVD_STD(V4L2_STD_PAL_M, 480, 0x80, 1001, 30000, tvd_pal_m_regs),
-+	TVD_STD(V4L2_STD_PAL_Nc, 576, 0x80, 1, 25, tvd_pal_nc_regs),
-+	TVD_STD(V4L2_STD_SECAM, 576, 0x80, 1, 25, tvd_secam_regs),
-+	TVD_STD(V4L2_STD_PAL, 576, 0x50, 1, 25, tvd_pal_regs),
++	TVD_STD(V4L2_STD_NTSC_M, 480, 0x80, 0x8a, 1001, 30000, tvd_ntsc_regs),
++	TVD_STD(V4L2_STD_PAL_M, 480, 0x80, 0x8a, 1001, 30000, tvd_pal_m_regs),
++	TVD_STD(V4L2_STD_PAL_Nc, 576, 0x80, 0xdc, 1, 25, tvd_pal_nc_regs),
++	TVD_STD(V4L2_STD_SECAM, 576, 0x80, 0xdc, 1, 25, tvd_secam_regs),
++	TVD_STD(V4L2_STD_PAL, 576, 0x50, 0x93, 1, 25, tvd_pal_regs),
 +};
 +
 +struct tvd_buffer {
@@ -264,6 +293,7 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	struct vb2_queue queue;
 +	struct v4l2_ctrl_handler ctrls;
 +	struct v4l2_ctrl *saturation;
++	struct v4l2_ctrl *chroma_gain;
 +	struct v4l2_ctrl *comb;
 +	/* serialises ioctls, open/release and the power state */
 +	struct mutex lock;
@@ -335,14 +365,24 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	tvd_write(tvd, TVD_ADC_INPUT, TVD_ADC_INPUT_INIT |
 +		  (tvd->input ? TVD_ADC_INPUT_TVIN1 : 0));
 +	tvd_write(tvd, TVD_ADC_CTL, 0x00110000);
-+	/* comb filter off until streaming gives it field memory */
 +	tvd_write(tvd, TVD_3D_CTL, TVD_3D_CTL_INIT);
++	/* the vendor sequence: everything off, then the reset bits pulsed */
 +	tvd_write(tvd, TVD_EN, 0);
++	usleep_range(1000, 2000);
++	tvd_write(tvd, TVD_EN, TVD_EN_RESET);
 +
 +	for (i = 0; i < ARRAY_SIZE(tvd_common_regs); i++)
 +		tvd_write(tvd, tvd_common_regs[i].reg, tvd_common_regs[i].val);
 +	for (i = 0; i < std->num_regs; i++)
 +		tvd_write(tvd, std->regs[i].reg, std->regs[i].val);
++	/*
++	 * Fields the controls do not own (sharpen enable, chroma enhance
++	 * strength) take the vendor values; the controls fill in the rest.
++	 * The tables leave TVD_MODE_COMB_2D set: the 3D comb filter runs
++	 * only while streaming, when it has field memory.
++	 */
++	tvd_write(tvd, TVD_LUMA, TVD_LUMA_INIT);
++	tvd_write(tvd, TVD_CHROMA, TVD_CHROMA_INIT);
 +
 +	tvd_write(tvd, TVD_EN, TVD_EN_DECODER);
 +	tvd_write(tvd, TVD_ADC_CTL, 0x60000000);
@@ -537,10 +577,13 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +			tvd_return_buffers(tvd, VB2_BUF_STATE_QUEUED);
 +			return -ENOMEM;
 +		}
++		/* the vendor's BSP_TVD_3D_COMB_Filter() sequence */
 +		tvd_write(tvd, TVD_3D_START, tvd->comb_dma);
 +		tvd_write(tvd, TVD_3D_END, tvd->comb_dma + TVD_3D_BUF_SIZE);
 +		tvd_write(tvd, TVD_3D_SIZE, TVD_3D_BUF_SIZE);
-+		tvd_update(tvd, TVD_3D_CTL, TVD_3D_CTL_EN, TVD_3D_CTL_EN);
++		tvd_write(tvd, TVD_3D_LATCH, TVD_3D_LATCH_ARM);
++		tvd_update(tvd, TVD_MODE, TVD_MODE_COMB_2D, 0);
++		tvd_update(tvd, TVD_EN, TVD_EN_COMB_3D, TVD_EN_COMB_3D);
 +	}
 +	v4l2_ctrl_grab(tvd->comb, true);
 +
@@ -561,7 +604,6 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	tvd_write(tvd, TVD_IRQ_STATUS, ~0);
 +	tvd_write(tvd, TVD_IRQ_EN, TVD_IRQ_FRAME_DONE);
 +	tvd_update(tvd, TVD_DMA_CFG, TVD_DMA_CFG_EN, TVD_DMA_CFG_EN);
-+	tvd_update(tvd, TVD_EN, TVD_EN_CAPTURE, TVD_EN_CAPTURE);
 +	return 0;
 +}
 +
@@ -571,8 +613,9 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +
 +	tvd_write(tvd, TVD_IRQ_EN, 0);
 +	tvd_update(tvd, TVD_DMA_CFG, TVD_DMA_CFG_EN, 0);
-+	tvd_update(tvd, TVD_EN, TVD_EN_CAPTURE, 0);
-+	tvd_update(tvd, TVD_3D_CTL, TVD_3D_CTL_EN, 0);
++	/* back to the 2D comb, which needs no memory */
++	tvd_update(tvd, TVD_EN, TVD_EN_COMB_3D, 0);
++	tvd_update(tvd, TVD_MODE, TVD_MODE_COMB_2D, TVD_MODE_COMB_2D);
 +	tvd_write(tvd, TVD_IRQ_STATUS, ~0);
 +	synchronize_irq(tvd->irq);
 +	/* let a transfer in flight (capture or comb field memory) drain */
@@ -622,7 +665,23 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +		tvd_update(tvd, TVD_CHROMA, GENMASK(15, 8), (u8)ctrl->val << 8);
 +		break;
 +	case V4L2_CID_SUN4I_TVD_CHROMA_ENH:
-+		tvd_update(tvd, TVD_CHROMA, GENMASK(23, 16), ctrl->val << 16);
++		/* 0 = off, 1..4 = strength mild..high */
++		tvd_update(tvd, TVD_CHROMA, TVD_CHROMA_ENH_EN | TVD_CHROMA_ENH_STRENGTH,
++			   ctrl->val ? TVD_CHROMA_ENH_EN |
++				       FIELD_PREP(TVD_CHROMA_ENH_STRENGTH, ctrl->val - 1) :
++				       FIELD_PREP(TVD_CHROMA_ENH_STRENGTH, 3));
++		break;
++	case V4L2_CID_SUN4I_TVD_CHROMA_GAIN:
++		tvd_update(tvd, TVD_CHROMA_AGC, TVD_CHROMA_GAIN,
++			   FIELD_PREP(TVD_CHROMA_GAIN, ctrl->val));
++		break;
++	case V4L2_CID_SUN4I_TVD_BURST_START:
++		tvd_update(tvd, TVD_BURST_GATE, TVD_BURST_GATE_START,
++			   FIELD_PREP(TVD_BURST_GATE_START, ctrl->val));
++		break;
++	case V4L2_CID_SUN4I_TVD_BURST_END:
++		tvd_update(tvd, TVD_BURST_GATE, TVD_BURST_GATE_END,
++			   FIELD_PREP(TVD_BURST_GATE_END, ctrl->val));
 +		break;
 +	case V4L2_CID_SUN4I_TVD_BLUE_SCREEN:
 +		tvd_update(tvd, TVD_BLUE, TVD_BLUE_MODE,
@@ -667,14 +726,57 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	.def = 1,
 +};
 +
++static const char * const tvd_chroma_enh_menu[] = {
++	"Off",
++	"Mild",
++	"Low",
++	"Middle",
++	"High",
++};
++
 +static const struct v4l2_ctrl_config tvd_chroma_enh_ctrl = {
 +	.ops = &tvd_ctrl_ops,
 +	.id = V4L2_CID_SUN4I_TVD_CHROMA_ENH,
 +	.name = "Chroma Enhance",
++	.type = V4L2_CTRL_TYPE_MENU,
++	.max = ARRAY_SIZE(tvd_chroma_enh_menu) - 1,
++	.def = 0,
++	.qmenu = tvd_chroma_enh_menu,
++};
++
++static const struct v4l2_ctrl_config tvd_chroma_gain_ctrl = {
++	.ops = &tvd_ctrl_ops,
++	.id = V4L2_CID_SUN4I_TVD_CHROMA_GAIN,
++	.name = "Chroma Gain",
 +	.type = V4L2_CTRL_TYPE_INTEGER,
 +	.max = 255,
 +	.step = 1,
-+	.def = 0x30,
++	.def = 0x93,
++};
++
++/*
++ * Window after hsync in which the decoder looks for the colour burst. The
++ * vendor end value (0x8a) never locked colour on a bench camera, which
++ * locked for every end value from 0x46 to 0x7c: the default is the middle.
++ */
++static const struct v4l2_ctrl_config tvd_burst_start_ctrl = {
++	.ops = &tvd_ctrl_ops,
++	.id = V4L2_CID_SUN4I_TVD_BURST_START,
++	.name = "Burst Gate Start",
++	.type = V4L2_CTRL_TYPE_INTEGER,
++	.max = 255,
++	.step = 1,
++	.def = 0x32,
++};
++
++static const struct v4l2_ctrl_config tvd_burst_end_ctrl = {
++	.ops = &tvd_ctrl_ops,
++	.id = V4L2_CID_SUN4I_TVD_BURST_END,
++	.name = "Burst Gate End",
++	.type = V4L2_CTRL_TYPE_INTEGER,
++	.max = 255,
++	.step = 1,
++	.def = 0x60,
 +};
 +
 +static int tvd_init_ctrls(struct sun4i_tvd *tvd)
@@ -686,15 +788,19 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	 * tvd->lock (vdev->lock) when it enters the control code. Order is
 +	 * always tvd->lock, then the handler lock.
 +	 */
-+	v4l2_ctrl_handler_init(hdl, 8);
++	v4l2_ctrl_handler_init(hdl, 11);
 +	v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops, V4L2_CID_BRIGHTNESS, 0, 255, 1, 0x20);
-+	v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops, V4L2_CID_CONTRAST, 0, 255, 1, 0x68);
++	/* 0x80 = unity gain (the vendor default 0x68 is 0.8x, a dim picture) */
++	v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops, V4L2_CID_CONTRAST, 0, 255, 1, 0x80);
 +	v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops, V4L2_CID_SHARPNESS, 0, 255, 1, 0x20);
 +	tvd->saturation = v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops,
 +					    V4L2_CID_SATURATION, 0, 255, 1,
 +					    tvd->std->saturation);
 +	v4l2_ctrl_new_std(hdl, &tvd_ctrl_ops, V4L2_CID_HUE, -128, 127, 1, 0);
++	tvd->chroma_gain = v4l2_ctrl_new_custom(hdl, &tvd_chroma_gain_ctrl, NULL);
 +	v4l2_ctrl_new_custom(hdl, &tvd_chroma_enh_ctrl, NULL);
++	v4l2_ctrl_new_custom(hdl, &tvd_burst_start_ctrl, NULL);
++	v4l2_ctrl_new_custom(hdl, &tvd_burst_end_ctrl, NULL);
 +	v4l2_ctrl_new_custom(hdl, &tvd_blue_screen_ctrl, NULL);
 +	tvd->comb = v4l2_ctrl_new_custom(hdl, &tvd_comb_ctrl, NULL);
 +	if (hdl->error) {
@@ -860,9 +966,11 @@ v4l2-compliance 1.28.1 -s 50: 80 tests, 0 failures, 0 warnings.
 +	tvd_fill_fmt(&tvd->fmt, std);
 +	if (tvd->users)
 +		tvd_setup_decoder(tvd);
-+	/* the vendor uses a lower saturation for PAL; also rewrites the regs */
++	/* saturation and chroma gain have per-standard vendor defaults */
 +	v4l2_ctrl_modify_range(tvd->saturation, 0, 255, 1, std->saturation);
 +	v4l2_ctrl_s_ctrl(tvd->saturation, std->saturation);
++	v4l2_ctrl_modify_range(tvd->chroma_gain, 0, 255, 1, std->chroma_gain);
++	v4l2_ctrl_s_ctrl(tvd->chroma_gain, std->chroma_gain);
 +	if (tvd->users)
 +		v4l2_ctrl_handler_setup(&tvd->ctrls);
 +	return 0;
