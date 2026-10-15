@@ -185,6 +185,50 @@ Bench gotchas, each of which cost a board hang or reboot:
 
 ## 6. Open issues
 
+### The input circuit: TVIN0 must not be tied to ground at the pin (probable root cause)
+
+On this board TVIN0 has a 75 ohm resistor straight to AGND at the pin (the
+reference CherryPi schematic does the same: R38, for an unrouted input). The
+evidence that this breaks the decoder's analog front end:
+
+- With the vendor/xboot ADC setting (`0xE2C = 0x00110000`, clamp step 1) the
+  decoder reports **no signal at all**; only `0x60000000` (clamp off) shows a
+  picture, while the vendor's dumps run locked with `0x00110000`. A whycan user
+  with the same symptom on a Widora Tiny200 (F1C200s) posted `0xE2C = 0xB0000`
+  and no signal; xboot's author answered that the board's TVD circuit is wrong:
+  remove R30 so the CVBS signal is not grounded at the pin ("如果共地，则完全是一
+  个白屏") ([whycan t_5612](https://whycan.com/t_5612.html), post #28).
+- With the clamp off the picture is dark (camera white overlay at Y ~95 instead
+  of ~235), has 2.5-3 px rms line jitter (the sync is not cleanly sliced), and
+  as soon as PAL locks (`0xE40` bit 16) the decoder core outputs **uniformly
+  random luma** (measured: frame-to-frame std ~68, adjacent rows uncorrelated,
+  every byte rewritten each frame, forced blue screen clean). That happens with
+  any comb mode, chroma gain 0, saturation 0, the TVE powered, the vendor or the
+  A20 core values, and the xboot init sequence replayed register by register.
+
+Fix to try (hardware): remove the 75 ohm resistor at the TVIN0 pin. Either
+connect the camera straight to the pin (xboot's fix), or, better, terminate the
+camera with 75 ohm to AGND on the camera side and feed the pin through a series
+capacitor (0.1-1 uF), so the pin has no DC path to ground and the internal
+clamp can set the level. Then retest with the vendor values: `0xE2C =
+0x00110000` (the driver currently forces `0x60000000`), burst gate end 0x8A and
+0x60.
+
+Other measured facts from the same session:
+
+- The fixed vertical lines sit at the same image columns in NV12 and NV16 and
+  move with the picture: most likely the camera sensor's column fixed-pattern
+  noise in a dark scene, not the decoder.
+- The 3D comb field memory is never written by the decoder (stays zero while
+  streaming, `0x070` = 0x17 as in the vendor dump): the comb DMA does not run.
+  Comb off gives the same picture today.
+- Measuring tools (scratchpad, bench only): `camview` (zero-copy LCD viewer,
+  `kill -USR1` saves two frames), `tvdcap` (V4L2 client; `FILL=0x55` poisons
+  buffers), `tstat` (temporal noise, line jitter, column pattern), `cstat`
+  (chroma statistics). The board's /tmp is only 8 MB: delete captures.
+
+### Earlier notes
+
 - **Picture quality (wiring):** dark picture even with contrast at 255, fixed
   vertical bright lines, and line jitter (sheared edges). `0xE30` reads about
   half the vendor's locked level (0x108 vs 0x1E1), so the input is probably
