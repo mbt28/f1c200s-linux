@@ -1,0 +1,57 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] clk: sunxi-ng: suniv: keep pll-video fixed for the TV decoder
+
+The TV decoder (and the TV encoder) need a module clock of exactly 27 MHz,
+divided from pll-video. The TCON clock sets CLK_SET_RATE_PARENT, so every
+modeset retuned pll-video to a multiple of the panel's pixel clock (100 MHz
+for the 25 MHz ER-TFT050-6), from which 27 MHz cannot be divided.
+
+Drop the flag: the board DT pins pll-video at 297 MHz (assigned-clock-rates,
+which needs CLK_PLL_VIDEO in the DT bindings, so export it) and the TCON's
+own dclk divider finds the pixel clock from it: 297 / 12 = 24.75 MHz for a
+25 MHz panel, 297 / 27 = 11 MHz for the 10.8 MHz 480x272 one. The display
+engine clocks never propagated to the PLL, so nothing else changes. Bench
+board: clk_summary shows pll-video 297 MHz, tcon-pixel-clock 24.75 MHz, tvd
+27 MHz, display and wireless CarPlay video unaffected.
+---
+--- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
++++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
+@@ -276,10 +276,14 @@
+ 
+ static const char * const tcon_parents[] = { "pll-video", "pll-video-2x" };
+ static const u8 tcon_table[] = { 0, 2, };
++/*
++ * No CLK_SET_RATE_PARENT: pll-video also feeds the TV decoder and encoder,
++ * which need exactly 27 MHz, so the PLL is fixed (297 MHz, from the DT) and
++ * the TCON's own dclk divider finds the pixel clock from it.
++ */
+ static SUNXI_CCU_MUX_TABLE_WITH_GATE(tcon_clk, "tcon",
+ 				     tcon_parents, tcon_table,
+-				     0x118, 24, 3, BIT(31),
+-				     CLK_SET_RATE_PARENT);
++				     0x118, 24, 3, BIT(31), 0);
+ 
+ static const char * const deinterlace_parents[] = { "pll-video",
+ 						    "pll-video-2x" };
+--- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.h
++++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.h
+@@ -16,7 +16,7 @@
+ #define CLK_PLL_AUDIO_2X	3
+ #define CLK_PLL_AUDIO_4X	4
+ #define CLK_PLL_AUDIO_8X	5
+-#define CLK_PLL_VIDEO		6
++/* CLK_PLL_VIDEO is exported to the DT */
+ #define CLK_PLL_VIDEO_2X	7
+ #define CLK_PLL_VE		8
+ #define CLK_PLL_DDR0		9
+--- a/include/dt-bindings/clock/suniv-ccu-f1c100s.h
++++ b/include/dt-bindings/clock/suniv-ccu-f1c100s.h
+@@ -7,6 +7,8 @@
+ #ifndef _DT_BINDINGS_CLK_SUNIV_F1C100S_H_
+ #define _DT_BINDINGS_CLK_SUNIV_F1C100S_H_
+ 
++#define CLK_PLL_VIDEO		6
++
+ #define CLK_CPU			11
+ 
+ #define CLK_BUS_DMA		14
