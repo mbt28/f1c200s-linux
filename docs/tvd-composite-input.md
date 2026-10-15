@@ -1,9 +1,10 @@
 # Composite video input (TVD, TVIN0/TVIN1)
 
 Status (2026-10-15): **driver working on the bench board.** A PAL camera on
-TVIN0 streams through `/dev/video1` (NV12/NV16, 720x576, 25 fps), and
-`v4l2-compliance -s 50` passes 80/80 tests with 0 warnings. The picture quality
-is limited by the prototype wiring (see [Open issues](#6-open-issues)).
+TVIN0 streams through `/dev/video1` (NV12/NV16, 720x576, 25 fps) with H, V and
+colour lock and PAL detected, and `v4l2-compliance -s 30` passes 80/80 tests
+with 0 warnings. The picture quality, colour above all, is limited by the
+prototype wiring (see [Open issues](#6-open-issues)).
 
 | Piece | Where |
 |---|---|
@@ -24,20 +25,24 @@ v4l2-ctl -d /dev/video1 -s pal                # or ntsc; not while streaming
 v4l2-ctl -d /dev/video1 -i 1                  # TVIN1
 v4l2-ctl -d /dev/video1 -c contrast=200,brightness=40,saturation=96
 v4l2-ctl -d /dev/video1 -c blue_screen=0      # 0 off, 1 on, 2 auto (no signal)
+v4l2-ctl -d /dev/video1 -c burst_gate_end=96   # if colour does not lock (status "no color")
 v4l2-ctl -d /dev/video1 --set-fmt-video=pixelformat=NV12 \
 	--stream-mmap --stream-count=50 --stream-to=/tmp/cam.nv12
 ```
 
 | Control | Range (default) | Register | Notes |
 |---|---|---|---|
-| `brightness` | 0..255 (32) | `0x00C` [15:8] | verified: shifts the black level |
-| `contrast` | 0..255 (104) | `0x00C` [7:0] | verified: luma gain |
-| `sharpness` | 0..255 (32) | `0x00C` [23:16] | per the RE notes; effect not measured |
-| `saturation` | 0..255 (PAL 80, NTSC 128) | `0x010` [7:0] | reset to the standard's default on `S_STD` |
+| `brightness` | 0..255 (32) | `0x00C` [15:8] | 0x20 = no offset (V40 BRIGHT_OFFSET); verified: shifts the black level |
+| `contrast` | 0..255 (128) | `0x00C` [7:0] | 0x80 = unity gain (V40 CONTRAST_GAIN); the vendor's 0x68 is 0.8x |
+| `sharpness` | 0..255 (32) | `0x00C` [23:16] | per the RE notes; effect not measured. Bit 24 (sharpen enable, set at reset) is cleared, as the vendor does |
+| `saturation` | 0..255 (PAL 80, others 128) | `0x010` [7:0] | 0x80 = unity; verified (0 removes all chroma). Reset to the standard's default on `S_STD` |
 | `hue` | -128..127 (0) | `0x010` [15:8] | |
-| `chroma_enhance` | 0..255 (48) | `0x010` [23:16] | vendor value 0x30; meaning per the RE notes |
-| `blue_screen` | menu (2 = auto) | `0xF14` [5:4] | auto = blue frame while unlocked |
-| `3d_comb_filter` | bool (on) | `0x040` bit 4 | takes effect at the next STREAMON; costs 2 MiB CMA while streaming |
+| `chroma_gain` | 0..255 (PAL 147, NTSC/PAL-M 138, PAL-Nc/SECAM 220) | `0xF1C` [23:16] | vendor `com_video_set_chrom_gain`; reset per standard on `S_STD` |
+| `chroma_enhance` | menu Off/Mild/Low/Middle/High (Off) | `0x010` bit 16 + [21:20] | vendor `c_peak` = bit 16; strength as V40 `CHROMA_ENHANCE_STRENGTH` |
+| `burst_gate_start` | 0..255 (50) | `0xF10` [15:8] | colour-burst window after hsync (V40 `TVD_CLOCK1`) |
+| `burst_gate_end` | 0..255 (96) | `0xF10` [23:16] | **decides colour lock**: the vendor's 0x8A never locked on the bench camera, 0x46..0x7C all did |
+| `blue_screen` | menu (2 = auto) | `0xF14` [5:4] | auto = blue frame while unlocked (V40 `TVD_MODE`) |
+| `3d_comb_filter` | bool (on) | `0x000` bit 4, `0x008` bit 0, `0x048` | takes effect at the next STREAMON; costs 2 MiB CMA while streaming |
 
 Settings are kept by the driver across opens (until the module is reloaded).
 The decoder is powered and clocked only while the node is open, so the input
@@ -71,15 +76,16 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
 
 | Offset | Role |
 |---|---|
-| `0x000` | bit 0 decoder enable; bit 4 set by the vendor whenever capture DMA runs (driver: while streaming) |
-| `0x008` | mode/standard select |
-| `0x00C` | contrast [7:0], brightness [15:8], sharpness [23:16]; reset 0x01202080 |
-| `0x010` | saturation [7:0], hue [15:8], chroma enhance [23:16] |
+| `0x000` | bit 0 decoder enable; **bit 4 3D comb filter enable**; [12:8] pulsed (`0x1F00`) by the vendor init |
+| `0x008` | mode: [14:12] colour standard (0 NTSC, 1 PAL, 2 PAL-M, 3 PAL-Nc, 4 SECAM: the V40 `COLOR_STD` codes); [24] 625 lines; **bit 0 = 2D comb (cleared when the 3D comb runs)** |
+| `0x00C` | contrast [7:0] (0x80 = 1x), brightness [15:8] (0x20 = 0), sharpness [23:16], sharpen enable [24]; reset 0x01202080 |
+| `0x010` | saturation [7:0] (0x80 = 1x), hue [15:8], chroma enhance enable [16] + strength [21:20] |
 | `0x014` | ? prescaler (`0x20000000`) |
 | `0x018` | chroma subcarrier = `f / 27 MHz * 2^32` |
 | `0x01C` | h start [27:16], v start [10:0] |
-| `0x040` | 3D comb control; **bit 4 = comb filter on, which DMAs into `[0x04C, 0x050)`** |
-| `0x04C` / `0x050` / `0x054` | comb filter field memory start / end / size (vendor: 2 MiB) |
+| `0x040` | 3D comb control, vendor constant `0x04000310` (bit 4 is NOT the enable) |
+| `0x048` | 3D comb latch: write `0x04040001` after programming the memory (bits 26 and 18 self-clear) |
+| `0x04C` / `0x050` / `0x054` | 3D comb field memory start / end / size (vendor: 2 MiB) |
 | `0x060..06C` | chroma frequency presets (read-only defaults: PAL, PAL-M, PAL-Nc, NTSC) |
 | `0x080` / `0x084` | capture DMA Y / C address (full physical address) |
 | `0x088` | DMA cfg: b0 enable, b4 = 422 (else 420), b8 UV swap, b24 = MB tiled, b26 size valid, **b28 address valid** |
@@ -88,10 +94,15 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
 | `0x094` / `0x09C` | IRQ status (W1C) / enable; bit 24 = frame done |
 | `0xE04` | ADC/input; init `0x8002AAA8`; bit 0 = TVIN1 |
 | `0xE2C` | ADC ctrl: `0x00110000` before the core setup, `0x60000000` after (the Melis value 0x00110000 gives "no signal" here) |
-| `0xE30` | ? two 16-bit levels (signal amplitude / clamp?) |
+| `0xE30` | [31:16] chroma (burst) magnitude: ~0x245 locked here, ~0x108 unlocked, 0x4DC no signal; [15:0] ? |
 | `0xE40` | status: 0 no signal, 1 H lock, 2 V lock, 3 chroma lock, 8 progressive, 9/10 H/V non-standard, 16 PAL, 17 SECAM, 18 625 lines, 19 noisy |
 | `0xE44` | ? gain / line-timing estimate (`0x2000_0000` nominal when locked) |
-| `0xF00..F84` | decoder core (A20 core regs); `0xF14` [5:4] blue-screen mode |
+| `0xF00..F84` | decoder core: the A20 core registers, carrying the V40 core fields in a different arrangement (some with the 16-bit halves swapped, e.g. V40 `HLOCK3` 0x0FE9_502D = F1C `0xF3C` 0x502D_0FE9) |
+| `0xF10` | burst gate: end [23:16], start [15:8] (V40 `TVD_CLOCK1`) |
+| `0xF14` | [5:4] blue-screen mode (V40 `TVD_MODE`) |
+| `0xF1C` | [23:16] chroma gain |
+| `0xF24` / `0xF28` | AGC gate (V40 `TVD_CLAMP_AGC2`: `0x682` gate begin, `0x64` back porch, `0x40` width) |
+| `0xF30` | default `0x21F07C1F` = V40 `TVD_CLOCK2` (NTSC C_SAMPLE_STEP); the vendor never writes it and setting the PAL value changed nothing, so 0x018 is the live subcarrier |
 
 ### Measured behaviour the driver relies on
 
@@ -104,10 +115,15 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
   first IRQ as a sync and completes nothing.
 - **Both fields are woven into one buffer** (lines-per-field in `0x08C`, stride =
   width): `V4L2_FIELD_INTERLACED`.
-- **The comb filter DMAs by itself.** The vendor and bare-metal init set `0x040`
-  bit 4 with `0x04C`/`0x050` left at 0, so the field memory points at physical
-  0 (SRAM, then unmapped space). The driver enables bit 4 only while streaming,
-  with a real 2 MiB buffer.
+- **The 3D comb filter is switched by three registers** (the vendor's
+  `BSP_TVD_3D_COMB_Filter()`): program `0x04C/0x050/0x054`, arm `0x048 =
+  0x04040001`, clear `0x008` bit 0, set `0x000` bit 4; off is the reverse.
+  The driver runs it only while streaming, when its 2 MiB memory exists.
+- **Colour lock needs the right burst gate.** With the vendor's `0xF10` end
+  value 0x8A the decoder never locked colour (status "no color", colour killer
+  on, chroma flat at 128). Sweeping the end value on the PAL bench camera:
+  0x30/0x38 no lock, 0x40 28/30, **0x46..0x7C 100%** with PAL detected, 0x84
+  and 0x8A no lock. Default 0x60, exposed as a control.
 
 ## 3. Clocking: pll-video fixed at 297 MHz
 
@@ -160,8 +176,8 @@ Bench gotchas, each of which cost a board hang or reboot:
 - **Never take a DMA address from `/dev/fb0`**: DRM fbdev reports
   `smem_start = 0` (`DRM_FBDEV_LEAK_PHYS_SMEM` is off), and a TVD DMA to phys 0
   wedged the bus (serial dead, power cycle needed).
-- **The comb filter writes phys 0** if `0x040` bit 4 is set without a buffer
-  (see above).
+- An earlier reading of the dumps took `0x040` bit 4 for the comb enable; it is
+  a vendor constant. The real enable is `0x000` bit 4 (above).
 - **Board-to-Pi bulk transfers wedge the ESP32 AP** (4 x 829 KB frame pulls did
   it): convert or thumbnail frames on the board, pull only small files.
 - **Lock problems were wiring**: a solder bridge between the CVBS line and AGND
@@ -174,9 +190,17 @@ Bench gotchas, each of which cost a board hang or reboot:
   half the vendor's locked level (0x108 vs 0x1E1), so the input is probably
   still weak or loaded. Next: short shielded lead, ground close to AGND, check
   for a coupling capacitor on TVIN0, and confirm the camera on a TV.
-- **Colour lock is intermittent** and the PAL bit (`0xE40` bit 16) never sets,
-  unlike the vendor dump. Likely the same signal-level cause; recheck once the
-  wiring is fixed.
+- **Colour is locked but noisy.** With the burst gate fixed, colour lock holds
+  and PAL is detected (`0xE40` 0x0005020E vs the vendor's 0x0005000E), but the
+  chroma is dominated by noise: horizontal colour dashes, chroma rms ~39-62
+  with ~zero mean, uncorrelated line to line, almost nothing left after 16x16
+  averaging. Its spectrum has no beat line (so no subcarrier frequency error)
+  and the luma has 15% of its energy in 3.9-5.0 MHz without a subcarrier peak:
+  broadband input noise in the chroma band, which the decoder turns into colour
+  noise. Comb mode (2D/3D), the burst gate within its window, the YC
+  separation candidates in `0xF44` and `0xF30` changed nothing. Expected to
+  improve with the wiring; until then `saturation=0` gives a clean
+  monochrome picture.
 - **Timestamp jitter:** buffer timestamps alternate around 20/60 ms (mean
   40 ms), with no dropped frames, which suggests late IRQ servicing. Not yet
   investigated.
