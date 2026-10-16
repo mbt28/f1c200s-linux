@@ -8,5 +8,7 @@ source "$BR2_EXTERNAL_CARPLAY_PATH/package/fastcarplay/Config.in"
 # Slint UI toolkit for fastcarplay (static lib + host slint-compiler).
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/slint-cpp/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"
+# Free Doom IWADs for prboom (SD card image only, see external.mk).
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/freedoom/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/cp-mux-probe/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/musb-collision-test/Config.in"
