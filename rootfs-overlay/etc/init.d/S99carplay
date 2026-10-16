@@ -7,7 +7,8 @@
 # probes its video path at runtime, LVGL UI). The SOURCE protocol is chosen in
 # the UI (Settings > Source) or with `carplay-source`; both persist `protocol`
 # in /root/.fastcarplay/usersettings.txt, which the app applies on top of the
-# preset. For a *wireless* protocol the radios come up in S45aa-stack; here we
+# preset. The previous run's log is kept as carplay.log.0 (a frozen session's
+# log is the evidence; the next boot used to overwrite it). For a *wireless* protocol the radios come up in S45aa-stack; here we
 # only wait for wlan0 + hci0 and then launch the app.
 
 SET=/etc/fastcarplay/settings_drm.txt
@@ -28,16 +29,23 @@ start)
 		  while [ $i -lt 45 ] && { [ ! -d /sys/class/net/wlan0 ] || [ ! -d /sys/class/bluetooth/hci0 ]; }; do
 			sleep 1; i=$((i + 1))
 		  done
-		  SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /var/log/carplay.log 2>&1
+		  mv -f /var/log/carplay.log /var/log/carplay.log.0 2>/dev/null; SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /var/log/carplay.log 2>&1
 		) &
 		;;
 	*)
-		SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /var/log/carplay.log 2>&1 &
+		mv -f /var/log/carplay.log /var/log/carplay.log.0 2>/dev/null; SDL_AUDIODRIVER=dummy fastcarplay "$SET" > /var/log/carplay.log 2>&1 &
 		;;
 	esac
 	;;
 stop)
 	killall fastcarplay 2>/dev/null
+	# The app does not always finish its SIGTERM shutdown (threads stuck on a
+	# futex were seen 2026-10-03); a half-dead instance keeps :7000 and the
+	# next start reports "device error". Escalate, and wait for the port.
+	i=0
+	while pidof fastcarplay >/dev/null 2>&1 && [ $i -lt 6 ]; do sleep 0.5; i=$((i + 1)); done
+	pidof fastcarplay >/dev/null 2>&1 && killall -9 fastcarplay 2>/dev/null
+	sleep 1
 	;;
 *)
 	echo "Usage: $0 {start|stop}"

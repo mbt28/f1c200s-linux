@@ -55,11 +55,11 @@ config.env                 pinned versions + upstream URLs
 scripts/                   fetch-sources.sh · build.sh
 configs/…_defconfig        the board defconfig
 board/lctech/pi-f1c200s/   linux/uboot fragments · genimage · post-build · flash-nand.sh
-patches/linux-lctech/      LCD+GT911 touch · VE clocks · USB-OTG host · cedrus suniv fixes
+patches/linux-lctech/      LCD+GT911 touch · VE/codec clocks · USB-OTG host · cedrus suniv fixes · audio codec
 patches/ffmpeg/            v4l2-request hwaccel
 package/                   fastcarplay · esp-hosted-ng · libimobiledevice stack
-rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · carplay) + autorun
-docs/                      display · hardware-fixes · cedrus-status · …
+rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · audio · carplay) + autorun
+docs/                      display · audio · hardware-fixes · cedrus-status · …
 ```
 
 Upstream sources land in `buildroot/` and `output/` (both git-ignored).

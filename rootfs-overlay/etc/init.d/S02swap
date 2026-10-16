@@ -1,5 +1,17 @@
 #!/bin/sh
-# Two-tier swap: zram in RAM (primary), SD partition p4 (emergency backstop).
+# Swap tiers: SD partition p4 (default since 2026-10-03) and, opt-in, zram.
+#
+# 2026-10-03: the board "freezes" when wireless CarPlay starts video. It is not
+# a hang -- with the 24 MiB CMA full of video buffers, 12-14 MiB of anonymous
+# memory and 9 MiB of slab leave ~3 MiB of page cache, so every process
+# page-faults its own code back from the card (35 000 major faults in three
+# minutes, load 12, a shell builtin took 40 s) while the kernel keeps answering
+# pings. A swap tier that takes the idle anonymous pages fixes it; zram cannot
+# be that tier because zsmalloc's movable pages fragment the CMA pool and the
+# decoder then fails to allocate (docs/memory.md s4). So the SD partition is
+# the default tier and zram is opt-in (`touch /etc/swap-zram`). Measured with
+# SD swap only: 3 MiB swapped, 1 600 major faults in a 15 min video session,
+# heartbeat never late.
 #
 # WHY THIS SCRIPT OWNS BOTH DEVICES. inittab runs `swapon -a` at sysinit, well
 # before rcS. zram cannot exist that early (it needs modprobe), so if p4 were
@@ -20,7 +32,9 @@
 #
 # Escape hatches, none needing a reflash:
 #   touch /etc/swap-disable   -> no swap at all
-#   rm /etc/swap-sd           -> zram only, card untouched
+#   touch /etc/swap-zram      -> add the zram tier (breaks the video decoder's
+#                                CMA allocations on this board, see above)
+#   rm /etc/swap-sd           -> no SD tier
 #   /etc/default/swap         -> override sizes/algorithm/priorities
 #   S02swap stop | start      -> live A/B without rebooting
 LOG=/var/log/swap.log
@@ -43,8 +57,10 @@ start)
 	# Before any swap exists, so the first reclaim uses the new watermarks.
 	[ -r /etc/sysctl.conf ] && sysctl -q -p /etc/sysctl.conf 2>/dev/null
 
-	# --- tier 1: zram ---------------------------------------------------
-	if [ ! -e /sys/block/zram0 ]; then
+	# --- tier 1: zram (opt-in) -------------------------------------------
+	if [ ! -f /etc/swap-zram ]; then
+		log "zram skipped (no /etc/swap-zram)"
+	elif [ ! -e /sys/block/zram0 ]; then
 		modprobe zram num_devices=1 2>/dev/null
 		# devtmpfs-only image: give the node a moment to appear.
 		i=0
@@ -54,7 +70,7 @@ start)
 		done
 	fi
 
-	if [ -e /sys/block/zram0 ]; then
+	if [ -f /etc/swap-zram ] && [ -e /sys/block/zram0 ]; then
 		# ORDER IS LOAD-BEARING (Documentation/.../zram.rst): comp_algorithm
 		# must precede disksize (it returns -EBUSY once initialised);
 		# mem_limit is runtime-adjustable and follows.
@@ -67,18 +83,17 @@ start)
 		else
 			log "zram0 FAILED to activate"
 		fi
-	else
+	elif [ -f /etc/swap-zram ]; then
 		log "zram0 absent (CONFIG_ZRAM=m not loaded?)"
 	fi
 
-	# --- tier 2: SD card, emergency only ---------------------------------
-	# Deliberately conditional on zram being live. If the compressed tier is
-	# missing, attaching the card would silently promote it to primary swap
-	# on a board whose realtime video path cannot afford SD latency.
+	# --- tier 2: SD card -------------------------------------------------
+	# Until 2026-10-03 this tier refused to come up without zram ("never make
+	# the card primary swap"). Measured, the opposite holds: without any swap
+	# the card is hammered anyway -- by re-reading executable pages -- and a
+	# few MiB of cold anonymous memory parked on p4 is what stops that.
 	if [ ! -f /etc/swap-sd ]; then
 		log "SD swap skipped (no /etc/swap-sd)"
-	elif ! grep -q '^/dev/zram0 ' /proc/swaps; then
-		log "SD swap REFUSED: zram is not active, refusing to make the card primary"
 	elif [ "$(cat /sys/class/block/${SD_DEV#/dev/}/size 2>/dev/null)" != "$SD_SECTORS" ]; then
 		log "SD swap skipped: $SD_DEV is not $SD_SECTORS sectors (card too small?)"
 	else
@@ -94,6 +109,13 @@ start)
 		else
 			log "SD swap FAILED (harmless; zram carries on)"
 		fi
+	fi
+
+	# SD-only tuning (sysctl.conf is written for the zram case): let anon go
+	# out rather than file pages (the thrash IS file pages), and read 8 pages
+	# per swap-in -- on the card the cost is the command, not the bytes.
+	if grep -q "^$SD_DEV " /proc/swaps && ! grep -q '^/dev/zram0 ' /proc/swaps; then
+		sysctl -q -w vm.swappiness=60 vm.page-cluster=3 2>/dev/null
 	fi
 
 	# One quiet line to the console -- this board's RT thread has already been

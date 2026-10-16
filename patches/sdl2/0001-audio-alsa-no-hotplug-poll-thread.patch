@@ -1,0 +1,22 @@
+audio/alsa: do not poll for device hotplug
+
+SDL's ALSA backend starts a thread that re-enumerates every PCM device via
+snd_device_name_hint() every 5 seconds to synthesize hotplug events. On the
+F1C200s that enumeration (alsa.conf parsing for one soldered-in codec)
+costs ~300 ms of a 408 MHz core per scan -- 6% CPU measured with
+/proc/<tid>/sched while FastCarPlay plays music -- for an event that can
+never happen on a head unit with a fixed codec. SDL's own comment on the
+switch: "without the thread, you will detect devices on startup, but will
+not get further hotplug events. But that might be okay." It is.
+
+--- a/src/audio/alsa/SDL_alsa_audio.c
++++ b/src/audio/alsa/SDL_alsa_audio.c
+@@ -28,7 +28,7 @@
+ 
+ /* without the thread, you will detect devices on startup, but will not get futher hotplug events. But that might be okay. */
+ #ifndef SDL_ALSA_HOTPLUG_THREAD
+-#define SDL_ALSA_HOTPLUG_THREAD 1
++#define SDL_ALSA_HOTPLUG_THREAD 0
+ #endif
+ 
+ /* Allow access to a raw mixing buffer */
