@@ -1,0 +1,25 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] audio: 22 kHz on soft-float ARM
+
+The OPL emulator (ADLIBEMU-derived) synthesizes the music in floating
+point. On an ARM926 without an FPU at 44 kHz it cannot keep up: measured
+on an F1C200s at 792 MHz, the 44.1 kHz mono stream sat in XRUN 46% of
+the time (247 state changes in 10 s) with the audio thread at 45% CPU --
+heavily distorted audio. Use 22 kHz there, as the GP2X/Dingux builds
+already do; SAMPLE_SCALING follows, so the sound effects match.
+---
+--- a/src/loudness.h
++++ b/src/loudness.h
+@@ -26,7 +26,11 @@
+ 
+ #define SFX_CHANNELS 8
+ 
+-#if defined(TARGET_GP2X) || defined(TARGET_DINGUX)
++/* 22 kHz on the handhelds and on any soft-float ARM (no FPU): the OPL
++ * emulator synthesizes the music in floating point, which cannot keep up
++ * with 44 kHz there -- constant underruns, heavily distorted audio. */
++#if defined(TARGET_GP2X) || defined(TARGET_DINGUX) || \
++    (defined(__arm__) && !defined(__ARM_FP))
+ #define OUTPUT_QUALITY 2  // 22 kHz
+ #else
+ #define OUTPUT_QUALITY 4  // 44 kHz
