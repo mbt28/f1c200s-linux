@@ -15,7 +15,9 @@
 #   FASTCARPLAY_VERSION = local
 #   FASTCARPLAY_SITE = /path/to/FastCarPlay
 #   FASTCARPLAY_SITE_METHOD = local
-FASTCARPLAY_BRANCH = f1c200s-cedrus
+# native = the Slint-UI line (camera view, BT keyboards, volume/knob UI);
+# f1c200s-cedrus was the SDL2 + LVGL line before it.
+FASTCARPLAY_BRANCH = native
 FASTCARPLAY_VERSION = $(shell git ls-remote \
 	https://github.com/mbt28/FastCarPlay.git \
 	refs/heads/$(FASTCARPLAY_BRANCH) 2>/dev/null | cut -c1-40)
@@ -24,15 +26,20 @@ ifeq ($(FASTCARPLAY_VERSION),)
 $(error fastcarplay: cannot resolve the $(FASTCARPLAY_BRANCH) branch tip -- network down?)
 endif
 endif
-# Fetched via git (not the github tarball helper): third_party/lvgl is a git
-# SUBMODULE and GitHub tarballs never contain submodules -- the git method +
-# GIT_SUBMODULES pulls it in. The sha-as-version caching above still applies.
+# Fetched via git (not the github tarball helper). The f1c200s-cedrus line
+# had third_party/lvgl as a git SUBMODULE, which GitHub tarballs never contain;
+# native has no submodules, GIT_SUBMODULES stays so either line builds. The
+# sha-as-version caching above still applies.
 FASTCARPLAY_SITE = https://github.com/mbt28/FastCarPlay.git
 FASTCARPLAY_SITE_METHOD = git
 FASTCARPLAY_GIT_SUBMODULES = YES
 FASTCARPLAY_LICENSE = GPL-3.0
 FASTCARPLAY_LICENSE_FILES = LICENSE
+# alsa-lib + opus are linked unconditionally (audio out, Opus decode and the
+# wireless mic encoder); slint-cpp is the UI (libslint_cpp.a + the host
+# slint-compiler that turns src/ui/slint/app.slint into C++).
 FASTCARPLAY_DEPENDENCIES = \
+	alsa-lib \
 	bluez5_utils \
 	dbus \
 	ffmpeg \
@@ -42,8 +49,8 @@ FASTCARPLAY_DEPENDENCIES = \
 	libplist \
 	libusb \
 	openssl \
-	\
-	
+	opus \
+	slint-cpp
 
 # Kernel features the app cannot run without. Declared HERE, not just in the
 # board fragment, so they are a real dependency of the package instead of
@@ -85,8 +92,9 @@ endef
 #   USE_CEDRUS=1 -> CedrusDecoder (ffmpeg v4l2-request, mainline)
 #   USE_AA_WIRELESS=1 -> protocol = aa-wireless (BT bootstrap via BlueZ/D-Bus
 #   + the SoftAP; needs `ap on` + bluetoothd/dbus running at runtime)
-#   USE_LVGL=1 -> on-device UI (vendored third_party/lvgl submodule + the
-#   EEZ-generated screens in src/ui; compiled out entirely without it)
+#   USE_SLINT=1 -> on-device UI (src/ui/slint/app.slint, compiled by the host
+#   slint-compiler, software renderer from the static libslint_cpp;
+#   compiled out entirely without it)
 #   USE_CP_WIRED=1 -> protocol = carplay-wired (config-6 usbmux + carkit iAP2
 #   via libimobiledevice + libplist; CarPlay over the USB-NCM link -- no Wi-Fi/BT)
 define FASTCARPLAY_BUILD_CMDS
@@ -96,7 +104,8 @@ define FASTCARPLAY_BUILD_CMDS
 		USE_AA_WIRELESS=1 \
 		USE_CP_WIRED=1 \
 		USE_CP_WIRELESS=1 \
-		USE_LVGL=1 \
+		USE_SLINT=1 \
+		SLINT_COMPILER="$(HOST_DIR)/bin/slint-compiler" \
 		BUILD_TYPE=release \
 		release
 endef

@@ -5,11 +5,18 @@ config BR2_PACKAGE_FASTCARPLAY
 	depends on !BR2_STATIC_LIBS
 	depends on BR2_USE_WCHAR # bluez5_utils -> libglib2
 	depends on BR2_USE_MMU # bluez5_utils -> dbus
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS # slint-cpp
+	depends on BR2_TOOLCHAIN_GCC_AT_LEAST_12 # slint-cpp (C++20 UI facade)
 	select BR2_PACKAGE_FFMPEG
 	select BR2_PACKAGE_FFMPEG_SWSCALE
 	select BR2_PACKAGE_LIBUSB
 	select BR2_PACKAGE_OPENSSL
 	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_ALSA_LIB
+	# fixed-point Opus: CarPlay Opus decode and the wireless mic encoder
+	select BR2_PACKAGE_OPUS
+	# USE_SLINT: the on-device UI
+	select BR2_PACKAGE_SLINT_CPP
 	# USE_AA_WIRELESS: BT bootstrap talks to BlueZ over D-Bus and links
 	# -lbluetooth (Buildroot requires _DEPENDENCIES to be selected here)
 	select BR2_PACKAGE_BLUEZ5_UTILS
@@ -35,5 +42,7 @@ config BR2_PACKAGE_FASTCARPLAY
 
 	  https://github.com/mbt28/FastCarPlay
 
-comment "FastCarPlay needs a toolchain w/ C++, threads, dynamic library"
-	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS || BR2_STATIC_LIBS
+comment "FastCarPlay needs a toolchain w/ C++, threads, gcc >= 12, dynamic library"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS || \
+		!BR2_TOOLCHAIN_GCC_AT_LEAST_12 || BR2_STATIC_LIBS
