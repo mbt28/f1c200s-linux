@@ -1,0 +1,103 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] video: a stretch scaler that fills an 800x480 panel
+
+The scalers are integer multiples of 320x200, so on an 800x480 framebuffer
+(SDL 1.2 fbcon cannot change the panel's mode) the best fit is 2x, a
+640x400 picture with borders. Add "Fit 800x480": a nearest-neighbour
+stretch to the whole surface (2.5x by 2.4x), using 16.16 fixed-point steps
+since ARMv5 has no hardware divide, and copying a destination row that
+maps to the same source row as the previous one. It is the last table
+entry (init_any_scaler() tries from the end) and the default.
+---
+--- a/src/video_scale.c
++++ b/src/video_scale.c
+@@ -31,6 +31,9 @@
+ static void nn_32( SDL_Surface *src_surface, SDL_Surface *dst_surface );
+ static void nn_16( SDL_Surface *src_surface, SDL_Surface *dst_surface );
+ 
++static void stretch_32( SDL_Surface *src_surface, SDL_Surface *dst_surface );
++static void stretch_16( SDL_Surface *src_surface, SDL_Surface *dst_surface );
++
+ static void scale2x_32( SDL_Surface *src_surface, SDL_Surface *dst_surface );
+ static void scale2x_16( SDL_Surface *src_surface, SDL_Surface *dst_surface );
+ static void scale3x_32( SDL_Surface *src_surface, SDL_Surface *dst_surface );
+@@ -56,6 +59,8 @@
+ 	{ 3 * vga_width, 3 * vga_height, NULL,     NULL,       hq3x_32,    "hq3x" },
+ 	{ 4 * vga_width, 4 * vga_height, NULL,     nn_16,      nn_32,      "4x" },
+ 	{ 4 * vga_width, 4 * vga_height, NULL,     NULL,       hq4x_32,    "hq4x" },
++	/* last: init_any_scaler() tries the table from the end */
++	{ 800,           480,            NULL,     stretch_16, stretch_32, "Fit 800x480" },
+ #endif
+ };
+ const uint scalers_count = COUNTOF(scalers);
+@@ -436,3 +441,58 @@
+ 	}
+ }
+ 
++/*
++ * Nearest-neighbour stretch of the game to the whole destination surface, for
++ * panels no integer scale fits: 800x480 is 2.5x horizontally and 2.4x
++ * vertically. 16.16 fixed-point steps (ARMv5 has no hardware divide); a
++ * destination row that maps to the same source row as the previous one is a
++ * copy of it.
++ */
++static void stretch_32( SDL_Surface *src_surface, SDL_Surface *dst_surface )
++{
++	const int dw = dst_surface->w, dh = dst_surface->h;
++	const Uint32 xstep = (vga_width << 16) / dw, ystep = (vga_height << 16) / dh;
++	Uint8 *dst = dst_surface->pixels;
++	Uint32 sy = 0;
++	int prev = -1;
++
++	for (int y = 0; y < dh; y++, sy += ystep, dst += dst_surface->pitch)
++	{
++		if ((int)(sy >> 16) == prev)
++		{
++			memcpy(dst, dst - dst_surface->pitch, dw * 4);
++			continue;
++		}
++		prev = sy >> 16;
++
++		const Uint8 *src = (Uint8 *)src_surface->pixels + prev * src_surface->pitch;
++		Uint32 *d = (Uint32 *)dst, sx = 0;
++		for (int x = 0; x < dw; x++, sx += xstep)
++			d[x] = rgb_palette[src[sx >> 16]];
++	}
++}
++
++static void stretch_16( SDL_Surface *src_surface, SDL_Surface *dst_surface )
++{
++	const int dw = dst_surface->w, dh = dst_surface->h;
++	const Uint32 xstep = (vga_width << 16) / dw, ystep = (vga_height << 16) / dh;
++	Uint8 *dst = dst_surface->pixels;
++	Uint32 sy = 0;
++	int prev = -1;
++
++	for (int y = 0; y < dh; y++, sy += ystep, dst += dst_surface->pitch)
++	{
++		if ((int)(sy >> 16) == prev)
++		{
++			memcpy(dst, dst - dst_surface->pitch, dw * 2);
++			continue;
++		}
++		prev = sy >> 16;
++
++		const Uint8 *src = (Uint8 *)src_surface->pixels + prev * src_surface->pitch;
++		Uint16 *d = (Uint16 *)dst;
++		Uint32 sx = 0;
++		for (int x = 0; x < dw; x++, sx += xstep)
++			d[x] = rgb_palette[src[sx >> 16]];
++	}
++}
+--- a/src/config.c
++++ b/src/config.c
+@@ -219,7 +219,8 @@
+ {
+ 	// defaults
+ 	fullscreen_enabled = false;
+-	set_scaler_by_name("Scale2x");
++	/* the full 800x480 panel; init_video() falls back if it does not fit */
++	set_scaler_by_name("Fit 800x480");
+ 	
+ 	config_t *config = &opentyrian_config;
+ 	
