@@ -26,8 +26,14 @@
 # with 800x480 wireless CarPlay). 64 KiB covers the ~23 ms periods SDL /
 # alsa-lib use; anything bigger is grown on demand at hw_params. Saves ~0.9 MiB
 # of CMA for as long as nobody plays audio (docs/audio.md).
+#
+# cma=28M: 4 MiB over the kernel's own 24 (linux.fragment), so the camera's
+# buffers fit next to the phone's video decoder (the app's Fast switch). It
+# only fits because the SD branch of the boot command below also sets
+# fdt_high -- the two go together, and only on this path: the vendor
+# bootloader on NAND keeps the kernel's 24.
 CONFIG_USE_BOOTARGS=y
-CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64"
+CONFIG_BOOTARGS="console=ttyS0,115200 panic=5 rootwait root=/dev/mmcblk0p2 rw rootfstype=ext4 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64 cma=28M"
 
 # --- On-board SPI NAND (spi0): drive it, and boot from it if there is no SD ---
 #
@@ -86,4 +92,24 @@ CONFIG_USE_BOOTCOMMAND=y
 # above the fdt, which is also exactly what the vendor bootloader does
 # (kernel_addr_r=0x81000000). Any new address must stay above 0x80C00000 plus
 # the fdt size, and below the top of the 64 MiB of DRAM.
-CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
+#
+# fdt_high=0x81800000 (SD branch): U-Boot copies the device tree to the top of
+# what its LMB leaves free, and lib/lmb.c keeps everything from its stack
+# pointer minus CONFIG_STACK_SIZE (the 16 MiB default here; it does not size
+# the real stack) up to the end of RAM. So the copy lands at 0x8296a000 --
+# U-Boot's real area above it is only ~6.6 MiB (the 3 MiB framebuffer of
+# patch 0002, malloc, code) -- and the kernel keeps that copy reserved
+# (early_init_fdt_reserve_self). Nothing else of U-Boot stays after bootz.
+# The CMA area (4 MiB aligned, placed from the top down) then has only the
+# 20 MiB above the copy, or the 24 between the first 4 MiB boundary past the
+# kernel (which ends at 0x80c6146f) -- 0x81000000 -- and the copy: that, not
+# the RAM, was the 24 MiB ceiling. Below 0x81800000 the copy lands at
+# 0x817fa000, clear of the kernel and of the decompressor, which relocates
+# itself to just past the decompressed kernel (~0x80c77000 + the 4.5 MiB
+# zImage), and CMA gets the top: cma=28M reserves 0x82400000-0x84000000.
+# Checked on a real boot (2026-10-16). CONFIG_STACK_SIZE=0x100000 would also
+# lift the copy (to ~0x8386a000) on every path, but CMA would then sit under
+# it and the kernel's early allocations would go back into the old
+# framebuffer, which the display engine scans until sun4i-drm's first modeset
+# (~2.3 s); with CMA at the top that region is rarely touched before then.
+CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; setenv fdt_high 0x81800000; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"

@@ -100,7 +100,7 @@ prompt is just invisible). The fragment now sets EXPERT=y, which only unhides
 prompts (config-diff audited: no other built code changes) and selects
 DEBUG_KERNEL as a bare menu gate, neutralized by keeping DEBUG_MISC off.
 
-## 2. CMA: 24 MiB reserved (800x480 panel) -- and 24 is the ceiling
+## 2. CMA: 24 MiB reserved (800x480 panel), 28 on the SD boot
 
 Raised from 16 MiB on 2026-10-02 for the 800x480 ER-TFT050-6: each decode frame
 became 576 KiB (NV12) and each framebuffer 1.5 MiB, roughly 3x the 480x272 values,
@@ -110,6 +110,24 @@ the kernel logs `cma: Failed to reserve` and boots with *zero* CMA, which is far
 worse. So 24 is the maximum on this 64 MiB layout; beyond it, reduce buffer
 counts or use a dedicated VE carveout. CMA pages stay usable by movable
 allocations, so this is not 24 MiB of dead RAM.
+
+**Update 2026-10-16 -- the ceiling was the device tree, not the RAM.** U-Boot
+copies the device tree to the top of what its LMB leaves free: lib/lmb.c
+keeps everything from U-Boot's stack pointer minus `CONFIG_STACK_SIZE` (the
+16 MiB default; U-Boot's real area is ~6.6 MiB: the 3 MiB framebuffer of
+patch 0002, malloc, code) up to the end of RAM, so the copy lands at
+0x8296a000. U-Boot hands over all 64 MiB and nothing of it stays after bootz,
+but the kernel keeps that 16 KiB copy reserved
+(`early_init_fdt_reserve_self`). CMA is placed from the top down, 4 MiB
+aligned, so it had the 20 MiB above the copy or the 24 between the first
+4 MiB boundary past the kernel (which ends at 0x80c6146f) -- 0x81000000 --
+and the copy: hence `Reserved 24 MiB at 0x81000000`, and nothing larger. Our SD U-Boot now sets `fdt_high=0x81800000`
+(the copy lands at 0x817fa000) and passes `cma=28M`, which reserves
+0x82400000-0x84000000: 4 MiB more, so the camera's buffers fit next to the
+phone's decoder. Both are in `uboot-sdcard.fragment`, together; the kernel
+default stays 24 because the NAND boot's vendor bootloader does neither.
+Checked on a real boot: `cma: Reserved 28 MiB at 0x82400000`, `Memory:
+24200K/65536K available`.
 
 The pool serves cedrus/cedar decode buffers, ffmpeg's right-sized coded
 buffers (~1 MiB × DPB), the DRM dumb buffers (UI overlay 2×1.5 MiB + fb0
@@ -125,7 +143,8 @@ cat /sys/kernel/debug/dma_buf/bufinfo 2>/dev/null   # per-buffer, if debugfs on
 **Measured 2026-07-05 (streaming CarPlay): CmaTotal 16384 kB, CmaFree
 2472 kB — 13.9 MiB in active use. CMA stays at 16 MiB; do NOT reduce.**
 (The old guidance to consider 12 MiB is void; the pool is fully earning
-its keep. The opposite ceiling still holds too: 32 MiB doesn't boot.)
+its keep. The opposite ceiling, 32 MiB not booting, was the device tree copy:
+see the update above.)
 
 **Addendum 2026-08-09 — the pool is held by the app, and it is not a leak.**
 `CmaFree` read **196 kB** with fastcarplay running and *no* CarPlay session,

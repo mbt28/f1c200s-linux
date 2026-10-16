@@ -85,12 +85,15 @@ CONFIG_SUNXI_SRAM=y
 # the DRM dumb buffers / framebuffers). 24 MiB: the 800x480 panel tripled every
 # decode frame (576 KiB NV12) and framebuffer (1.5 MiB), and the previous 16 MiB
 # pool fragmented under wireless CarPlay (cma_alloc -EBUSY, cedrus 'dma alloc of
-# size 589824 failed'). HARD LIMIT: 24 is also the CEILING on this 64 MiB part --
-# 28 and 32 MiB fail the early reservation ('cma: Failed to reserve'; the kernel
-# then boots with ZERO CMA, which is worse). Measured 2026-10-02 with cma= one-shot
-# boots. The ffmpeg patch that right-sizes the coded buffer to ~1 MiB keeps the
-# per-stream footprint small. Need more? Cut buffer counts or use a dedicated VE
-# carveout (docs/ffmpeg-v4l2-request.md) -- do not raise this value.
+# size 589824 failed'). 24 is also the CEILING for any bootloader that leaves
+# the device tree where U-Boot puts it by default -- 28 and 32 MiB fail the early
+# reservation ('cma: Failed to reserve'; the kernel then boots with ZERO CMA,
+# which is worse). Measured 2026-10-02 with cma= one-shot boots. The cause is
+# the device tree copy, not the RAM: see fdt_high in uboot-sdcard.fragment,
+# whose SD boot moves it and passes cma=28M. This value is shared with the NAND
+# boot, whose vendor bootloader does not, so do not raise it here. The ffmpeg
+# patch that right-sizes the coded buffer to ~1 MiB keeps the per-stream
+# footprint small (docs/ffmpeg-v4l2-request.md).
 CONFIG_CMA=y
 CONFIG_DMA_CMA=y
 CONFIG_CMA_SIZE_MBYTES=24
