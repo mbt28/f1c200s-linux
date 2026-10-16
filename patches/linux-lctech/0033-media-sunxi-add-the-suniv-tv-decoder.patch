@@ -18,11 +18,16 @@ Measured on hardware and relied on here:
 - the 3D comb filter keeps a 2 MiB field memory at 0x04c..0x050 and is
   switched as the vendor's BSP_TVD_3D_COMB_Filter() does: 0x048 armed
   (0x04040001, bits 26/18 self-clear), 0x008 bit 0 cleared (2D comb
-  off) and 0x000 bit 4 set; only while streaming, when the memory exists;
-- colour lock depends on the burst gate (0xf10 [23:16] end, [15:8]
-  start, the V40 TVD_CLOCK1 fields): the vendor end value 0x8a never
-  locked colour on a PAL bench camera, which locked for every end value
-  from 0x46 to 0x7c, so the default is 0x60 and both are controls;
+  off) and 0x000 bit 4 set; only while streaming, when the memory exists.
+  It is off by default: with it on, the decoder locking onto a signal
+  overwrote random page-cache pages on the bench (outside the field
+  memory and the capture buffers), so it is an opt-in control;
+- 0xf10 [23:16] (the V40 TVD_CLOCK1 burst gate end) must keep bit 22
+  clear: with it set (0x40..0x7f, 0xc0..0xff) the decoder still reports
+  H/V/colour lock on clean TV-encoder colour bars but outputs per-pixel
+  noise (~60 rms). The vendor's 0x8a is clean (noise ~1, edge jitter
+  0.03 px) and keeps colour down to 10% chroma, so it is the default;
+  start [15:8] and end are controls;
 - 0x00c/0x010 match the V40 enhancement registers: contrast and
   saturation 0x80 = unity gain, so contrast defaults to 0x80 (the
   vendor's 0x68 is 0.8x), and the sharpen enable (0x00c bit 24, set at
@@ -84,7 +89,7 @@ v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 +obj-$(CONFIG_VIDEO_SUN4I_TVD) += sun4i_tvd.o
 --- a/drivers/media/platform/sunxi/sun4i-tvd/sun4i_tvd.c
 +++ b/drivers/media/platform/sunxi/sun4i-tvd/sun4i_tvd.c
-@@ -0,0 +1,1139 @@
+@@ -0,0 +1,1144 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Allwinner suniv (F1C100s/F1C200s) TV decoder (TVD): composite video capture.
@@ -166,7 +171,7 @@ v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 +#define TVD_STATUS_PAL			BIT(16)
 +#define TVD_STATUS_SECAM		BIT(17)
 +#define TVD_STATUS_625			BIT(18)
-+/* burst gate (V40 TVD_CLOCK1 fields): [23:16] end, [15:8] start */
++/* burst gate (V40 TVD_CLOCK1 fields): [23:16] end (bit 22 = noise), [15:8] start */
 +#define TVD_BURST_GATE			0xf10
 +#define TVD_BURST_GATE_END		GENMASK(23, 16)
 +#define TVD_BURST_GATE_START		GENMASK(15, 8)
@@ -716,14 +721,19 @@ v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 +	.qmenu = tvd_blue_screen_menu,
 +};
 +
++/*
++ * Off by default: on the bench, the 3D comb running while the decoder locked
++ * overwrote random page-cache pages, outside its field memory. The name must
++ * not start with a digit, or v4l2-ctl parses it as a control ID.
++ */
 +static const struct v4l2_ctrl_config tvd_comb_ctrl = {
 +	.ops = &tvd_ctrl_ops,
 +	.id = V4L2_CID_SUN4I_TVD_COMB_3D,
-+	.name = "3D Comb Filter",
++	.name = "Comb Filter 3D",
 +	.type = V4L2_CTRL_TYPE_BOOLEAN,
 +	.max = 1,
 +	.step = 1,
-+	.def = 1,
++	.def = 0,
 +};
 +
 +static const char * const tvd_chroma_enh_menu[] = {
@@ -755,9 +765,9 @@ v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 +};
 +
 +/*
-+ * Window after hsync in which the decoder looks for the colour burst. The
-+ * vendor end value (0x8a) never locked colour on a bench camera, which
-+ * locked for every end value from 0x46 to 0x7c: the default is the middle.
++ * Window after hsync in which the decoder looks for the colour burst. End
++ * values with bit 6 set (0x40..0x7f, 0xc0..0xff) make the decoder output
++ * per-pixel noise while it still reports lock; the vendor's 0x8a is clean.
 + */
 +static const struct v4l2_ctrl_config tvd_burst_start_ctrl = {
 +	.ops = &tvd_ctrl_ops,
@@ -776,7 +786,7 @@ v4l2-compliance 1.28.1 -s 30: 80 tests, 0 failures, 0 warnings.
 +	.type = V4L2_CTRL_TYPE_INTEGER,
 +	.max = 255,
 +	.step = 1,
-+	.def = 0x60,
++	.def = 0x8a,
 +};
 +
 +static int tvd_init_ctrls(struct sun4i_tvd *tvd)

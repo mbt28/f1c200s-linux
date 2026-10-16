@@ -1,10 +1,12 @@
 # Composite video input (TVD, TVIN0/TVIN1)
 
-Status (2026-10-15): **driver working on the bench board.** A PAL camera on
-TVIN0 streams through `/dev/video1` (NV12/NV16, 720x576, 25 fps) with H, V and
-colour lock and PAL detected, and `v4l2-compliance -s 30` passes 80/80 tests
-with 0 warnings. The picture quality, colour above all, is limited by the
-prototype wiring (see [Open issues](#6-open-issues)).
+Status (2026-10-16): **driver working on the bench board.** The F1C's own TV
+encoder looped into TVIN0 (PAL colour bars) streams through `/dev/video1`
+(NV12/NV16, 720x576, 25 fps) rock-stable: 100% H/V/colour lock, PAL detected,
+frame-to-frame noise ~1, edge jitter 0.01 px. `v4l2-compliance -s 30` passes
+80/80 tests with 0 warnings. A real camera does not lock yet: the board grounds
+TVIN0 through 75 ohm at the pin, which the decoder's clamp cannot work against
+(see [Open issues](#6-open-issues)).
 
 | Piece | Where |
 |---|---|
@@ -25,7 +27,6 @@ v4l2-ctl -d /dev/video1 -s pal                # or ntsc; not while streaming
 v4l2-ctl -d /dev/video1 -i 1                  # TVIN1
 v4l2-ctl -d /dev/video1 -c contrast=200,brightness=40,saturation=96
 v4l2-ctl -d /dev/video1 -c blue_screen=0      # 0 off, 1 on, 2 auto (no signal)
-v4l2-ctl -d /dev/video1 -c burst_gate_end=96   # if colour does not lock (status "no color")
 v4l2-ctl -d /dev/video1 --set-fmt-video=pixelformat=NV12 \
 	--stream-mmap --stream-count=50 --stream-to=/tmp/cam.nv12
 ```
@@ -40,9 +41,9 @@ v4l2-ctl -d /dev/video1 --set-fmt-video=pixelformat=NV12 \
 | `chroma_gain` | 0..255 (PAL 147, NTSC/PAL-M 138, PAL-Nc/SECAM 220) | `0xF1C` [23:16] | vendor `com_video_set_chrom_gain`; reset per standard on `S_STD` |
 | `chroma_enhance` | menu Off/Mild/Low/Middle/High (Off) | `0x010` bit 16 + [21:20] | vendor `c_peak` = bit 16; strength as V40 `CHROMA_ENHANCE_STRENGTH` |
 | `burst_gate_start` | 0..255 (50) | `0xF10` [15:8] | colour-burst window after hsync (V40 `TVD_CLOCK1`) |
-| `burst_gate_end` | 0..255 (96) | `0xF10` [23:16] | **decides colour lock**: the vendor's 0x8A never locked on the bench camera, 0x46..0x7C all did |
+| `burst_gate_end` | 0..255 (138 = 0x8A) | `0xF10` [23:16] | **keep bit 6 (0x40) clear**: 0x40..0x7F and 0xC0..0xFF make the decoder output per-pixel noise (~60 rms) while it still reports lock. The vendor's 0x8A is clean |
 | `blue_screen` | menu (2 = auto) | `0xF14` [5:4] | auto = blue frame while unlocked (V40 `TVD_MODE`) |
-| `3d_comb_filter` | bool (on) | `0x000` bit 4, `0x008` bit 0, `0x048` | takes effect at the next STREAMON; costs 2 MiB CMA while streaming |
+| `comb_filter_3d` | bool (off) | `0x000` bit 4, `0x008` bit 0, `0x048` | **leave off**: with it on, the decoder locking overwrote random page-cache pages on the bench. Takes effect at the next STREAMON; costs 2 MiB CMA while streaming. (Was `3d_comb_filter`: v4l2-ctl parses names starting with a digit as a control ID, so `-c 3d_comb_filter=0` failed) |
 
 Settings are kept by the driver across opens (until the module is reloaded).
 The decoder is powered and clocked only while the node is open, so the input
@@ -77,7 +78,7 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
 | Offset | Role |
 |---|---|
 | `0x000` | bit 0 decoder enable; **bit 4 3D comb filter enable**; [12:8] pulsed (`0x1F00`) by the vendor init |
-| `0x008` | mode: [14:12] colour standard (0 NTSC, 1 PAL, 2 PAL-M, 3 PAL-Nc, 4 SECAM: the V40 `COLOR_STD` codes); [24] 625 lines; **bit 0 = 2D comb (cleared when the 3D comb runs)** |
+| `0x008` | mode: [14:12] colour standard (0 NTSC, 1 PAL, 2 PAL-M, 3 PAL-Nc, 4 SECAM: the V40 `COLOR_STD` codes); [24] 625 lines; **bit 0 = 2D comb (cleared when the 3D comb runs)**; cleared without the 3D comb running, the output goes blank |
 | `0x00C` | contrast [7:0] (0x80 = 1x), brightness [15:8] (0x20 = 0), sharpness [23:16], sharpen enable [24]; reset 0x01202080 |
 | `0x010` | saturation [7:0] (0x80 = 1x), hue [15:8], chroma enhance enable [16] + strength [21:20] |
 | `0x014` | ? prescaler (`0x20000000`) |
@@ -98,7 +99,7 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
 | `0xE40` | status: 0 no signal, 1 H lock, 2 V lock, 3 chroma lock, 8 progressive, 9/10 H/V non-standard, 16 PAL, 17 SECAM, 18 625 lines, 19 noisy |
 | `0xE44` | ? gain / line-timing estimate (`0x2000_0000` nominal when locked) |
 | `0xF00..F84` | decoder core: the A20 core registers, carrying the V40 core fields in a different arrangement (some with the 16-bit halves swapped, e.g. V40 `HLOCK3` 0x0FE9_502D = F1C `0xF3C` 0x502D_0FE9) |
-| `0xF10` | burst gate: end [23:16], start [15:8] (V40 `TVD_CLOCK1`) |
+| `0xF10` | burst gate: end [23:16], start [15:8] (V40 `TVD_CLOCK1`); **bit 22 set = noise output** (see below) |
 | `0xF14` | [5:4] blue-screen mode (V40 `TVD_MODE`) |
 | `0xF1C` | [23:16] chroma gain |
 | `0xF24` / `0xF28` | AGC gate (V40 `TVD_CLAMP_AGC2`: `0x682` gate begin, `0x64` back porch, `0x40` width) |
@@ -119,11 +120,17 @@ defaults (`F1C100s_info/TVD_TVE/tvd_regs_default.txt`).
   `BSP_TVD_3D_COMB_Filter()`): program `0x04C/0x050/0x054`, arm `0x048 =
   0x04040001`, clear `0x008` bit 0, set `0x000` bit 4; off is the reverse.
   The driver runs it only while streaming, when its 2 MiB memory exists.
-- **Colour lock needs the right burst gate.** With the vendor's `0xF10` end
-  value 0x8A the decoder never locked colour (status "no color", colour killer
-  on, chroma flat at 128). Sweeping the end value on the PAL bench camera:
-  0x30/0x38 no lock, 0x40 28/30, **0x46..0x7C 100%** with PAL detected, 0x84
-  and 0x8A no lock. Default 0x60, exposed as a control.
+- **`0xF10` bit 22 must stay clear.** A bit-by-bit scan of the core
+  registers on the TV-encoder bars found it: with `0xF10` [23:16] in
+  0x40..0x7F or 0xC0..0xFF the decoder reports full lock but outputs
+  per-pixel noise (Y ~62 rms, C ~25 rms, every bit plane random); with
+  0x00..0x3F or 0x80..0xBF the bars are clean (noise ~1, edge jitter
+  0.01-0.03 px, H and chroma DTOs on nominal). 0x20 and the vendor's 0x8A
+  measured the same, also with the bars weakened to 45% amplitude or 10%
+  chroma; the default is 0x8A (the value the standard tables write, and the
+  only one of the two that is a window after the 0x32 start). An earlier
+  default of 0x60, picked because the camera only locked colour with
+  0x46..0x7C, caused all the "noise" reported below for 2026-10-15.
 
 ## 3. Clocking: pll-video fixed at 297 MHz
 
@@ -150,7 +157,7 @@ This matches the vendor Melis setup exactly (PLL_VIDEO `0x93006207`, TVD clock
 |---|---|---|
 | Module | ~18 KB | always (loaded at boot) |
 | Capture buffers, NV12 720x576 | 608 KiB each, 3-4 typical | while streaming |
-| Comb filter field memory | 2 MiB | while streaming with `3d_comb_filter=1` |
+| Comb filter field memory | 2 MiB | while streaming with `comb_filter_3d=1` |
 
 All from the 24 MiB CMA pool shared with cedrus and the display. Running the
 camera *alongside* CarPlay video was not tested; `v4l2-compliance`'s
@@ -185,6 +192,32 @@ Bench gotchas, each of which cost a board hang or reboot:
 
 ## 6. Open issues
 
+### 2026-10-16: decoder clean on a known-good source, camera input still broken
+
+- **TV encoder -> TVIN0** (the TVE's internal PAL colour-bar generator):
+  100% H/V/colour/PAL lock, H DTO (`0xE44`) within +-7 ppm of nominal,
+  noise ~1-2, correct bar colours. The remaining fine vertical stripes in
+  the saturated bars (luma ripple ~14 in magenta, at the 4.43 MHz
+  subcarrier) have the **same phase on every line and in both fields**; a
+  standard PAL signal steps 3/4 cycle per line, which is what a line comb
+  cancels. So the TVE bar generator's subcarrier is line-locked and no comb
+  can remove it; judge Y/C separation on a real PAL source. `0xF44` (comb
+  mode/factors) does not change it.
+- **Camera -> TVIN0** (same settings): the line PLL never tracks the camera.
+  `0xE44` swings +-4.7% (+-47000 ppm) under every `0xE2C` / `0xF10` setting
+  tried; V lock 15-85%, no PAL or colour detect, the picture is dark and
+  rolls, and 14-30% of the time the decoder reports no signal. The vendor
+  clamp (`0xE2C = 0x00110000`) gives no H lock at all. Since the same
+  settings lock the TVE perfectly, this is the input circuit (next section).
+  Most likely: the TVE drives a DC-coupled signal whose sync tips sit above
+  0 V even into the 75 ohm at the pin, while a camera with the usual
+  AC-coupled output is centred on 0 V there, so its sync tips go below
+  ground, which the ADC cannot digitise (not yet measured at the pin).
+- A series capacitor **on the camera side of the pin's 75 ohm** does not help:
+  0.1 uF into 75 ohm is a high-pass with a 7.5 us time constant (~21 kHz),
+  which differentiates a 64 us video line and removes the field sync. The
+  termination has to sit *before* the capacitor (next section).
+
 ### The input circuit: TVIN0 must not be tied to ground at the pin (probable root cause)
 
 On this board TVIN0 has a 75 ohm resistor straight to AGND at the pin (the
@@ -211,8 +244,11 @@ connect the camera straight to the pin (xboot's fix), or, better, terminate the
 camera with 75 ohm to AGND on the camera side and feed the pin through a series
 capacitor (0.1-1 uF), so the pin has no DC path to ground and the internal
 clamp can set the level. Then retest with the vendor values: `0xE2C =
-0x00110000` (the driver currently forces `0x60000000`), burst gate end 0x8A and
-0x60.
+0x00110000` (the driver currently forces `0x60000000`) and burst gate end 0x8A.
+
+(2026-10-16: the "uniformly random luma once PAL locks" below was the burst
+gate end 0x60, not the input; see `0xF10` bit 22 above. The no-signal result
+with the vendor clamp and the line jitter remain input problems.)
 
 Other measured facts from the same session:
 
@@ -259,6 +295,9 @@ re-levels and re-scales the luma once locked from its own sync/black-level
 measurements, which the clamp-off front end makes unreliable.
 
 ### Earlier notes
+
+(The colour noise and the "corrupted luma" in these notes and the D1s section
+above were the burst gate end 0x60 with bit 22 set; see 2026-10-16.)
 
 - **Picture quality (wiring):** dark picture even with contrast at 255, fixed
   vertical bright lines, and line jitter (sheared edges). `0xE30` reads about
