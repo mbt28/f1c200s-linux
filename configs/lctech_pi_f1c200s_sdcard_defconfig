@@ -128,9 +128,11 @@ BR2_PACKAGE_HOST_SUNXI_TOOLS=y
 # libdrm: cedrus decode -> sun4i DEFE atomic NV12+tiled plane (zero-copy KMS).
 BR2_PACKAGE_LIBDRM=y
 
-# FastCarPlay with the mainline-cedrus integration (CedrusDecoder, USE_CEDRUS=1).
-# Enabling CXX forces a one-time full toolchain rebuild; the package pulls in
-# SDL2/openssl/libusb/ffmpeg (v4l2-request hwaccel). Needs USB host for the dongle.
+# FastCarPlay (the app's native branch) with the mainline-cedrus integration
+# (CedrusDecoder, USE_CEDRUS=1) and the Slint UI (USE_SLINT=1). Enabling CXX
+# forces a one-time full toolchain rebuild; the package pulls in slint-cpp
+# (host Rust toolchain), alsa-lib, opus, openssl, libusb and ffmpeg
+# (v4l2-request hwaccel).
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_PACKAGE_FASTCARPLAY=y
 BR2_PACKAGE_I2C_TOOLS=y
@@ -219,8 +221,7 @@ BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y
 BR2_PACKAGE_BLUEZ_ALSA=y
 # tinyalsa + tools (tinymix/tinyplay/tinycap, ~100 KB): S41audio sets up the
 # on-chip codec's mixer at boot (headphone/speaker out, mic in) and they give a
-# tiny on-target test path. alsa-lib is already present via bluez-alsa, and
-# SDL2 is built with its ALSA backend, which is how FastCarPlay plays audio.
+# tiny on-target test path. FastCarPlay plays audio through alsa-lib directly.
 BR2_PACKAGE_TINYALSA=y
 BR2_PACKAGE_TINYALSA_TOOLS=y
 # SoftAP userspace (wireless Android Auto needs the head unit to be the AP,
