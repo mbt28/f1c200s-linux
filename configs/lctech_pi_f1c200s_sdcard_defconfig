@@ -242,6 +242,8 @@ BR2_PACKAGE_OPENTYRIAN=y
 BR2_PACKAGE_OPENTYRIAN_DATA=y
 BR2_PACKAGE_LBREAKOUT2=y
 BR2_PACKAGE_LTRIS=y
+# `game NAME` launcher + vtreset (external package)
+BR2_PACKAGE_GAME_LAUNCHER=y
 # SoftAP userspace (wireless Android Auto needs the head unit to be the AP,
 # and the wireless dev loop rides the same AP): hostapd drives the NG driver's
 # cfg80211 AP mode (compiled in with CONFIG_AP_SUPPORT); dnsmasq hands out the
