@@ -4,9 +4,10 @@ Status (2026-10-16): **driver working on the bench board.** The F1C's own TV
 encoder looped into TVIN0 (PAL colour bars) streams through `/dev/video1`
 (NV12/NV16, 720x576, 25 fps) rock-stable: 100% H/V/colour lock, PAL detected,
 frame-to-frame noise ~1, edge jitter 0.01 px. `v4l2-compliance -s 30` passes
-80/80 tests with 0 warnings. A real camera does not lock yet: the board grounds
-TVIN0 through 75 ohm at the pin, which the decoder's clamp cannot work against
-(see [Open issues](#6-open-issues)).
+80/80 tests with 0 warnings. A PAL composite camera on TVIN0 works in
+FastCarPlay (owner, 2026-10-16); its earlier failure to lock was the camera's
+power input, not the decoder, the driver or the board's input circuit (see
+[Open issues](#6-open-issues)).
 
 | Piece | Where |
 |---|---|
@@ -192,7 +193,7 @@ Bench gotchas, each of which cost a board hang or reboot:
 
 ## 6. Open issues
 
-### 2026-10-16: decoder clean on a known-good source, camera input still broken
+### 2026-10-16: decoder clean on a known-good source; the camera fault was its power
 
 - **TV encoder -> TVIN0** (the TVE's internal PAL colour-bar generator):
   100% H/V/colour/PAL lock, H DTO (`0xE44`) within +-7 ppm of nominal,
@@ -203,22 +204,30 @@ Bench gotchas, each of which cost a board hang or reboot:
   cancels. So the TVE bar generator's subcarrier is line-locked and no comb
   can remove it; judge Y/C separation on a real PAL source. `0xF44` (comb
   mode/factors) does not change it.
-- **Camera -> TVIN0** (same settings): the line PLL never tracks the camera.
+- **Camera -> TVIN0, on a faulty camera power input** (found later the same
+  day; with the power fixed the camera works in FastCarPlay, owner-confirmed).
+  The measurements below are what that fault looked like, and the
+  input-circuit explanation drawn from them was wrong.
+  Then: the line PLL never tracked the camera.
   `0xE44` swings +-4.7% (+-47000 ppm) under every `0xE2C` / `0xF10` setting
   tried; V lock 15-85%, no PAL or colour detect, the picture is dark and
   rolls, and 14-30% of the time the decoder reports no signal. The vendor
   clamp (`0xE2C = 0x00110000`) gives no H lock at all. Since the same
-  settings lock the TVE perfectly, this is the input circuit (next section).
-  Most likely: the TVE drives a DC-coupled signal whose sync tips sit above
-  0 V even into the 75 ohm at the pin, while a camera with the usual
-  AC-coupled output is centred on 0 V there, so its sync tips go below
-  ground, which the ADC cannot digitise (not yet measured at the pin).
-- A series capacitor **on the camera side of the pin's 75 ohm** does not help:
-  0.1 uF into 75 ohm is a high-pass with a 7.5 us time constant (~21 kHz),
-  which differentiates a 64 us video line and removes the field sync. The
-  termination has to sit *before* the capacitor (next section).
+  settings locked the TVE perfectly, it was put down to the input circuit
+  (next section): an AC-coupled camera centred on 0 V by the 75 ohm at the
+  pin, sync tips below ground. Never measured, and not the cause.
+- General note, if a series capacitor is ever added: on the camera side of
+  the pin's 75 ohm it does not work. 0.1 uF into 75 ohm is a high-pass with a
+  7.5 us time constant (~21 kHz), which differentiates a 64 us video line and
+  removes the field sync; the termination has to sit *before* the capacitor.
 
-### The input circuit: TVIN0 must not be tied to ground at the pin (probable root cause)
+### The input circuit: 75 ohm at the TVIN0 pin and the vendor clamp
+
+(2026-10-16: written as the "probable root cause" of the camera not locking,
+before the camera's power input was found to be the fault. The camera works
+with the driver's clamp-off setting, `0xE2C = 0x60000000`; the rework below is
+not known to be needed. What stays measured: with the 75 ohm at the pin the
+vendor clamp setting `0x00110000` gives no signal.)
 
 On this board TVIN0 has a 75 ohm resistor straight to AGND at the pin (the
 reference CherryPi schematic does the same: R38, for an unrouted input). The
