@@ -165,7 +165,82 @@ the app running is normal, not the CMA leak (that was fixed 2026-07-19, patch
 - Shared libs (ffmpeg ~9 MiB on disk) cost only their *used* code pages
   (file-backed, evictable) — not a real RAM lever.
 
-## 4. zram swap — MEASURED AND DECLINED 2026-08-08
+## 4. Swap — SD tier by default since 2026-10-03 (zram opt-in)
+
+**Update 2026-10-03.** The table below was re-measured as this section demands,
+on the 800x480 panel (CMA 24 MiB) with the audio codec enabled and wireless
+CarPlay playing audio — and the numbers no longer look like August:
+
+| | 2026-08-08 | 2026-10-03 | |
+| --- | ---: | ---: | --- |
+| MemAvailable | 23 936 kB | **2–3 MB** | page cache squeezed to 3 MiB |
+| AnonPages | 8 520 kB | **14 MB** | FastCarPlay RSS 12–13 MiB (LVGL UI, bigger frames) |
+| CmaFree (session) | 196 kB / 16 MiB | **0 / 24 MiB** | video owns the whole pool |
+| `pgmajfault` | — | **58 000+** and climbing | code pages re-read from SD on every call |
+| load average | — | **7–12** on one core | D-state tasks waiting on the card |
+
+That is page-cache thrash: with ~28 MiB outside CMA for kernel + 14 MiB anon
++ 8 MiB slab, nothing is left to cache executables, so the UI "freezes
+whenever audio plays" (audio adds a few MiB of library and decoder code to
+the working set exactly when CMA is full). Enabling the zram tier live moved
+2 MiB of idle anonymous memory into 0.85 MiB of compressed RAM within ten
+seconds and CMA free went 0 → 2 MiB; after a minute 5 MiB was swapped and
+AnonPages sat at 9 MiB with the board idle at load 0.2.
+
+**Reverted the same evening.** With zram live the hardware decoder failed
+three times to allocate its CMA buffers (`cedrus: dma alloc of size 1048576
+failed`, ~10 MiB CMA "free" but no contiguous block; `cma: range 0:
++63@65+128@384+137@887…`): zsmalloc's pages are movable allocations that
+land in the CMA pool and did not migrate out. No video is worse than a slow
+UI, so `/etc/swap-disable` ships again and zram stays off. The thrash it had
+papered over was fixed at the source instead (fixed-point AAC decoding in
+FastCarPlay, the kernel diet in §5). Without any swap a session + call still
+OOM-killed the app once, so the SD partition p4 is the candidate tier (no RAM
+involved): `swapon -p 10 /dev/mmcblk0p4` with `vm.swappiness` raised; S02swap
+needs an SD-only mode before that can ship.
+
+**The "freeze" (2026-10-03 evening) and how it was pinned down.** Both the
+slim and the pre-diet kernel "froze Linux" the moment wireless CarPlay started
+video: display stuck, SSH dead, Bluetooth gone. It is not a hang. A heartbeat
+script writing `/proc/meminfo` figures to the serial console every 5 s showed
+the last healthy line at 13.6 MiB available / 52 % idle, then nothing for
+three minutes — and when the line finally came out it carried **35 241 major
+faults** for the interval, load 12.5, page cache 2.6 MiB, 4.2 MiB available.
+Meanwhile the kernel answered pings in 22 ms and printed its own messages:
+only user space was starved, every process faulting its code back in from the
+card. Capping realtime CPU at 30 % changed nothing (no realtime thread is
+involved in the wireless path), and the pre-diet kernel froze identically, so
+neither the kernel diet nor the app's scheduling is the cause: it is the
+memory budget. The sequence was 6 MiB CMA free → the decoder pins the rest →
+anon grows 11 → 14 MiB → cache collapses.
+
+The fix that measured well is the SD tier alone (`swapon -p 10
+/dev/mmcblk0p4`, `vm.swappiness=60`, `vm.page-cluster=3`): a 15-minute video
+session swapped out 3–4 MiB of cold anonymous memory, took **1 600** major
+faults in total, kept 19–25 MiB available and the heartbeat never came late;
+a second 10-minute session with audio closed cleanly; a third ran on the slim
+kernel. `S02swap` therefore brings up p4 by default (`/etc/swap-sd` ships),
+no longer requires zram to be live first, applies the SD tuning when it is the
+only tier, and zram is opt-in (`touch /etc/swap-zram`) because of the CMA
+failures described above. The earlier "never make the card primary swap"
+reasoning assumed the card was otherwise idle; measured, the card is hammered
+far harder by re-reading executables than by parking a few MiB of anon.
+
+Diagnosis toolkit, worth keeping: a persistent serial logger on the Pi (one
+reader only — a second terminal on the same `/dev/ttyUSB0` splits the bytes
+and garbles both), a builtin-only heartbeat on the card (`/root/hb.sh`,
+started by `S98hb`), `S99carplay` keeping the previous run's log as
+`carplay.log.0`, and `CONFIG_MAGIC_SYSRQ_SERIAL` in the kernel so a BREAK can
+request `l`/`t`/`w` dumps when no shell gets CPU.
+
+The second lever is on the kernel command line:
+`snd_soc_core.prealloc_buffer_size_kbytes=64` — the ASoC dmaengine PCM
+preallocates 512 KiB per direction from CMA at boot; 64 KiB covers the
+periods SDL/alsa-lib use and anything larger is grown at hw_params. See
+`docs/audio.md`.
+
+The August measurement, kept for the record:
+
 
 The gate this section used to set ("only worth it if userspace actually hits
 OOM") was finally evaluated on hardware. **It is not met, and swap ships
@@ -196,8 +271,8 @@ rm /etc/swap-disable && touch /etc/swap-sd && reboot   # zram + SD tier
 rm /etc/swap-disable && reboot                         # zram only
 ```
 
-Neither needs a rebuild. **Re-measure the table above before enabling** — if it
-still looks like this, the answer is still no.
+Neither needs a rebuild. The table was re-measured on 2026-10-03 (top of this
+section) and no longer looks like this, which is why the default flipped.
 
 ## 5. Debug instrumentation removed — controlled A/B, 2026-08-09
 
@@ -253,3 +328,46 @@ cleanly, checking for the tracepoints and exiting with a message.
 7. **Still open, and now the largest single lever:** `S45aa-stack` starts
    ~11 MiB of daemons on every boot (§3). Needs a product decision, not a
    cleanup — see the caveat there.
+
+## 5. Kernel diet (2026-10-03)
+
+Where the 64 MiB go: the kernel image is resident uncompressed (zImage is only
+the storage form). Measured on the 6.18.42 build before the diet: `.text`
+7.9 MB, `.data` 2.9 MB (kallsyms tables 1.3 MB, printk ring + descriptors
+0.53 MB, ARM unwind index 0.23 MB), `.bss` 0.2 MB; the boot line's
+"12 964K reserved" is that image plus `mem_map`, page tables and the DTB; CMA
+is the separate 24 MiB. The base config is the multi-SoC sunxi defconfig, so
+about 1.3 MB of text was drivers for hardware this chip or board does not
+have (text per group measured with `size -t <dir>/built-in.a`).
+
+What was dropped, decided group by group (the "Kernel diet" block at the end
+of `board/lctech/pi-f1c200s/linux.fragment`): Lima GPU + DRM scheduler, the
+whole HDMI stack and CEC, the DE2 mixer/TCON-TOP, DSI/LVDS/eDP/DP and dumb
+bridges, libata, EHCI/OHCI, the Realtek and legacy usbnet drivers, the EMAC
+/MDIO/PHY library (plus the XPCS/PHYLINK leftovers that re-selected it),
+mailbox/power-domain/pinctrl blocks of other Allwinner SoCs, thermal/hwmon
+/cpufreq/devfreq/IIO/Allwinner crypto engines, cgroups, namespaces and
+highmem; `LOG_BUF_SHIFT` 17 → 14; `LD_DEAD_CODE_DATA_ELIMINATION=y`.
+
+Kept on purpose: USB mass storage, the SIT tunnel, CSI/camera plumbing, the
+IR receiver, legacy input (resistive TP, LRADC, PS/2), the AXP/AC100 PMIC and
+RTC drivers, `USB_NET_CDC_NCM` (Android NCM tethering), KALLSYMS, the debug
+aids (`IKCONFIG`, `DEBUG_FS`, `SLUB_DEBUG`, `ARM_UNWIND`) and
+`STRICT_KERNEL_RWX`. Note that with `STRICT_KERNEL_RWX` the code section is
+rounded up to 1 MiB ("7168K kernel code" in the boot line either way), so
+text savings only show once `.text` crosses a 1 MiB boundary; rodata, data
+and bss savings show immediately.
+
+Result (same board, same image otherwise): vmlinux text 7.88 → 6.85 MB,
+data 2.94 → 2.06 MB, bss 216 → 85 KB; boot line "available" 27 576 →
+28 308 KB; idle `MemAvailable` 12.2 → 13.0 MB; sysfs nodes 16 979 → 14 548.
+Modules are ABI-bound to the config: after such a change every `.ko` on the
+card (including the out-of-tree `esp32_spi`) must come from the same build,
+or `cfg80211` fails with `Unknown symbol __put_net / page_address`.
+
+Swap status after this day: zram fragments CMA (three `cedrus: dma alloc
+failed` events, all with zram live) and no swap at all OOM-killed the app in
+a call, so `/etc/swap-disable` is back on the card and the reserved SD
+partition p4 is being evaluated as the only tier (`swapon -p 10
+/dev/mmcblk0p4`, `vm.swappiness=100`); S02swap still ties the SD tier to a
+live zram and needs an SD-only mode if the experiment holds.

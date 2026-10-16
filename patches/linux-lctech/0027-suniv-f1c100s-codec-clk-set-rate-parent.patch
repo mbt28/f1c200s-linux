@@ -1,0 +1,25 @@
+clk: sunxi-ng: suniv: let the codec module clock retune PLL_AUDIO
+
+The audio codec's module clock is a plain gate on pll-audio. sun4i-codec
+calls clk_set_rate() on it with 24.576 MHz (48 kHz family) or
+22.5792 MHz (44.1 kHz family); without CLK_SET_RATE_PARENT the gate
+can only answer with whatever pll-audio currently runs at, so the call
+"succeeds" and the DAC/ADC keep running from the boot-time
+PLL_AUDIO (24.57 MHz): every 44.1 kHz stream plays 8.8 % fast and
+sharp (measured on the Lctech Pi: 44.1 kHz material consumed at
+48.0 kframes/s). Propagating the request lets the NM PLL be retuned,
+exactly like the A10 codec gate in ccu-sun4i-a10.c. Nothing else hangs
+off pll-audio on this board (the VE is on pll-ve, patch 0002).
+
+--- a/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
++++ b/drivers/clk/sunxi-ng/ccu-suniv-f1c100s.c
+@@ -313,7 +313,8 @@
+  */
+ static SUNXI_CCU_GATE(ve_clk, "ve", "pll-ve", 0x13c, BIT(31), 0);
+ 
+-static SUNXI_CCU_GATE(codec_clk, "codec", "pll-audio", 0x140, BIT(31), 0);
++static SUNXI_CCU_GATE(codec_clk, "codec", "pll-audio", 0x140, BIT(31),
++		      CLK_SET_RATE_PARENT);
+ 
+ static SUNXI_CCU_GATE(avs_clk, "avs", "osc24M", 0x144, BIT(31), 0);
+ 
