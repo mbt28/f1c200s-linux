@@ -1,0 +1,71 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] lctech f1c200s: CPU OPP table for cpufreq-dt (stock 408, overclock steps to 792 MHz)
+
+Give cpu0 its clock (CLK_CPU) and an operating-points-v2 table so
+cpufreq-dt can switch pll-cpu at runtime: 408 MHz (the chip's stock clock,
+which U-Boot sets) and overclock steps at 528/600/648/720/792 MHz for
+finding the chip's headroom without reflashing the bootloader. The CCU
+already parks the CPU on osc24M while pll-cpu relocks. No voltage
+scaling: the board's core rail is fixed at 1.2 V. The kernel config makes
+the userspace governor the default, so nothing changes until a frequency
+is written to scaling_setspeed.
+---
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c200s-lctech-pi.dts
+@@ -459,3 +459,56 @@
+ 		status = "okay";
+ 	};
+ };
++
++/*
++ * CPU frequency (cpufreq-dt; the board linux.fragment makes the userspace
++ * governor the default, so the CPU stays at the 408 MHz U-Boot sets until a
++ * frequency is written to scaling_setspeed). 408 MHz is the chip's stock
++ * clock; every step above it is an overclock, here for finding this chip's
++ * headroom: reports on the same F1C200s put most chips at ~648 MHz and some
++ * at 720 MHz at stock voltage. No voltage scaling: the board's core rail is
++ * fixed at 1.2 V (EA3036 buck, schematic "CORE 1.2V"). pll-cpu is 24 MHz * N
++ * here, so every step is exact; the CCU parks the CPU on osc24M while the PLL
++ * relocks.
++ */
++&{/cpus/cpu@0} {
++	clocks = <&ccu CLK_CPU>;
++	operating-points-v2 = <&cpu_opp_table>;
++};
++
++/ {
++	cpu_opp_table: opp-table-cpu {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-408000000 {
++			opp-hz = /bits/ 64 <408000000>;
++			clock-latency-ns = <244144>; /* 8 32k periods */
++		};
++
++		opp-528000000 {
++			opp-hz = /bits/ 64 <528000000>;
++			clock-latency-ns = <244144>;
++		};
++
++		opp-600000000 {
++			opp-hz = /bits/ 64 <600000000>;
++			clock-latency-ns = <244144>;
++		};
++
++		opp-648000000 {
++			opp-hz = /bits/ 64 <648000000>;
++			clock-latency-ns = <244144>;
++		};
++
++		opp-720000000 {
++			opp-hz = /bits/ 64 <720000000>;
++			clock-latency-ns = <244144>;
++		};
++
++		opp-792000000 {
++			opp-hz = /bits/ 64 <792000000>;
++			clock-latency-ns = <244144>;
++		};
++	};
++};

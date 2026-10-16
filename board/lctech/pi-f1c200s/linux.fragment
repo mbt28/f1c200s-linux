@@ -553,12 +553,31 @@ CONFIG_ZRAM=m
 # CONFIG_PINCTRL_SUN9I_A80_R is not set
 # CONFIG_PINCTRL_SUN20I_D1 is not set
 
-# Thermal / DVFS / sensors / crypto engines: none of it exists on this chip.
+# Thermal / voltage scaling / sensors / crypto engines: none of it exists on
+# this chip.
 # CONFIG_THERMAL is not set
 # CONFIG_SUN8I_THERMAL is not set
 # CONFIG_HWMON is not set
-# CONFIG_CPU_FREQ is not set
 # CONFIG_PM_DEVFREQ is not set
+
+# CPU frequency switching (no voltage scaling: the board's core rail is fixed
+# at 1.2 V). cpufreq-dt drives pll-cpu from the OPP table in the board DT
+# (patch 0035): 408 MHz stock, overclock steps up to 792 MHz for finding this
+# chip's headroom at runtime. The governor MUST default to userspace: the
+# Kconfig default (schedutil) needs SMP, so a uniprocessor build would fall
+# back to performance and boot straight into the highest, untested OPP.
+# With userspace the CPU stays at U-Boot's 408 MHz until a frequency is
+# written to scaling_setspeed.
+CONFIG_CPU_FREQ=y
+CONFIG_CPU_FREQ_STAT=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_USERSPACE=y
+CONFIG_CPU_FREQ_GOV_USERSPACE=y
+CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+# CONFIG_CPU_FREQ_GOV_POWERSAVE is not set
+# CONFIG_CPU_FREQ_GOV_ONDEMAND is not set
+# CONFIG_CPU_FREQ_GOV_CONSERVATIVE is not set
+CONFIG_CPUFREQ_DT=y
+CONFIG_CPUFREQ_DT_PLATDEV=y
 # CONFIG_IIO is not set
 # CONFIG_CRYPTO_DEV_ALLWINNER is not set
 
