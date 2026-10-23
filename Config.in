@@ -7,6 +7,8 @@ source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/fastcarplay/Config.in"
 # Slint UI toolkit for fastcarplay (static lib + host slint-compiler).
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/slint-cpp/Config.in"
+# LIVI (CarPlay / Android Auto head unit), Slint UI on DRM; selects what it needs.
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/livi/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"
 # Free Doom IWADs for prboom (SD card image only, see external.mk).
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/freedoom/Config.in"

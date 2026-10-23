@@ -1,0 +1,56 @@
+config BR2_PACKAGE_LIVI
+	bool "LIVI"
+	# nusb, its USB hotplug for phones, dongles and wired CarPlay, only hears
+	# the events udevd re-broadcasts
+	depends on BR2_PACKAGE_HAS_UDEV
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_FFMPEG_ARCH_SUPPORTS # the UI decodes the video
+	depends on BR2_TOOLCHAIN_HAS_THREADS # gstreamer1, ffmpeg
+	depends on BR2_USE_WCHAR # gstreamer1 -> libglib2
+	depends on BR2_USE_MMU # gstreamer1 -> libglib2, sudo
+	depends on !BR2_STATIC_LIBS # gstreamer plugins, dlopen(fontconfig)
+	# livi-core starts its root helper with `sudo -n`
+	select BR2_PACKAGE_SUDO
+	# gst-host: audio, and handing the phone's video to the UI
+	select BR2_PACKAGE_GSTREAMER1
+	select BR2_PACKAGE_GST1_PLUGINS_BASE
+	select BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_APP
+	select BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_ALSA
+	# gst-host lists cameras with GStreamer's v4l2 device monitor (gudev for
+	# hotplug, since udev is there); without it LIVI has no Camera tab
+	select BR2_PACKAGE_GST1_PLUGINS_GOOD
+	select BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_V4L2
+	# the UI links libavcodec for the V4L2 stateless decoder (v4l2-request)
+	select BR2_PACKAGE_FFMPEG
+	# native CarPlay
+	select BR2_PACKAGE_OPENSSL
+	# the UI embeds a Roboto subset; the rest of its text (glyphs Roboto lacks,
+	# monospace rows) comes from the system through fontconfig
+	select BR2_PACKAGE_FONTCONFIG
+	select BR2_PACKAGE_DEJAVU
+	select BR2_PACKAGE_DEJAVU_SANS
+	select BR2_PACKAGE_DEJAVU_MONO
+	help
+	  LIVI, the CarPlay and Android Auto head unit, ported to small
+	  boards without a GPU: the Slint UI draws on DRM/KMS with the
+	  software renderer, and decodes the phone's video itself on a V4L2
+	  stateless decoder (cedrus) through ffmpeg's v4l2-request hwaccel.
+
+	  Installs to /opt/livi; /opt/livi/start.sh runs it as a user with
+	  passwordless sudo (livi-core reaches its root helper through
+	  `sudo -n`).
+
+	  The board provides the rest: ffmpeg built with v4l2-request
+	  (BR2_PACKAGE_FFMPEG_EXTRACONF), a kernel with the DRM driver and
+	  the stateless decoder, and BlueZ for anything over Bluetooth. The
+	  kernel options the package itself needs are applied through
+	  LINUX_CONFIG_FIXUPS.
+
+	  https://github.com/f-io/LIVI
+
+comment "LIVI needs udev /dev management and a toolchain w/ threads, wchar, dynamic library"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	depends on BR2_PACKAGE_FFMPEG_ARCH_SUPPORTS
+	depends on BR2_USE_MMU
+	depends on !BR2_PACKAGE_HAS_UDEV || !BR2_TOOLCHAIN_HAS_THREADS || \
+		!BR2_USE_WCHAR || BR2_STATIC_LIBS

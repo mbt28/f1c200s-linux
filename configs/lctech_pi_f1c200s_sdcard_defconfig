@@ -23,6 +23,17 @@ BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 # their sole access is the serial console. Dropbear also runs with -s (see
 # rootfs-overlay/etc/default/dropbear) so it refuses password auth outright.
 BR2_TARGET_GENERIC_ROOT_PASSWD="*"
+# /dev is devtmpfs + eudev. LIVI expects udev: nusb (its USB hotplug for phones,
+# dongles and wired CarPlay) only hears udevd's netlink group, and libgudev /
+# GStreamer's v4l2codecs need a udev provider. eudev also supplies libudev for
+# ffmpeg's v4l2-request (it replaced libudev-zero). Cost: udevd is resident
+# (~1 MiB RSS). The kernel uevent helper S46usb0-up uses keeps working beside
+# it: S10udevd clears /proc/sys/kernel/hotplug at boot and S46 sets it later.
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+# The f1c user: auto-login on the serial console, passwordless sudo (LIVI runs
+# as a user and reaches root through `sudo -n`). See board/.../users.table and
+# rootfs-overlay/etc/sudoers.d/f1c.
+BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/users.table"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
 # Space-separated LIST. genimage.sh builds sdcard.img; post-image-nand.sh then
 # builds kernel.itb and the NAND bundle. NOTE both receive the SAME
@@ -143,11 +154,26 @@ BR2_PACKAGE_I2C_TOOLS=y
 # resident RAM.
 BR2_PACKAGE_LIBV4L=y
 BR2_PACKAGE_LIBV4L_UTILS=y
-BR2_PACKAGE_LIBUDEV_ZERO=y
 # Dropbear SSH server for the dev loop: push a binary + ssh-run tests over the
 # AP (or the USB-hub DM9601 ethernet), no reflashing. Key auth via overlay
 # authorized_keys; password auth refused (-s) and root's password is locked.
 BR2_PACKAGE_DROPBEAR=y
+# LIVI (package/livi) in /opt/livi, beside FastCarPlay: /opt/livi/start.sh swaps
+# them. It selects what it needs -- sudo, GStreamer (gst-host: audio, and handing
+# the phone's video to the UI), ffmpeg, OpenSSL, and fontconfig with DejaVu Sans
+# and Mono (the UI embeds only a Roboto subset; glyphs it lacks and the
+# monospace rows come from the system) -- and depends on udev (above).
+BR2_PACKAGE_LIVI=y
+# Selecting DejaVu turns every family on; LIVI uses Sans and Mono only (~2.5 MiB
+# of flash saved).
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
+# gst1-plugins-good is there only for its v4l2 plugin (gst-host lists cameras
+# with GStreamer's device monitor); these default plugins are not used.
+# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_AVI is not set
+# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_ISOMP4 is not set
+# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_WAVPARSE is not set
 # OpenSSH is enabled ONLY for /usr/libexec/sftp-server, which is the exact path
 # dropbear already exec's for SFTP -- today `scp` fails with
 # "sh: line 0: /usr/libexec/sftp-server: not found" and only `scp -O` (legacy

@@ -1,19 +1,23 @@
 #!/bin/sh
 #
-# Auto-login as root (no prompt) on the serial console (ttyS0) only. The LCD has
+# Auto-login as f1c (no prompt) on the serial console (ttyS0) only. The LCD has
 # no text console (FRAMEBUFFER_CONSOLE disabled) — the panel is owned by the
-# video — so there is no tty1 getty. Uses busybox's canonical login-shell form
-# (`-/bin/sh`), which busybox init runs as a root login shell.
+# video — so there is no tty1 getty. busybox `login -f` starts f1c's login
+# shell without asking for a password (f1c's is locked, as root's is); root is
+# `sudo` away (rootfs-overlay/etc/sudoers.d/f1c), which keeps a board whose
+# passwords are all locked recoverable from the console.
 # Deterministic / idempotent: drop any existing lines, then add ours.
 #
 set -e
 TARGET_DIR="$1"
 INITTAB="${TARGET_DIR}/etc/inittab"
 
-sed -i '/^ttyS0::respawn:/d; /^tty1::respawn:/d' "${INITTAB}"
-echo ''                                    >> "${INITTAB}"
-echo '# Auto-login as root (serial console)' >> "${INITTAB}"
-echo 'ttyS0::respawn:-/bin/sh'             >> "${INITTAB}"
+sed -i '/^ttyS0::respawn:/d; /^tty1::respawn:/d; /^# Auto-login as /d' "${INITTAB}"
+echo '# Auto-login as f1c (serial console)' >> "${INITTAB}"
+echo 'ttyS0::respawn:/bin/login -f f1c'    >> "${INITTAB}"
+
+# sudo ignores a drop-in that is not 0440; git does not keep that mode.
+chmod 0440 "${TARGET_DIR}/etc/sudoers.d/f1c"
 
 # Logs live on their own SD-card partition (p3), never in the rootfs -- see the
 # rationale in genimage-sdcard.cfg. Buildroot's skeleton ships /var/log as a
@@ -82,8 +86,9 @@ printf '/dev/mmcblk0p4\tnone\tswap\tnoauto,pri=10\t0\t0\n' >> "${FSTAB}"
 # "*" matches no input, so password login is impossible while public-key auth is
 # unaffected. This is NOT an empty field, which would mean passwordless root.
 # The serial console is unaffected because it is not a getty: inittab runs
-# `-/bin/sh` directly (see the auto-login block above), so it never authenticates
-# -- which is what keeps a locked board recoverable.
+# `login -f f1c` (see the auto-login block above), which never authenticates,
+# and f1c reaches root through sudo -- which is what keeps a locked board
+# recoverable.
 SHADOW="${TARGET_DIR}/etc/shadow"
 sed -i 's|^root:[^:]*:|root:*:|' "${SHADOW}"
 if ! grep -q '^root:\*:' "${SHADOW}"; then

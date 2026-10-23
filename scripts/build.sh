@@ -18,13 +18,16 @@ OUT="$HERE/$OUTPUT_DIR"
 
 # Buildroot's ffmpeg.mk has no udev knob, but we force --enable-libudev (the
 # v4l2-request hwaccel enumerates /dev/mediaX via libudev). Without a declared
-# dependency, a clean parallel build can configure ffmpeg before libudev-zero is
-# staged -> "libudev not found using pkg-config". Inject the build-order dep.
+# dependency, a clean parallel build can configure ffmpeg before libudev is
+# staged -> "libudev not found using pkg-config". Inject the build-order dep on
+# whichever provides it: eudev (the "udev" virtual package) or libudev-zero.
 # (external.mk is included after package/*/*.mk, so it can't add this itself.)
+# A tree patched by the libudev-zero-only line gets it replaced.
 FFMK="$BR/package/ffmpeg/ffmpeg.mk"
-if [ -f "$FFMK" ] && ! grep -q 'f1c200s-udev-fix' "$FFMK"; then
-	echo ">>> patch ffmpeg.mk: add libudev-zero build-order dependency"
-	sed -i '/eval .*autotools-package/i FFMPEG_DEPENDENCIES += $(if $(BR2_PACKAGE_LIBUDEV_ZERO),libudev-zero) # f1c200s-udev-fix' "$FFMK"
+if [ -f "$FFMK" ] && ! grep -q 'f1c200s-udev-fix-2' "$FFMK"; then
+	echo ">>> patch ffmpeg.mk: add the libudev build-order dependency"
+	sed -i '/f1c200s-udev-fix/d' "$FFMK"
+	sed -i '/eval .*autotools-package/i FFMPEG_DEPENDENCIES += $(if $(BR2_PACKAGE_HAS_UDEV),udev) $(if $(BR2_PACKAGE_LIBUDEV_ZERO),libudev-zero) # f1c200s-udev-fix-2' "$FFMK"
 fi
 
 MAKE=(make -C "$BR" BR2_EXTERNAL="$HERE" O="$OUT")
