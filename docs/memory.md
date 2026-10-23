@@ -186,6 +186,27 @@ the app running is normal, not the CMA leak (that was fixed 2026-07-19, patch
 
 ## 4. Swap — SD tier by default since 2026-10-03 (zram opt-in)
 
+**Update 2026-10-23: two settings undid this section.** Measured with LIVI in a
+wired CarPlay session (CMA 28 MiB):
+
+- **Raised watermarks.** `vm.min_free_kbytes=4096` and
+  `vm.watermark_scale_factor=200` made kswapd keep 6.1 MiB free. kswapd counts
+  only memory outside CMA towards that: `pgdat_balanced()` passes
+  `alloc_flags` 0, so free CMA pages are unusable to it. Re-read code goes into
+  CMA first (`__rmqueue` prefers CMA while it holds more than half of free
+  memory), and kswapd evicts it again from wherever it sits.
+- **The result:** about 12 MiB free while 20-40 MB of executables were re-read
+  from the card every 30 s (5 000-10 000 file refaults, 7 000-14 000 kswapd
+  scans).
+- **With the kernel's defaults** (about 900 kB / 10): 0 refaults, 0 major
+  faults and 0 kswapd scans per 30 s. A new session's decoder buffers were
+  still allocated with CMA free at 0. Both lines are gone from
+  `/etc/sysctl.conf`.
+- **The script ran in the wrong order.** As `S02swap` it sorted before
+  busybox's `S02sysctl`, which re-applies `/etc/sysctl.conf` (zram values:
+  swappiness 10, page-cluster 0). So the SD tuning described below never
+  survived a boot. Renamed to `S03swap`.
+
 **Update 2026-10-03.** The table below was re-measured as this section demands,
 on the 800x480 panel (CMA 24 MiB) with the audio codec enabled and wireless
 CarPlay playing audio — and the numbers no longer look like August:
@@ -215,7 +236,7 @@ UI, so `/etc/swap-disable` ships again and zram stays off. The thrash it had
 papered over was fixed at the source instead (fixed-point AAC decoding in
 FastCarPlay, the kernel diet in §5). Without any swap a session + call still
 OOM-killed the app once, so the SD partition p4 is the candidate tier (no RAM
-involved): `swapon -p 10 /dev/mmcblk0p4` with `vm.swappiness` raised; S02swap
+involved): `swapon -p 10 /dev/mmcblk0p4` with `vm.swappiness` raised; S03swap
 needs an SD-only mode before that can ship.
 
 **The "freeze" (2026-10-03 evening) and how it was pinned down.** Both the
@@ -238,7 +259,7 @@ The fix that measured well is the SD tier alone (`swapon -p 10
 session swapped out 3–4 MiB of cold anonymous memory, took **1 600** major
 faults in total, kept 19–25 MiB available and the heartbeat never came late;
 a second 10-minute session with audio closed cleanly; a third ran on the slim
-kernel. `S02swap` therefore brings up p4 by default (`/etc/swap-sd` ships),
+kernel. `S03swap` therefore brings up p4 by default (`/etc/swap-sd` ships),
 no longer requires zram to be live first, applies the SD tuning when it is the
 only tier, and zram is opt-in (`touch /etc/swap-zram`) because of the CMA
 failures described above. The earlier "never make the card primary swap"
@@ -282,7 +303,7 @@ because most of those 8.5 MiB are hot — while spending CPU on the single
 still: card wear for a tier these numbers say would never be reached.
 
 The machinery exists and is tested, so this is a decision rather than a
-limitation: `rootfs-overlay/etc/init.d/S02swap`, `/etc/sysctl.conf`, busybox
+limitation: `rootfs-overlay/etc/init.d/S03swap`, `/etc/sysctl.conf`, busybox
 `swapon -p` support, and a reserved 64 MiB p4 (type 0x82). To enable:
 
 ```sh
@@ -388,5 +409,5 @@ Swap status after this day: zram fragments CMA (three `cedrus: dma alloc
 failed` events, all with zram live) and no swap at all OOM-killed the app in
 a call, so `/etc/swap-disable` is back on the card and the reserved SD
 partition p4 is being evaluated as the only tier (`swapon -p 10
-/dev/mmcblk0p4`, `vm.swappiness=100`); S02swap still ties the SD tier to a
+/dev/mmcblk0p4`, `vm.swappiness=100`); S03swap still ties the SD tier to a
 live zram and needs an SD-only mode if the experiment holds.

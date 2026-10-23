@@ -27,8 +27,11 @@
 # decompress. The same fault against the SD card costs 5-50 ms AND contends
 # with the rootfs on the same physical card.
 #
-# Runs at S02: after S01logs (so /var/log exists and the log persists) and long
-# before S20cedrus/S99carplay. Nothing here may ever fail the boot.
+# Runs at S03: after S01logs (so /var/log exists and the log persists), long
+# before S20cedrus/S99carplay, and AFTER busybox's S02sysctl. S02sysctl
+# re-applies /etc/sysctl.conf, which is written for zram; as S02swap this script
+# sorted before it, so the SD tuning below was undone on every boot until
+# 2026-10-23. Nothing here may ever fail the boot.
 #
 # Escape hatches, none needing a reflash:
 #   touch /etc/swap-disable   -> no swap at all
@@ -36,7 +39,7 @@
 #                                CMA allocations on this board, see above)
 #   rm /etc/swap-sd           -> no SD tier
 #   /etc/default/swap         -> override sizes/algorithm/priorities
-#   S02swap stop | start      -> live A/B without rebooting
+#   S03swap stop | start      -> live A/B without rebooting
 LOG=/var/log/swap.log
 ZRAM_SIZE=24M         # logical swap advertised (~0.5x MemTotal)
 ZRAM_MEM_LIMIT=16M    # HARD cap on physical RAM zsmalloc may hold

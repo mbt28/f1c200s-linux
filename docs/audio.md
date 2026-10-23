@@ -113,7 +113,7 @@ tree:
   (`board/lctech/pi-f1c200s/uboot-sdcard.fragment`, SD and NAND branches):
   the ASoC dmaengine PCM otherwise preallocates 512 KiB per direction from
   CMA at boot, i.e. ~1 MiB of decoder memory held hostage by idle audio.
-* zram swap (`S02swap`, zram tier only). It was measured and declined in
+* zram swap (`S03swap`, zram tier only). It was measured and declined in
   August at 24 MiB available / 8.5 MiB anonymous; with audio + the 800x480
   display the numbers are 2–3 MiB / 14 MiB, and enabling it live moved
   2 MiB of idle FastCarPlay memory into 0.85 MiB of compressed RAM within

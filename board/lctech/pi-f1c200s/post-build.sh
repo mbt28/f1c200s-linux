@@ -64,10 +64,10 @@ printf 'tmpfs\t/tmp\ttmpfs\tmode=1777,size=8M,noatime\t0\t0\n'                  
 printf 'tmpfs\t/run\ttmpfs\tmode=0755,nosuid,nodev,size=2M,noatime\t0\t0\n'     >> "${FSTAB}"
 printf 'tmpfs\t/dev/shm\ttmpfs\tmode=1777,size=4M,noatime\t0\t0\n'              >> "${FSTAB}"
 
-# SD swap (p4), emergency backstop only -- see S02swap and genimage-sdcard.cfg.
+# SD swap (p4), emergency backstop only -- see S03swap and genimage-sdcard.cfg.
 # noauto is LOAD-BEARING: the partition ships unformatted (genimage has no swap
 # handler), so sysinit's `swapon -a` would fail EINVAL and print to the console.
-# S02swap does mkswap + `swapon -p 10` instead. busybox swapon honours noauto,
+# S03swap does mkswap + `swapon -p 10` instead. busybox swapon honours noauto,
 # and `swapoff -a` still covers it because it walks /proc/swaps first.
 # busybox `mount -a` skips swap-type entries, so this is inert at sysinit.
 sed -i '\#^/dev/mmcblk0p4#d' "${FSTAB}"
@@ -281,7 +281,7 @@ if [ -n "${KCONFIG}" ]; then
 	# "=y" exactly and would pass a silently-missing module straight through.
 	if ! grep -q "^CONFIG_ZRAM=[ym]\$" "${KCONFIG}"; then
 		echo "ERROR: CONFIG_ZRAM missing from ${KCONFIG}" >&2
-		echo "       /etc/init.d/S02swap modprobes zram for the primary swap tier;" >&2
+		echo "       /etc/init.d/S03swap modprobes zram for the primary swap tier;" >&2
 		echo "       without it the board silently runs with no swap at all." >&2
 		echo "       Fix: board/lctech/pi-f1c200s/linux.fragment" >&2
 		exit 1
@@ -304,7 +304,7 @@ if [ -n "${KCONFIG}" ]; then
 	done
 fi
 
-# swapon -p must really be compiled in, or S02swap cannot rank zram above the SD
+# swapon -p must really be compiled in, or S03swap cannot rank zram above the SD
 # card and the priority policy silently inverts -- the failure mode being
 # "video stutters sometimes", the worst class of bug on this board. A busybox
 # version bump that renames the symbol should fail the build, not ship.
@@ -313,7 +313,7 @@ for d in "${BUILD_DIR}"/busybox-*; do
 	if ! grep -q "^CONFIG_FEATURE_SWAPON_PRI=y\$" "${d}/.config"; then
 		echo "ERROR: CONFIG_FEATURE_SWAPON_PRI missing from ${d}/.config" >&2
 		echo "       Without it busybox swapon rejects -p outright (bb_show_usage)," >&2
-		echo "       so S02swap cannot put zram above the SD swap." >&2
+		echo "       so S03swap cannot put zram above the SD swap." >&2
 		echo "       Fix: board/lctech/pi-f1c200s/busybox.fragment + the" >&2
 		echo "       BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES line in the defconfig." >&2
 		exit 1

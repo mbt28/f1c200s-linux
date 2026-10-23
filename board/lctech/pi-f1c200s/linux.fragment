@@ -458,7 +458,7 @@ CONFIG_DEBUG_FS=y
 CONFIG_IKCONFIG=y
 CONFIG_IKCONFIG_PROC=y
 
-# zram: compressed swap in RAM, driven by rootfs-overlay/etc/init.d/S02swap.
+# zram: compressed swap in RAM, driven by rootfs-overlay/etc/init.d/S03swap.
 # ONE line is genuinely all that is needed. ZRAM is a tristate that selects
 # ZSMALLOC, and ZRAM_BACKEND_FORCE_LZO is a def_bool that fires when no other
 # backend is chosen, giving lzo-rle as ZRAM_DEF_COMP. Do NOT add CONFIG_CRYPTO_*

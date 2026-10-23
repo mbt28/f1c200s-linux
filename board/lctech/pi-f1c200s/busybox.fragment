@@ -1,6 +1,6 @@
 # Merged over Buildroot's package/busybox/busybox.config.
 #
-# swapon -p is REQUIRED by rootfs-overlay/etc/init.d/S02swap. Without it
+# swapon -p is REQUIRED by rootfs-overlay/etc/init.d/S03swap. Without it
 # busybox's swapon does not accept -p at all -- it is absent from OPTSTR_SWAPON
 # and the call dies via bb_show_usage(), it does not silently ignore the flag.
 #
