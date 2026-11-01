@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sun, 1 Nov 2026 00:00:00 +0000
+Subject: [PATCH] video: sunxi: support VIDEO_COPY
+
+The display engine scans the framebuffer U-Boot draws into. A redraw of
+the whole screen, such as the configuration editor's (cedit) on every
+key press, first fills the screen with the background and then draws the
+scene. At 800x480x4 the fill is 1.5 MiB, far more than the ARM926's
+16 KiB data cache, so most of it reaches DRAM before the scene is drawn
+and the panel shows the blank screen in between: the form flickers on
+every key.
+
+Support VIDEO_COPY: reserve a second buffer of the same size, let the
+display scan that one, and let video_sync() copy only the finished,
+changed area into it. Without VIDEO_COPY nothing changes.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+ drivers/video/sunxi/sunxi_display.c | 15 ++++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+--- a/drivers/video/sunxi/sunxi_display.c
++++ b/drivers/video/sunxi/sunxi_display.c
+@@ -1215,7 +1215,15 @@
+ 	       sunxi_get_mon_desc(sunxi_display->monitor),
+ 	       overscan_x, overscan_y);
+ 
+-	sunxi_display->fb_addr = plat->base;
++	/*
++	 * With VIDEO_COPY, U-Boot draws into plat->base and video_sync()
++	 * copies the finished, changed area into plat->copy_base, so the
++	 * display must scan the copy: it then never shows a half-drawn frame.
++	 */
++	if (IS_ENABLED(CONFIG_VIDEO_COPY) && plat->copy_base)
++		sunxi_display->fb_addr = plat->copy_base;
++	else
++		sunxi_display->fb_addr = plat->base;
+ 	sunxi_engines_init();
+ 
+ #ifdef CONFIG_EFI_LOADER
+@@ -1259,6 +1267,10 @@
+ 		plat->size = LCD_MAX_WIDTH * LCD_MAX_HEIGHT *
+ 			     VNBYTES(LCD_MAX_LOG2_BPP);
+ 
++	/* A second buffer of the same size for the display to scan */
++	if (IS_ENABLED(CONFIG_VIDEO_COPY))
++		plat->copy_size = plat->size;
++
+ 	return 0;
+ }
+ 

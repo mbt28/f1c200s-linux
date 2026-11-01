@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sun, 1 Nov 2026 00:00:00 +0000
+Subject: [PATCH] arm: dts: lctech-pi: theme for the configuration editor
+
+`cedit run` reads its theme from /bootstd/cedit-theme and warns "No
+theme found" without one. Its default title margin of 0 puts each
+setting's value right after the longest title, so the two run into each
+other. Add the node with a 32-pixel margin.
+
+U-Boot includes only the first matching -u-boot.dtsi, so the board file
+includes sunxi-u-boot.dtsi itself.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+--- a/arch/arm/dts/suniv-f1c200s-lctech-pi-u-boot.dtsi
++++ b/arch/arm/dts/suniv-f1c200s-lctech-pi-u-boot.dtsi
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * U-Boot additions for the Lctech Pi F1C200s. Only the first matching
++ * -u-boot.dtsi is included, so this one pulls in the sunxi one itself.
++ */
++
++#include "sunxi-u-boot.dtsi"
++
++/ {
++	bootstd {
++		/*
++		 * Theme for the boot settings form (cedit). The value column
++		 * starts menu-title-margin-x pixels after the longest title;
++		 * the default of 0 makes the two touch.
++		 */
++		cedit-theme {
++			menu-title-margin-x = <32>;
++		};
++	};
++};

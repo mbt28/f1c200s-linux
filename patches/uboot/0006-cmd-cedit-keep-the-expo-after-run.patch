@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sun, 1 Nov 2026 00:00:00 +0000
+Subject: [PATCH] cmd: cedit: keep the expo after 'cedit run'
+
+'cedit run' destroys the expo when the user picks "Save", so the
+command that saves the choices,
+
+    cedit run && cedit write_env
+
+finds nothing loaded ("No expo loaded") and the choices are lost. The
+same goes for write_fdt and write_cmos. Seen on the Lctech Pi F1C200s:
+the settings file written after a save came out empty.
+
+Keep the expo after a run and free it when 'cedit load' replaces it.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+--- a/cmd/cedit.c
++++ b/cmd/cedit.c
+@@ -62,6 +62,9 @@
+ 		return CMD_RET_FAILURE;
+ 	}
+ 
++	/* the previous expo stays loaded after 'cedit run'; drop it here */
++	if (cur_exp)
++		expo_destroy(cur_exp);
+ 	cur_exp = exp;
+ 
+ 	return 0;
+@@ -287,9 +290,12 @@
+ 		log_err("Failed (err=%dE)\n", ret);
+ 		return CMD_RET_FAILURE;
+ 	}
+-	expo_destroy(cur_exp);
+-	cur_exp = NULL;
+ 
++	/*
++	 * Keep the expo: the user's choices live in it, and 'cedit write_env'
++	 * (or write_fdt / write_cmos) after a successful run is how they are
++	 * saved. The next 'cedit load' frees it.
++	 */
+ 	return 0;
+ }
+ 
