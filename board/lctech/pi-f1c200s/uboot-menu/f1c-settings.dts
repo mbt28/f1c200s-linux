@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Boot settings form for U-Boot's configuration editor (cedit), shown by the
+ * boot menu's "Settings" entry. post-build.sh builds it with U-Boot's
+ * tools/expo.py into f1c-settings.dtb on the boot partition; f1c-boot.cmd
+ * turns the saved choices into kernel arguments. The first item of each menu
+ * is the default. The boot script matches the item LABELS, so change a label
+ * here and in f1c-boot.cmd together.
+ */
+
+/dts-v1/;
+
+/ {
+	dynamic-start = <ID_DYNAMIC_START>;
+
+	scenes {
+		main {
+			id = <ID_SCENE>;
+			title-id = <ID_SCENE_TITLE>;
+			prompt = "UP/DOWN: move   ENTER: open or pick   ESC: back";
+
+			cpu {
+				type = "menu";
+				id = <ID_CPU>;
+				title = "CPU speed (MHz)";
+				item-label = "408", "528", "600", "648", "720",
+					"792";
+				item-id = <ID_CPU_408 ID_CPU_528 ID_CPU_600
+					ID_CPU_648 ID_CPU_720 ID_CPU_792>;
+			};
+
+			safe {
+				type = "menu";
+				id = <ID_SAFE>;
+				title = "Safe mode (408 MHz, no app)";
+				item-label = "Off", "On";
+				item-id = <ID_SAFE_OFF ID_SAFE_ON>;
+			};
+
+			loglevel {
+				type = "menu";
+				id = <ID_LOG>;
+				title = "Kernel messages";
+				item-label = "Normal", "Quiet", "Verbose";
+				item-id = <ID_LOG_NORMAL ID_LOG_QUIET
+					ID_LOG_VERBOSE>;
+			};
+
+			bootsrc {
+				type = "menu";
+				id = <ID_SRC>;
+				title = "Boot from";
+				item-label = "Auto (SD, then NAND)", "SD card",
+					"NAND";
+				item-id = <ID_SRC_AUTO ID_SRC_SD ID_SRC_NAND>;
+			};
+
+			save {
+				type = "menu";
+				id = <ID_SAVE>;
+				title = "Save and exit";
+				item-label = "Save";
+				item-id = <ID_SAVE_ITEM>;
+			};
+
+			discard {
+				type = "menu";
+				id = <ID_DISCARD>;
+				title = "Exit without saving";
+				item-label = "Exit";
+				item-id = <ID_DISCARD_ITEM>;
+			};
+		};
+	};
+
+	strings {
+		title {
+			id = <ID_SCENE_TITLE>;
+			value = "F1C200s boot settings";
+		};
+	};
+};

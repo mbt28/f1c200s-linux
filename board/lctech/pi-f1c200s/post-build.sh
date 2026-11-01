@@ -325,3 +325,22 @@ for d in "${BUILD_DIR}"/busybox-*; do
 	fi
 	break
 done
+
+# Boot menu files for the FAT boot partition (genimage-sdcard.cfg lists them):
+# the U-Boot script that builds the kernel arguments, and the settings form,
+# which U-Boot's own tools/expo.py compiles. Both come from uboot-menu/ and are
+# read by the PREBOOT in uboot-sdcard.fragment. The U-Boot source tree is the
+# configured version's, not whichever uboot-* happens to be in BUILD_DIR.
+MENU_DIR="$(cd "$(dirname "$0")" && pwd)/uboot-menu"
+UBOOT_VER="$(sed -n 's/^BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="\(.*\)"$/\1/p' "${BR2_CONFIG}")"
+UBOOT_SRC="${BUILD_DIR}/uboot-${UBOOT_VER}"
+if [ ! -f "${UBOOT_SRC}/tools/expo.py" ]; then
+	echo "ERROR: ${UBOOT_SRC}/tools/expo.py not found -- cannot build the boot settings form" >&2
+	exit 1
+fi
+"${HOST_DIR}/bin/mkimage" -A arm -T script -C none -n "f1c200s boot menu" \
+	-d "${MENU_DIR}/f1c-boot.cmd" "${BINARIES_DIR}/f1c-boot.scr" >/dev/null
+# expo.py runs dtc from PATH and reads include/expo.h relative to its cwd.
+(cd "${UBOOT_SRC}" && PATH="${HOST_DIR}/bin:${PATH}" python3 tools/expo.py \
+	-e "${MENU_DIR}/f1c-settings-ids.h" -l "${MENU_DIR}/f1c-settings.dts" \
+	-o "${BINARIES_DIR}/f1c-settings.dtb")

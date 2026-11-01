@@ -1,0 +1,51 @@
+#!/bin/sh
+# Apply the boot settings chosen in U-Boot's boot menu (Settings form, see
+# board/lctech/pi-f1c200s/uboot-menu/). U-Boot passes them on the kernel
+# command line:
+#   f1c.cpu_mhz=N   CPU clock through cpufreq-dt (userspace governor). Only a
+#                   frequency the OPP table offers is accepted; anything else
+#                   leaves the boot clock (408 MHz) and says so in the log.
+#   f1c.safe=1      safe mode: 408 MHz, and /run/f1c-safe tells the app
+#                   autostart (S99carplay) to stay down. Networking and the
+#                   radios still come up, so the board stays reachable.
+# The clock is raised here, after the filesystems are mounted, not in U-Boot,
+# which keeps U-Boot and the early boot at the stock 408 MHz.
+
+CPUFREQ=/sys/devices/system/cpu/cpu0/cpufreq
+LOG=/var/log/bootopts.log
+
+opt() {
+	for w in $(cat /proc/cmdline); do
+		case "$w" in
+		"$1"=*) echo "${w#*=}"; return ;;
+		esac
+	done
+}
+
+say() {
+	echo "bootopts: $*"
+	echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null
+}
+
+case "$1" in
+start)
+	if [ "$(opt f1c.safe)" = 1 ]; then
+		touch /run/f1c-safe
+		say "safe mode: 408 MHz, app autostart off"
+		exit 0
+	fi
+	mhz="$(opt f1c.cpu_mhz)"
+	[ -n "$mhz" ] || exit 0
+	if ! grep -qw "${mhz}000" "$CPUFREQ/scaling_available_frequencies" 2>/dev/null; then
+		say "f1c.cpu_mhz=$mhz is not an available frequency; staying at $(($(cat $CPUFREQ/scaling_cur_freq) / 1000)) MHz"
+		exit 0
+	fi
+	echo userspace > "$CPUFREQ/scaling_governor"
+	echo "${mhz}000" > "$CPUFREQ/scaling_setspeed"
+	say "CPU $(($(cat $CPUFREQ/scaling_cur_freq) / 1000)) MHz (asked $mhz)"
+	;;
+stop) ;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac

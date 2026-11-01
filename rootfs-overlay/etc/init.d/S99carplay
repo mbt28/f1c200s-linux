@@ -20,6 +20,8 @@ export HOME=/root
 case "$1" in
 start)
 	[ -f /etc/carplay-autostart ] || exit 0
+	# Safe mode from the U-Boot boot menu (S04bootopts).
+	[ -f /run/f1c-safe ] && { echo "carplay: safe mode, not starting"; exit 0; }
 	echo "carplay: autostarting ($SET)"
 	case "$(carplay-source current)" in
 	*wireless*)

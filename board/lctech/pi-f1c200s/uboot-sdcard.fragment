@@ -112,4 +112,51 @@ CONFIG_USE_BOOTCOMMAND=y
 # it and the kernel's early allocations would go back into the old
 # framebuffer, which the display engine scans until sun4i-drm's first modeset
 # (~2.3 s); with CMA at the top that region is rarely touched before then.
-CONFIG_BOOTCOMMAND="if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; setenv fdt_high 0x81800000; bootz 0x80008000 - 0x80C00000; fi; echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000"
+#
+# The two branches live in sd_boot and nand_boot, defined by PREBOOT below, so
+# the boot menu's script (board/lctech/pi-f1c200s/uboot-menu/f1c-boot.cmd) can
+# run either one on its own. Their text is unchanged from the single command
+# they used to be; "run sd_boot; run nand_boot" is that command.
+CONFIG_BOOTCOMMAND="run sd_boot; run nand_boot"
+
+# --- Boot menu and settings form ---
+#
+# PREBOOT runs before the boot delay. It defines the two boot branches and a
+# plain "Boot" menu entry, then sources f1c-boot.scr from the boot partition,
+# which adds "Settings" (the cedit form, f1c-settings.dtb) and builds the
+# kernel arguments from f1c-settings.txt. Without those files the menu offers
+# just "Boot" and the U-Boot console, and booting is exactly as before. nand_boot
+# is double-quoted because it contains single quotes; hush keeps them literal.
+#
+# The menu (AUTOBOOT_MENU_SHOW) replaces the "Hit any key" countdown: it boots
+# the first entry after BOOTDELAY seconds unless a key is pressed. It draws on
+# the serial console and on the LCD (VIDEO_ANSI makes the LCD console follow
+# its cursor codes); input comes from the serial console. The cedit form
+# itself draws only on the LCD -- U-Boot has not implemented its text mode.
+# CEDIT needs DM_RTC only for its CMOS backend, which this board does not use.
+# OFNODE_MULTI_TREE: cedit loads the form as a second device tree next to
+# U-Boot's own; without it cmd/cedit.o fails to link (oftree_dispose), as
+# CEDIT does not select it.
+CONFIG_USE_PREBOOT=y
+CONFIG_PREBOOT="setenv sd_boot 'if load mmc 0:1 0x80008000 zImage; then load mmc 0:1 0x80C00000 suniv-f1c200s-lctech-pi.dtb; setenv fdt_high 0x81800000; bootz 0x80008000 - 0x80C00000; fi'; setenv nand_boot \"echo 'No SD kernel -- booting from NAND'; setenv bootargs 'console=ttyS0,115200 panic=5 rootwait init=/preinit root=/dev/mtdblock2 rootfstype=squashfs overlaymtd=3 musb_hdrc.use_dma=0 snd_soc_core.prealloc_buffer_size_kbytes=64'; mtd read spi-nand0 0x81000000 0x80000 0x580000 && bootm 0x81000000\"; setenv bootmenu_0 'Boot=run bootcmd'; if load mmc 0:1 0x80C00000 f1c-boot.scr; then source 0x80C00000; fi"
+CONFIG_BOOTDELAY=3
+CONFIG_CMD_BOOTMENU=y
+CONFIG_AUTOBOOT_MENU_SHOW=y
+CONFIG_VIDEO_ANSI=y
+# VIDEO_COPY: U-Boot draws into one buffer and the display scans a second,
+# which only receives finished frames (patches/uboot/0003). Without it the
+# settings form's full-screen redraw shows as a top-to-bottom wipe. Costs a
+# second 3 MiB reservation at the top of DRAM; U-Boot relocates that much
+# lower, still far above the kernel (0x80008000), its decompression area and
+# the fdt_high limit below.
+CONFIG_VIDEO_COPY=y
+CONFIG_DM_RTC=y
+CONFIG_CEDIT=y
+CONFIG_CMD_CEDIT=y
+CONFIG_OFNODE_MULTI_TREE=y
+
+# Networking off: the board has no Ethernet, and the menu above pushed
+# u-boot-sunxi-with-spl.bin past the 504 KiB genimage-sdcard.cfg leaves before
+# partition 1 (520 064 bytes with it). Without the network stack (dhcp, pxe,
+# mii, ...) it fits again with room to spare.
+CONFIG_NO_NET=y
