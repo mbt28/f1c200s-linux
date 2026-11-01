@@ -402,3 +402,65 @@ practice: building against a stock IDF fails with undefined
 `esp_wifi_*_internal`/`ieee80211_*` symbols — the setup.sh blob/patch step
 is mandatory. Host side pairs with `hciattach ... 230400 noflow` (bt
 script) and no CTS strap.
+
+## Two-chip split: ESP32-C3 Wi-Fi + ESP32 Bluetooth (2026-10-25)
+
+One ESP32 time-slices its radio between Wi-Fi and Bluetooth. Measured
+2026-10-25 over the board's AP: 0.78 Mbit/s with 37 % ping loss while the
+phones' and a BLE keyboard's links were up, 3.78 Mbit/s with 0 % loss after
+`bluetoothctl power off`. Both wireless phone protocols need BT, so the radios
+split: an ESP32-C3 does Wi-Fi on SPI1 (Espressif tests the C3 SPI slave to
+40 MHz, the classic ESP32 to 10 MHz) and the classic ESP32 runs a
+Bluetooth-only build on UART0. Firmware bundles live in
+`~/projects/f1c200s/firmware/`, each with a README covering the build:
+`esp32c3-spi-wifionly-v1-spi30` (flashed) / `-spi40`, and
+`esp32-bt-only-uart230400-v2` (flashed; v1 is the same build with modem sleep
+off, and its controller hung).
+
+Hardware-validated 2026-10-25: the C3 comes up at 25 MHz with no transport
+errors, the AP runs on it, and hci0 runs on the Bluetooth ESP32. Wireless
+Android Auto (LEHU, Samsung) went from crawling to 20-30 fps with the phone's
+Bluetooth link up, 5 % ping loss instead of 20-37 %. The CPU is the next
+limit: 0 % idle at 408 MHz, about a quarter of it in the ESP driver.
+
+| F1C200s (header P1) | ESP32-C3 (Wi-Fi) | ESP32 (Bluetooth) |
+|---|---|---|
+| PE9 SPI1_CLK | GPIO6 | |
+| PE8 SPI1_MOSI | GPIO7 | |
+| PE10 SPI1_MISO | GPIO2 (strap: no pull-down) | |
+| PE7 SPI1_CS | GPIO10 | |
+| PE2 handshake (gpio 130) | GPIO3 | |
+| PE3 data ready (gpio 131) | GPIO4 | |
+| PE4 (gpio 132) | | **EN** |
+| PE0 UART0_RX (ttyS1) | | IO5 (HCI TX) |
+| PE1 UART0_TX | | IO18 (HCI RX) |
+| **PE5** reset (gpio 133, `resetpin=133`) | **EN** (not GPIO9: that is the BOOT strap) | |
+
+Host side: `esp32_spi` accepts the C3 unchanged and, with the C3's BT
+compiled out, registers no hci device. hci0 comes from `hciattach` on ttyS1
+as before. The C3 takes the spare PE5 for its reset (`resetpin=133` in
+S43wifi and `wifi`); the Bluetooth ESP32 keeps PE4.
+
+**The Bluetooth ESP32 keeps its 5 V across a board reboot**, so a hung
+controller stays hung and `hciattach` times out on HCI Reset (0x1003, -110)
+every boot. The U-Boot boot script therefore pulls PE4 low for 100 ms on
+every boot (`f1c_bt_reset` in `board/lctech/pi-f1c200s/uboot-menu/f1c-boot.cmd`).
+At runtime, pulse it by hand and re-attach:
+
+```sh
+C=$(devmem 0x01C20890); D=$(devmem 0x01C208A0)
+devmem 0x01C208A0 32 $((D & ~0x10))                       # PE4 data low
+devmem 0x01C20890 32 $(( (C & ~0x70000) | 0x10000 ))      # PE4 output: EN low
+sleep 0.2; devmem 0x01C20890 32 $C                        # back to disabled
+bt off; bt on
+```
+
+Over SSH, start `bt on` fully detached, or bluetoothd and dbus die with the
+session (sudo passes the hang-up on, even through `setsid`):
+`sudo sh -c "nohup setsid /usr/bin/bt on > /tmp/bt-on.log 2>&1 < /dev/null &"`.
+
+The bus clock is 200 MHz / (2n): a C3 announce of 30 runs it at 25 MHz, 40 at
+33.3 MHz. spi-sun6i never sets the MISO sample mode on suniv (the 24 MHz
+SDM/SDC switch exists only in its non-clk_ctl branch); TFR_CTL (0x01C06008)
+reads 0 on the board, which is already the half-cycle delayed sampling those
+speeds want.
