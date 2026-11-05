@@ -1,0 +1,156 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] zram: keep the compressed pages movable but out of CMA
+
+On this 64 MiB board 28 MiB is CMA, which the video decoder (cedrus) and
+the display allocate from while the system lends it to movable pages.
+zram's compressed pages (zspages) are movable, so they may come from CMA
+and compaction may move them into it. A zspage cannot be reclaimed, only
+migrated, and when memory is tight there is no free page outside CMA to
+migrate it to: the decoder's cma_alloc failed with zram on (2026-10-03),
+and zram has been off since.
+
+Making the zspages unmovable (the first version of this patch) kept them
+out of CMA (0 cma_alloc failures), but they spread over the memory outside
+CMA as unmovable pageblocks: 3-12x the file refaults and major faults of SD
+swap alone, and failed compaction stalls (2026-11-05).
+
+So they stay movable, and out of CMA:
+- PF_MEMALLOC_NOCMA, a task flag in a free bit: a movable allocation made
+  under it gets no ALLOC_CMA, and skips the per-cpu lists, which hold
+  freed CMA pages among the movable ones and do not check ALLOC_CMA.
+- zram allocates its zspages under it (zram_zs_malloc), still with
+  __GFP_MOVABLE.
+- zsmalloc's migration refuses a destination in a CMA pageblock, so
+  compaction never moves a zspage into CMA.
+- get_pfnblock_migratetype is exported (GPL) for zsmalloc, a module here.
+---
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1763,7 +1763,7 @@
+ #define PF_RANDOMIZE		0x00400000	/* Randomize virtual address space */
+ #define PF__HOLE__00800000	0x00800000
+ #define PF__HOLE__01000000	0x01000000
+-#define PF__HOLE__02000000	0x02000000
++#define PF_MEMALLOC_NOCMA	0x02000000	/* Movable allocations stay out of CMA */
+ #define PF_NO_SETAFFINITY	0x04000000	/* Userland is not allowed to meddle with cpus_mask */
+ #define PF_MCE_EARLY		0x08000000      /* Early kill for mce process policy */
+ #define PF_MEMALLOC_PIN		0x10000000	/* Allocations constrained to zones which allow long term pinning.
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -481,6 +481,8 @@
+ #endif
+ 	return flags & MIGRATETYPE_MASK;
+ }
++/* for zsmalloc (a module here): is_migrate_cma_page() on a migration target */
++EXPORT_SYMBOL_GPL(get_pfnblock_migratetype);
+ 
+ /**
+  * __set_pfnblock_flags_mask - Set the requested group of flags for
+@@ -3378,7 +3380,14 @@
+ {
+ 	struct page *page;
+ 
+-	if (likely(pcp_allowed_order(order))) {
++	/*
++	 * Freed CMA pages are kept on the movable per-cpu lists, which do not
++	 * look at ALLOC_CMA: a movable allocation without it (PF_MEMALLOC_NOCMA)
++	 * takes its page from the buddy lists, which do.
++	 */
++	if (likely(pcp_allowed_order(order)) &&
++	    likely((alloc_flags & ALLOC_CMA) ||
++		   migratetype != MIGRATE_MOVABLE)) {
+ 		page = rmqueue_pcplist(preferred_zone, zone, order,
+ 				       migratetype, alloc_flags);
+ 		if (likely(page))
+@@ -3758,7 +3767,12 @@
+ 						  unsigned int alloc_flags)
+ {
+ #ifdef CONFIG_CMA
+-	if (gfp_migratetype(gfp_mask) == MIGRATE_MOVABLE)
++	/*
++	 * PF_MEMALLOC_NOCMA: movable, but kept out of CMA (zram's compressed
++	 * pages, which cannot be reclaimed, only migrated).
++	 */
++	if (gfp_migratetype(gfp_mask) == MIGRATE_MOVABLE &&
++	    !(current->flags & PF_MEMALLOC_NOCMA))
+ 		alloc_flags |= ALLOC_CMA;
+ #endif
+ 	return alloc_flags;
+--- a/drivers/block/zram/zram_drv.c
++++ b/drivers/block/zram/zram_drv.c
+@@ -27,6 +27,7 @@
+ #include <linux/backing-dev.h>
+ #include <linux/string.h>
+ #include <linux/vmalloc.h>
++#include <linux/sched/mm.h>
+ #include <linux/err.h>
+ #include <linux/idr.h>
+ #include <linux/sysfs.h>
+@@ -62,6 +63,23 @@
+ 
+ #define slot_dep_map(zram, index) (&(zram)->table[(index)].dep_map)
+ 
++/*
++ * The compressed pages stay movable (compaction may move them) but out of
++ * CMA: they cannot be reclaimed, only migrated, and on a small board whose
++ * CMA is most of the free memory a full CMA area of zspages starves the
++ * contiguous allocations CMA exists for (PF_MEMALLOC_NOCMA, zsmalloc's
++ * migration refusing a CMA destination).
++ */
++static unsigned long zram_zs_malloc(struct zs_pool *pool, size_t size,
++				    gfp_t gfp, int nid)
++{
++	unsigned int flags = memalloc_flags_save(PF_MEMALLOC_NOCMA);
++	unsigned long handle = zs_malloc(pool, size, gfp, nid);
++
++	memalloc_flags_restore(flags);
++	return handle;
++}
++
+ static void zram_slot_lock_init(struct zram *zram, u32 index)
+ {
+ 	static struct lock_class_key __key;
+@@ -1810,7 +1828,7 @@
+ 	 * to do optimistic and fallback to pessimistic handle allocation,
+ 	 * like we do for compressible pages.
+ 	 */
+-	handle = zs_malloc(zram->mem_pool, PAGE_SIZE,
++	handle = zram_zs_malloc(zram->mem_pool, PAGE_SIZE,
+ 			   GFP_NOIO | __GFP_NOWARN |
+ 			   __GFP_HIGHMEM | __GFP_MOVABLE, page_to_nid(page));
+ 	if (IS_ERR_VALUE(handle))
+@@ -1873,7 +1891,7 @@
+ 		return write_incompressible_page(zram, page, index);
+ 	}
+ 
+-	handle = zs_malloc(zram->mem_pool, comp_len,
++	handle = zram_zs_malloc(zram->mem_pool, comp_len,
+ 			   GFP_NOIO | __GFP_NOWARN |
+ 			   __GFP_HIGHMEM | __GFP_MOVABLE, page_to_nid(page));
+ 	if (IS_ERR_VALUE(handle)) {
+@@ -2102,7 +2120,7 @@
+ 	 * zsmalloc API to return this information. For now, we will make do with
+ 	 * the node of the page allocated for recompression.
+ 	 */
+-	handle_new = zs_malloc(zram->mem_pool, comp_len_new,
++	handle_new = zram_zs_malloc(zram->mem_pool, comp_len_new,
+ 			       GFP_NOIO | __GFP_NOWARN |
+ 			       __GFP_HIGHMEM | __GFP_MOVABLE, page_to_nid(page));
+ 	if (IS_ERR_VALUE(handle_new)) {
+--- a/mm/zsmalloc.c
++++ b/mm/zsmalloc.c
+@@ -1666,6 +1666,14 @@
+ 	unsigned int obj_idx;
+ 
+ 	/*
++	 * zram keeps its zspages out of CMA (PF_MEMALLOC_NOCMA); compaction
++	 * must not move one in. A failed migration leaves the page where it
++	 * is, as when the zspage lock cannot be taken below.
++	 */
++	if (is_migrate_cma_page(newpage))
++		return -EBUSY;
++
++	/*
+ 	 * TODO: nothing prevents a zspage from getting destroyed while
+ 	 * it is isolated for migration, as the page lock is temporarily
+ 	 * dropped after zs_page_isolate() succeeded: we should rework that
