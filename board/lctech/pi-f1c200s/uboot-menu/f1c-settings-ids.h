@@ -41,5 +41,10 @@ enum {
 	ID_SAVE_ITEM,
 	ID_DISCARD_ITEM,
 
+	/* added 2026-11-04: which system the menu boots by itself */
+	ID_OS,
+	ID_OS_BUILDROOT,
+	ID_OS_LEHU,
+
 	ID_DYNAMIC_START,
 };

@@ -19,6 +19,14 @@
 			title-id = <ID_SCENE_TITLE>;
 			prompt = "UP/DOWN: move   ENTER: open or pick   ESC: back";
 
+			os {
+				type = "menu";
+				id = <ID_OS>;
+				title = "Default system";
+				item-label = "Buildroot", "LEHU OS";
+				item-id = <ID_OS_BUILDROOT ID_OS_LEHU>;
+			};
+
 			cpu {
 				type = "menu";
 				id = <ID_CPU>;

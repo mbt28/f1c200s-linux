@@ -49,6 +49,15 @@ SD_DEV=/dev/mmcblk0p4
 SD_PRI=10
 SD_SECTORS=131072     # 64 MiB; p4 is declared past EOF, so verify it is real
 
+# A card shared with LEHU OS (lehu-os/docs/dual-boot.md) turns p4 into an
+# extended partition (a 2-sector container in sysfs) and moves this swap
+# area, unchanged in size, to the first logical partition, p5. Only p5 is
+# considered, never any other partition: this script runs mkswap on SD_DEV.
+if [ "$(cat /sys/class/block/mmcblk0p4/size 2>/dev/null)" != "$SD_SECTORS" ] &&
+   [ "$(cat /sys/class/block/mmcblk0p5/size 2>/dev/null)" = "$SD_SECTORS" ]; then
+	SD_DEV=/dev/mmcblk0p5
+fi
+
 [ -r /etc/default/swap ] && . /etc/default/swap
 
 log() { echo "$(cut -d' ' -f1 /proc/uptime) $*" >> "$LOG" 2>/dev/null; }
@@ -133,7 +142,7 @@ stop)
 	log "--- shutdown ---"
 	awk 'NR>1 {print "  swap " $1 " used=" $4 "kB pri=" $5}' /proc/swaps >> "$LOG" 2>/dev/null
 	[ -r /sys/block/zram0/mm_stat ] && log "  zram mm_stat: $(cat /sys/block/zram0/mm_stat)"
-	[ -r /sys/class/block/mmcblk0p4/stat ] && log "  p4 blkstat: $(cat /sys/class/block/mmcblk0p4/stat)"
+	[ -r /sys/class/block/${SD_DEV#/dev/}/stat ] && log "  ${SD_DEV#/dev/mmcblk0} blkstat: $(cat /sys/class/block/${SD_DEV#/dev/}/stat)"
 	# swapoff on a full zram must decompress everything back into RAM; if it
 	# cannot it fails ENOMEM and leaves swap on, which is safe.
 	swapoff "$SD_DEV"    2>/dev/null
