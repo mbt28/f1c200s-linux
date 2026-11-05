@@ -12,8 +12,9 @@ patches/config but documented here so they are not re-discovered.
 - **A pre-console hang ≠ a driver bug.** A driver hang prints boot messages first;
   "no output at all" = pre-console (CMA/`setup_arch`) or a corrupt boot FAT.
 - **ffmpeg v4l2-request** bundles a coded OUTPUT buffer **per DPB frame**; the
-  upstream hardcoded 4 MiB × DPB ≈ 24–44 MB blows past 64 MB. `patches/ffmpeg/0002`
-  right-sizes it to `max(1 MiB, w×h)`.
+  upstream hardcoded 4 MiB × DPB ≈ 24–44 MB blows past 64 MB. The 6.1 series'
+  `patches/ffmpeg/0002` right-sized it to `max(1 MiB, w×h)`; the 8.x series
+  (ffmpeg 8.0.3, 2026-11-05) sizes it itself, `max(w×h×3/2, 256 KiB)`.
 
 ## Display
 Moved to **[display.md](display.md)** — pipeline (DEFE/DEBE/TCON), panel

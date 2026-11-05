@@ -203,7 +203,10 @@ BR2_PACKAGE_PSPLASH=y
 BR2_PACKAGE_PSPLASH_IMAGE="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/splash/lehu.png"
 BR2_PACKAGE_PSPLASH_FULL_SCREEN=y
 # BR2_PACKAGE_PSPLASH_STARTUP_MSG is not set
-BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc"
+# ffmpeg 8.0.3 (patches/buildroot/0001) with Kwiboo's v4l2-request series
+# (patches/ffmpeg/). Each of its hwaccels selects its decoder, so all of them
+# would add mpeg2, vp8, vp9 and av1 to libavcodec: only h264 and hevc.
+BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc --disable-hwaccels --enable-hwaccel=h264_v4l2request,hevc_v4l2request"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 
 # Pin the GNU mirror instead of ftpmirror.gnu.org's auto-selector, which can

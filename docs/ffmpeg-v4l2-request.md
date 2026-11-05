@@ -10,17 +10,30 @@ H.264 (USB) → ffmpeg (libavcodec h264 + v4l2_request hwaccel)
             → /dev/media0 + /dev/video0 (cedrus, V4L2 stateless)
             → tiled-NV12 (ST12) capture dma-buf → DEFE drm_show → panel
 ```
-ffmpeg 6.1.5 ships only the **stateful** `v4l2_m2m`; the **stateless**
+Upstream ffmpeg ships only the **stateful** `v4l2_m2m`; the **stateless**
 `v4l2_request` hwaccel is out-of-tree, so we add it.
 
 ## Build integration (buildroot)
-- **Patches** (`carplay-linux/patches/ffmpeg/`, applied via `BR2_GLOBAL_PATCH_DIR`):
-  - `0001-add-v4l2-request-api-hwaccels.patch` — Kwiboo/FFmpeg `v4l2-request-n6.1.1`
-    (h264/hevc/mpeg2/vp8/vp9 Request-API hwaccels). Applies clean to 6.1.5.
-  - `0002-v4l2_request_h264-rightsize-output-buffer.patch` — see *Memory* below.
+- **ffmpeg 8.0.3** (since 2026-11-05; 6.1.5 before), the same version and
+  patches as LEHU OS's AGL ffmpeg. Buildroot 2026.05 packages 6.1.5, so
+  `patches/buildroot/0001-package-ffmpeg-8.0.3-for-the-v4l2-request-hwaccels.patch`
+  bumps its `package/ffmpeg` (version, hash, the options 8.0 dropped:
+  postproc, crystalhd) and carries the libudev build-order dependency.
+  `scripts/build.sh` applies `patches/buildroot/*.patch` to the checkout.
+- **Patches** (`patches/ffmpeg/`, applied via `BR2_GLOBAL_PATCH_DIR`): Kwiboo's
+  `v4l2-request-n8.0.1` series, 13 patches (h264/hevc/mpeg2/vp8/vp9/av1
+  Request-API hwaccels, the `v4l2request` hwdevice). They apply clean to 8.0.3.
+  The 6.1 series was one squashed patch plus `0002` (the coded-buffer right-size,
+  see *Memory*), which 8.x no longer needs.
+- **The hwdevice type.** In the 8.x series the hwdevice has its own type,
+  `AV_HWDEVICE_TYPE_V4L2REQUEST` (`"v4l2request"`); in 6.1 it was DRM. The frames
+  are `DRM_PRIME` in both. The apps look the type up by name and fall back to DRM
+  (LEHU 81610e7, FastCarPlay and LIVI likewise), so they run on either.
 - **Config knobs** (defconfig):
-  - `BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev"`
-    (`--enable-libdrm` already on).
+  - `BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev ...
+    --disable-hwaccels --enable-hwaccel=h264_v4l2request,hevc_v4l2request"`
+    (`--enable-libdrm` already on). Each 8.x hwaccel selects its decoder, so
+    `--enable-hwaccels` would add mpeg2, vp8, vp9 and av1 to libavcodec.
   - `BR2_PACKAGE_LIBUDEV_ZERO=y` — provides `libudev` (device discovery) **without**
     switching the device manager (we stay on `devtmpfs`).
 - **Kernel** (`board/lctech/pi-f1c200s/linux.fragment`): `CONFIG_CMA_SIZE_MBYTES=32`.
@@ -47,8 +60,11 @@ cedrus uses `vb2-dma-contig`, i.e. **CMA**. Two facts collide on 64 MB:
    | **4 MiB (upstream)** | 4 MiB | 32 MiB | +11 MiB | **~44 MiB** ❌ (> 64 MB) |
    | **right-sized (patch 0002)** | ~1 MiB | 8 MiB | +11 MiB | **~20 MiB** ✅ |
 
-   Coded data is bounded by the raw frame size, so `0002` sizes it to
+   Coded data is bounded by the raw frame size, so `0002` sized it to
    `max(1 MiB, width×height)` → ~1 MiB for ≤720p, auto-scaling at 1080p.
+   **ffmpeg 8.x:** Kwiboo's 8.x code sizes it itself,
+   `max(width×height×3/2, 256 KiB)` (`hwcontext_v4l2request.c`), about 0.55 MiB at
+   800×480, in an OUTPUT pool of its own: `0002` is gone.
 
 ### Chosen values
 | Knob | Value | Why |

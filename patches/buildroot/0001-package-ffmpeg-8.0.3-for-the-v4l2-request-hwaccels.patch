@@ -1,0 +1,402 @@
+package/ffmpeg: 8.0.3, for the V4L2 Request hwaccels of ffmpeg 8
+
+Buildroot 2026.05 packages ffmpeg 6.1.5 (master: 7.0.3). The board's
+decoder path is Kwiboo's v4l2-request series, now on ffmpeg 8
+(patches/ffmpeg/, the same 13 patches as LEHU OS's AGL ffmpeg 8.0.3).
+
+- the version and the tarball's hash; LICENSE.md changed, the COPYINGs not;
+- ffmpeg 8 no longer knows --enable/--disable-postproc (libpostproc was
+  removed) or --disable-crystalhd, and its configure stops on an unknown
+  option: both dropped. BR2_PACKAGE_FFMPEG_POSTPROC stays (kodi and vlc
+  select it) and builds nothing;
+- Buildroot's patches: 0002 still applies; 0006 and 0007 are in 8.0.3;
+  0001 (x86 without SSSE3) applies only with fuzz, which Buildroot refuses,
+  and 0003 (mips), 0004 (static extralibs) and 0005 (mmal) no longer apply;
+  none of them matters to this board's builds: removed;
+- the libudev build-order dependency that scripts/build.sh used to add with
+  sed (--enable-libudev comes from BR2_PACKAGE_FFMPEG_EXTRACONF).
+
+Applied to the Buildroot checkout by scripts/build.sh (patches/buildroot/).
+
+diff --git a/package/ffmpeg/0001-swscale-x86-yuv2rgb-Fix-build-without-SSSE3.patch b/package/ffmpeg/0001-swscale-x86-yuv2rgb-Fix-build-without-SSSE3.patch
+deleted file mode 100644
+index aa56e5a9..00000000
+--- a/package/ffmpeg/0001-swscale-x86-yuv2rgb-Fix-build-without-SSSE3.patch
++++ /dev/null
+@@ -1,43 +0,0 @@
+-From bf8eae2d30a205bb76ac625e04c0351106981b9e Mon Sep 17 00:00:00 2001
+-From: Parker Ernest <@>
+-Date: Sun, 23 Feb 2020 13:22:42 +0100
+-Subject: [PATCH] swscale/x86/yuv2rgb: Fix build without SSSE3
+-
+-commit fc6a5883d6af8cae0e96af84dda0ad74b360a084 breaks build on
+-x86_64 CPUs which do not have SSSE3, e.g. AMD Phenom-II
+-
+-Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>
+-[bernd.kuhls@t-online.de:
+-  - retrieved from upstream patchwork:
+-    https://patchwork.ffmpeg.org/project/ffmpeg/patch/20200223122256.23402-1-michael@niedermayer.cc/
+-]
+-Signed-off-by: Bernd Kuhls <bernd.kuhls@t-online.de>
+-[yann.morin.1998@free.fr: fix reference top patchwork and SoB order]
+-Signed-off-by: Yann E. MORIN <yann.morin.1998@free.fr>
+----
+- libswscale/x86/yuv2rgb.c | 2 ++
+- 1 file changed, 2 insertions(+)
+-
+-diff --git a/libswscale/x86/yuv2rgb.c b/libswscale/x86/yuv2rgb.c
+-index c12e88cbb5..4791e5b93a 100644
+---- a/libswscale/x86/yuv2rgb.c
+-+++ b/libswscale/x86/yuv2rgb.c
+-@@ -70,6 +70,7 @@ av_cold SwsFunc ff_yuv2rgb_init_x86(SwsContext *c)
+- #if HAVE_X86ASM
+-     int cpu_flags = av_get_cpu_flags();
+- 
+-+#if HAVE_SSSE3
+-     if (EXTERNAL_SSSE3(cpu_flags)) {
+-         switch (c->dstFormat) {
+-         case AV_PIX_FMT_RGB32:
+-@@ -98,6 +99,7 @@ av_cold SwsFunc ff_yuv2rgb_init_x86(SwsContext *c)
+-             return yuv420_rgb15_ssse3;
+-         }
+-     }
+-+#endif
+- 
+-     if (EXTERNAL_MMXEXT(cpu_flags)) {
+-         switch (c->dstFormat) {
+--- 
+-2.26.2
+-
+diff --git a/package/ffmpeg/0003-libavutil-Fix-mips-build.patch b/package/ffmpeg/0003-libavutil-Fix-mips-build.patch
+deleted file mode 100644
+index aeb272c4..00000000
+--- a/package/ffmpeg/0003-libavutil-Fix-mips-build.patch
++++ /dev/null
+@@ -1,75 +0,0 @@
+-From e9d97f9d29ce57d7a5a62607c2a08e091a06de6e Mon Sep 17 00:00:00 2001
+-From: Bernd Kuhls <bernd.kuhls@t-online.de>
+-Date: Sun, 6 Jun 2021 08:54:53 +0200
+-Subject: [PATCH] libavutil: Fix mips build
+-
+-Check for sys/auxv.h because not all toolchains contain this header.
+-
+-Fixes https://trac.ffmpeg.org/ticket/9138
+-
+-Patch sent upstream:
+-http://ffmpeg.org/pipermail/ffmpeg-devel/2021-June/281272.html
+-
+-[Bernd: rebased for version 6.1.2]
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+-[Dario: make the patch to be applied with fuzz factor 0]
+-Signed-off-by: Dario Binacchi <dario.binacchi@amarulasolutions.com>
+----
+- configure            | 2 ++
+- libavutil/mips/cpu.c | 6 +++---
+- 2 files changed, 5 insertions(+), 3 deletions(-)
+-
+-diff --git a/configure b/configure
+-index a89cfa6d959d..6ec00df75312 100755
+---- a/configure
+-+++ b/configure
+-@@ -2227,6 +2227,7 @@ HEADERS_LIST="
+-     OpenGL_gl3_h
+-     poll_h
+-     pthread_np_h
+-+    sys_auxv_h
+-     sys_param_h
+-     sys_resource_h
+-     sys_select_h
+-@@ -6472,6 +6473,7 @@ check_func_headers VideoToolbox/VTCompressionSession.h VTCompressionSessionPrepa
+- check_func_headers VideoToolbox/VideoToolbox.h VTPixelRotationSessionCreate -framework VideoToolbox
+- check_headers windows.h
+- check_headers asm/types.h
+-+check_headers sys/auxv.h
+- 
+- # it seems there are versions of clang in some distros that try to use the
+- # gcc headers, which explodes for stdatomic
+-diff --git a/libavutil/mips/cpu.c b/libavutil/mips/cpu.c
+-index 59619d54dee3..19196de50b59 100644
+---- a/libavutil/mips/cpu.c
+-+++ b/libavutil/mips/cpu.c
+-@@ -19,7 +19,7 @@
+- #include "libavutil/cpu.h"
+- #include "libavutil/cpu_internal.h"
+- #include "config.h"
+--#if defined __linux__ || defined __ANDROID__
+-+#if (defined __linux__ || defined __ANDROID__) && HAVE_SYS_AUXV_H
+- #include <stdint.h>
+- #include <stdio.h>
+- #include <string.h>
+-@@ -28,7 +28,7 @@
+- #include "libavutil/avstring.h"
+- #endif
+- 
+--#if defined __linux__ || defined __ANDROID__
+-+#if (defined __linux__ || defined __ANDROID__) && HAVE_SYS_AUXV_H
+- 
+- #define HWCAP_LOONGSON_CPUCFG (1 << 14)
+- 
+-@@ -105,7 +105,7 @@ static int cpu_flags_cpuinfo(void)
+- 
+- int ff_get_cpu_flags_mips(void)
+- {
+--#if defined __linux__ || defined __ANDROID__
+-+#if (defined __linux__ || defined __ANDROID__) && HAVE_SYS_AUXV_H
+-     if (cpucfg_available())
+-         return cpu_flags_cpucfg();
+-     else
+--- 
+-2.34.1
+-
+diff --git a/package/ffmpeg/0004-configure-add-extralibs-to-extralibs_xxx.patch b/package/ffmpeg/0004-configure-add-extralibs-to-extralibs_xxx.patch
+deleted file mode 100644
+index 050b34fd..00000000
+--- a/package/ffmpeg/0004-configure-add-extralibs-to-extralibs_xxx.patch
++++ /dev/null
+@@ -1,47 +0,0 @@
+-From 0c288853630b7b4e004774c39945d4a804afcfa8 Mon Sep 17 00:00:00 2001
+-From: Fabrice Fontaine <fontaine.fabrice@gmail.com>
+-Date: Fri, 6 Aug 2021 09:17:20 +0200
+-Subject: [PATCH] configure: add extralibs to extralibs_xxx
+-
+-Add extralibs to extralibs_xxx (e.g. extralibs_avformat) to allow
+-applications such as motion to retrieve ffmpeg dependencies such as
+--latomic through pkg-config
+-
+-Signed-off-by: Fabrice Fontaine <fontaine.fabrice@gmail.com>
+-[Upstream status: not upstreamable]
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+-[rebased for 6.0]
+----
+- configure | 18 +++++++++---------
+- 1 file changed, 9 insertions(+), 9 deletions(-)
+-
+-diff --git a/configure b/configure
+-index 0bb3a7cf2b..3bda99e415 100755
+---- a/configure
+-+++ b/configure
+-@@ -7986,14 +7986,14 @@
+- source_path=${source_path}
+- LIBPREF=${LIBPREF}
+- LIBSUF=${LIBSUF}
+--extralibs_avutil="$avutil_extralibs"
+--extralibs_avcodec="$avcodec_extralibs"
+--extralibs_avformat="$avformat_extralibs"
+--extralibs_avdevice="$avdevice_extralibs"
+--extralibs_avfilter="$avfilter_extralibs"
+--extralibs_postproc="$postproc_extralibs"
+--extralibs_swscale="$swscale_extralibs"
+--extralibs_swresample="$swresample_extralibs"
+-+extralibs_avutil="$avutil_extralibs $extralibs"
+-+extralibs_avcodec="$avcodec_extralibs $extralibs"
+-+extralibs_avformat="$avformat_extralibs $extralibs"
+-+extralibs_avdevice="$avdevice_extralibs $extralibs"
+-+extralibs_avfilter="$avfilter_extralibs $extralibs"
+-+extralibs_postproc="$postproc_extralibs $extralibs"
+-+extralibs_swscale="$swscale_extralibs $extralibs"
+-+extralibs_swresample="$swresample_extralibs $extralibs"
+- EOF
+- 
+- for lib in $LIBRARY_LIST; do
+--- 
+-2.30.2
+-
+diff --git a/package/ffmpeg/0005-avcodec-mmaldec-Fix-build-error.patch b/package/ffmpeg/0005-avcodec-mmaldec-Fix-build-error.patch
+deleted file mode 100644
+index b3b90126..00000000
+--- a/package/ffmpeg/0005-avcodec-mmaldec-Fix-build-error.patch
++++ /dev/null
+@@ -1,32 +0,0 @@
+-From e8a49b1424d405441fb23c2850274a84e95bd892 Mon Sep 17 00:00:00 2001
+-From: Zhao Zhili <zhilizhao@tencent.com>
+-Date: Tue, 21 Nov 2023 04:05:08 +0800
+-Subject: [PATCH] avcodec/mmaldec: Fix build error
+-
+-Fix #10670.
+-
+-Signed-off-by: Zhao Zhili <zhilizhao@tencent.com>
+-
+-Upstream: http://git.videolan.org/?p=ffmpeg.git;a=commitdiff;h=e8a49b1424d405441fb23c2850274a84e95bd892
+-
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+----
+- libavcodec/mmaldec.c | 2 +-
+- 1 file changed, 1 insertion(+), 1 deletion(-)
+-
+-diff --git a/libavcodec/mmaldec.c b/libavcodec/mmaldec.c
+-index 4bb3eb22ef..2dc7bbee04 100644
+---- a/libavcodec/mmaldec.c
+-+++ b/libavcodec/mmaldec.c
+-@@ -843,7 +843,7 @@ static const AVClass ffmmal_dec_class = {
+-         .flush          = ffmmal_flush, \
+-         .p.priv_class   = &ffmmal_dec_class, \
+-         .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HARDWARE, \
+--        .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE \
+-+        .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE, \
+-         .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_MMAL, \
+-                                                          AV_PIX_FMT_YUV420P, \
+-                                                          AV_PIX_FMT_NONE}, \
+--- 
+-2.30.2
+-
+diff --git a/package/ffmpeg/0006-avcodec-pcm-bluray-dvd-Use-correct-pointer-types-on-.patch b/package/ffmpeg/0006-avcodec-pcm-bluray-dvd-Use-correct-pointer-types-on-.patch
+deleted file mode 100644
+index a77a0cf5..00000000
+--- a/package/ffmpeg/0006-avcodec-pcm-bluray-dvd-Use-correct-pointer-types-on-.patch
++++ /dev/null
+@@ -1,52 +0,0 @@
+-From 347a70f101be28f8d78e8fd62ffc3a78324f49e9 Mon Sep 17 00:00:00 2001
+-From: Andreas Rheinhardt <andreas.rheinhardt@outlook.com>
+-Date: Thu, 28 Mar 2024 05:35:36 +0100
+-Subject: [PATCH] avcodec/pcm-bluray/dvd: Use correct pointer types on BE
+-
+-Signed-off-by: Andreas Rheinhardt <andreas.rheinhardt@outlook.com>
+-Signed-off-by: Waldemar Brodkorb <wbx@openadk.org>
+-Upstream: https://git.ffmpeg.org/gitweb/ffmpeg.git/commit/347a70f101be28f8d78e8fd62ffc3a78324f49e9
+----
+- libavcodec/pcm-bluray.c | 5 +++--
+- libavcodec/pcm-dvd.c    | 2 +-
+- 2 files changed, 4 insertions(+), 3 deletions(-)
+-
+-diff --git a/libavcodec/pcm-bluray.c b/libavcodec/pcm-bluray.c
+-index f65609514a..235020d78f 100644
+---- a/libavcodec/pcm-bluray.c
+-+++ b/libavcodec/pcm-bluray.c
+-@@ -167,7 +167,7 @@ static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+-             samples *= num_source_channels;
+-             if (AV_SAMPLE_FMT_S16 == avctx->sample_fmt) {
+- #if HAVE_BIGENDIAN
+--                bytestream2_get_buffer(&gb, dst16, buf_size);
+-+                bytestream2_get_buffer(&gb, (uint8_t*)dst16, buf_size);
+- #else
+-                 do {
+-                     *dst16++ = bytestream2_get_be16u(&gb);
+-@@ -187,7 +187,8 @@ static int pcm_bluray_decode_frame(AVCodecContext *avctx, AVFrame *frame,
+-             if (AV_SAMPLE_FMT_S16 == avctx->sample_fmt) {
+-                 do {
+- #if HAVE_BIGENDIAN
+--                    bytestream2_get_buffer(&gb, dst16, avctx->ch_layout.nb_channels * 2);
+-+                    bytestream2_get_buffer(&gb, (uint8_t*)dst16,
+-+                                           avctx->ch_layout.nb_channels * 2);
+-                     dst16 += avctx->ch_layout.nb_channels;
+- #else
+-                     channel = avctx->ch_layout.nb_channels;
+-diff --git a/libavcodec/pcm-dvd.c b/libavcodec/pcm-dvd.c
+-index 419b2a138f..319746c62e 100644
+---- a/libavcodec/pcm-dvd.c
+-+++ b/libavcodec/pcm-dvd.c
+-@@ -157,7 +157,7 @@ static void *pcm_dvd_decode_samples(AVCodecContext *avctx, const uint8_t *src,
+-     switch (avctx->bits_per_coded_sample) {
+-     case 16: {
+- #if HAVE_BIGENDIAN
+--        bytestream2_get_buffer(&gb, dst16, blocks * s->block_size);
+-+        bytestream2_get_buffer(&gb, (uint8_t*)dst16, blocks * s->block_size);
+-         dst16 += blocks * s->block_size / 2;
+- #else
+-         int samples = blocks * avctx->ch_layout.nb_channels;
+--- 
+-2.39.2
+-
+diff --git a/package/ffmpeg/0007-avutil-hwcontext-vaapi-use-the-correct-type.patch b/package/ffmpeg/0007-avutil-hwcontext-vaapi-use-the-correct-type.patch
+deleted file mode 100644
+index 177b4f18..00000000
+--- a/package/ffmpeg/0007-avutil-hwcontext-vaapi-use-the-correct-type.patch
++++ /dev/null
+@@ -1,28 +0,0 @@
+-From 6f8e365a2af2b6b21701d41eed3b2e3f8a436eeb Mon Sep 17 00:00:00 2001
+-From: James Almer <jamrial@gmail.com>
+-Date: Wed, 31 Jul 2024 10:00:54 -0300
+-Subject: [PATCH] avutil/hwcontext_vaapi: use the correct type for
+- VASurfaceAttribExternalBuffers.buffers
+-
+-Should fix ticket #11115.
+-
+-Signed-off-by: James Almer <jamrial@gmail.com>
+-Upstream: https://git.ffmpeg.org/gitweb/ffmpeg.git/commit/6f8e365a2af2b6b21701d41eed3b2e3f8a436eeb
+-Signed-off-by: Thomas Perale <thomas.perale@mind.be>
+----
+- libavutil/hwcontext_vaapi.c | 2 +-
+- 1 file changed, 1 insertion(+), 1 deletion(-)
+-
+-diff --git a/libavutil/hwcontext_vaapi.c b/libavutil/hwcontext_vaapi.c
+-index 4cb25dd03212e..15fd84aa40679 100644
+---- a/libavutil/hwcontext_vaapi.c
+-+++ b/libavutil/hwcontext_vaapi.c
+-@@ -1225,7 +1225,7 @@ static int vaapi_map_from_drm(AVHWFramesContext *src_fc, AVFrame *dst,
+- 
+-     if (!use_prime2 || vas != VA_STATUS_SUCCESS) {
+-         int k;
+--        unsigned long buffer_handle;
+-+        uintptr_t buffer_handle;
+-         VASurfaceAttribExternalBuffers buffer_desc;
+-         VASurfaceAttrib buffer_attrs[2] = {
+-             {
+diff --git a/package/ffmpeg/Config.in b/package/ffmpeg/Config.in
+index fce2fef9..37be02b0 100644
+--- a/package/ffmpeg/Config.in
++++ b/package/ffmpeg/Config.in
+@@ -79,6 +79,8 @@ config BR2_PACKAGE_FFMPEG_POSTPROC
+ 	help
+ 	  Postproc is a library of video postprocessing routines.
+ 
++	  ffmpeg 8.0 no longer has it: this option builds nothing.
++
+ config BR2_PACKAGE_FFMPEG_SWSCALE
+ 	bool "Build libswscale"
+ 	help
+diff --git a/package/ffmpeg/ffmpeg.hash b/package/ffmpeg/ffmpeg.hash
+index 4c489f16..93eb5759 100644
+--- a/package/ffmpeg/ffmpeg.hash
++++ b/package/ffmpeg/ffmpeg.hash
+@@ -1,5 +1,5 @@
+ # Locally calculated
+-sha256  05fbe9db1f5452a3605bb1d9bf91da9d4bb08162891692e4f172b58c49109412  ffmpeg-6.1.5.tar.xz
++sha256  6136812ea6d4e68bdba27e33c2a94382711cdf4f8602ffef056ff792bd6f9818  ffmpeg-8.0.3.tar.xz
+ sha256  8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  COPYING.GPLv2
+ sha256  246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30  COPYING.LGPLv2.1
+-sha256  cb48bf09a11f5fb576cddb0431c8f5ed0a60157a9ec942adffc13907cbe083f2  LICENSE.md
++sha256  2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af  LICENSE.md
+diff --git a/package/ffmpeg/ffmpeg.mk b/package/ffmpeg/ffmpeg.mk
+index 1289cd5e..7e08471c 100644
+--- a/package/ffmpeg/ffmpeg.mk
++++ b/package/ffmpeg/ffmpeg.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-FFMPEG_VERSION = 6.1.5
++FFMPEG_VERSION = 8.0.3
+ FFMPEG_SOURCE = ffmpeg-$(FFMPEG_VERSION).tar.xz
+ FFMPEG_SITE = https://ffmpeg.org/releases
+ FFMPEG_INSTALL_STAGING = YES
+@@ -32,7 +32,6 @@ FFMPEG_CONF_OPTS = \
+ 	--disable-gray \
+ 	--enable-swscale-alpha \
+ 	--disable-small \
+-	--disable-crystalhd \
+ 	--disable-dxva2 \
+ 	--enable-runtime-cpudetect \
+ 	--disable-hardcoded-tables \
+@@ -126,11 +125,8 @@ else
+ FFMPEG_CONF_OPTS += --disable-libxcb
+ endif
+ 
+-ifeq ($(BR2_PACKAGE_FFMPEG_POSTPROC),y)
+-FFMPEG_CONF_OPTS += --enable-postproc
+-else
+-FFMPEG_CONF_OPTS += --disable-postproc
+-endif
++# libpostproc is gone from ffmpeg 8.0: BR2_PACKAGE_FFMPEG_POSTPROC builds
++# nothing.
+ 
+ ifeq ($(BR2_PACKAGE_FFMPEG_SWSCALE),y)
+ FFMPEG_CONF_OPTS += --enable-swscale
+@@ -628,4 +624,8 @@ define FFMPEG_REMOVE_EXAMPLE_SRC_FILES
+ endef
+ FFMPEG_POST_INSTALL_TARGET_HOOKS += FFMPEG_REMOVE_EXAMPLE_SRC_FILES
+ 
++# --enable-libudev (the v4l2-request hwaccel's media device lookup, from
++# BR2_PACKAGE_FFMPEG_EXTRACONF) needs libudev staged first.
++FFMPEG_DEPENDENCIES += $(if $(BR2_PACKAGE_HAS_UDEV),udev) $(if $(BR2_PACKAGE_LIBUDEV_ZERO),libudev-zero)
++
+ $(eval $(autotools-package))

@@ -16,19 +16,21 @@ BR="$HERE/$BUILDROOT_DIR"
 OUT="$HERE/$OUTPUT_DIR"
 [ -d "$BR" ] || { echo "!! Buildroot missing — run scripts/fetch-sources.sh first"; exit 1; }
 
-# Buildroot's ffmpeg.mk has no udev knob, but we force --enable-libudev (the
-# v4l2-request hwaccel enumerates /dev/mediaX via libudev). Without a declared
-# dependency, a clean parallel build can configure ffmpeg before libudev is
-# staged -> "libudev not found using pkg-config". Inject the build-order dep on
-# whichever provides it: eudev (the "udev" virtual package) or libudev-zero.
-# (external.mk is included after package/*/*.mk, so it can't add this itself.)
-# A tree patched by the libudev-zero-only line gets it replaced.
+# Our changes to Buildroot itself (patches/buildroot/, e.g. ffmpeg 8.0.3),
+# applied to the checkout with git apply. A patch already applied is skipped;
+# one that applies neither way stops the build. Older trees carry a libudev
+# line that build.sh used to add to ffmpeg.mk with sed (the "f1c200s-udev-fix"
+# marker; patch 0001 now has it): it is taken out first.
 FFMK="$BR/package/ffmpeg/ffmpeg.mk"
-if [ -f "$FFMK" ] && ! grep -q 'f1c200s-udev-fix-2' "$FFMK"; then
-	echo ">>> patch ffmpeg.mk: add the libudev build-order dependency"
-	sed -i '/f1c200s-udev-fix/d' "$FFMK"
-	sed -i '/eval .*autotools-package/i FFMPEG_DEPENDENCIES += $(if $(BR2_PACKAGE_HAS_UDEV),udev) $(if $(BR2_PACKAGE_LIBUDEV_ZERO),libudev-zero) # f1c200s-udev-fix-2' "$FFMK"
-fi
+[ -f "$FFMK" ] && sed -i '/f1c200s-udev-fix/d' "$FFMK"
+for p in "$HERE"/patches/buildroot/*.patch; do
+	[ -e "$p" ] || continue
+	if git -C "$BR" apply --reverse --check "$p" 2>/dev/null; then
+		continue
+	fi
+	echo ">>> patch Buildroot: $(basename "$p")"
+	git -C "$BR" apply "$p" || { echo "!! $(basename "$p") does not apply to $BR"; exit 1; }
+done
 
 MAKE=(make -C "$BR" BR2_EXTERNAL="$HERE" O="$OUT")
 
