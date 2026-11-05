@@ -4,7 +4,9 @@
 
 Mainline-Linux + Buildroot for the **Lctech Pi F1C200s** (Allwinner F1C200S /
 suniv, ARM926EJ-S / ARMv5TE, 64 MiB DDR, 800×480 LCD) — a wireless **CarPlay /
-Android-Auto** receiver.
+Android-Auto** receiver. The head unit is **LEHU** (`package/lehu`), started
+by the console's `f1c` login (`~/.profile`); the screenshots below show
+FastCarPlay, which it replaced on 2026-11-05.
 
 <img src="docs/img/carplay.jpg" width="610" alt="FastCarPlay dashboard on the F1C200s">
 
@@ -57,8 +59,8 @@ configs/…_defconfig        the board defconfig
 board/lctech/pi-f1c200s/   linux/uboot fragments · genimage · post-build · flash-nand.sh
 patches/linux-lctech/      LCD+GT911 touch · VE/codec clocks · USB-OTG host · cedrus suniv fixes · audio codec
 patches/ffmpeg/            v4l2-request hwaccel
-package/                   fastcarplay · esp-hosted-ng · libimobiledevice stack
-rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · audio · carplay) + autorun
+package/                   lehu · livi · esp-hosted-ng · libimobiledevice stack
+rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · audio · splash) · f1c's .profile (LEHU)
 docs/                      display · audio · hardware-fixes · cedrus-status · …
 ```
 
@@ -86,8 +88,7 @@ All of these run on the board and **persist across reboots**:
 
 ```sh
 net on | off | status        # eth0/usb0 + dropbear (SSH) — off by default
-autorun on | off | status    # FastCarPlay boot autostart (log: /tmp/carplay.log)
-carplay                      # run FastCarPlay manually (replaces a running instance)
+lehu                         # the head unit (the console's f1c login runs it; log: ~/.lehu/run.log)
 ```
 
 ## USB OTG: host (default) ⇄ gadget

@@ -148,8 +148,9 @@ fi
 chmod 600 "${TARGET_DIR}/etc/wpa_supplicant.conf" \
           "${TARGET_DIR}/etc/hostapd.conf" 2>/dev/null || true
 
-# Kernel features FastCarPlay cannot run without. The package declares them as
-# LINUX_CONFIG_FIXUPS and linux.fragment sets them explicitly, but a fragment
+# Kernel features the head unit (LEHU; FastCarPlay before it) cannot run
+# without. The package declares them as LINUX_CONFIG_FIXUPS and linux.fragment
+# sets them explicitly, but a fragment
 # edit, a defconfig bump or a kconfig gate disappearing would otherwise ship an
 # image where CarPlay simply cannot start -- and that only shows up on the
 # board. Fail the build instead. Buildroot exports BUILD_DIR to post-build
@@ -180,7 +181,7 @@ if [ -n "${KCONFIG}" ]; then
 			why="wired CarPlay's data path needs both: ipheth switches the iPhone
        into NCM mode and cdc_ncm creates usb0, whose fe80:: address is what
        CarPlayStartSession hands the phone. Without usb0 the app loops on
-       \"usb0 has no IPv6 link-local -- NCM link down\"." ;;
+       \"usb0 has no IPv6 link-local\"." ;;
 		esac
 		echo "ERROR: ${sym}=y missing from ${KCONFIG}" >&2
 		echo "       Needed because ${why}" >&2

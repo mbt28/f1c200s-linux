@@ -39,8 +39,19 @@ ltris)		shift; set -- /usr/bin/ltris "$@" ;;
 esac
 [ -x "$1" ] || { echo "game: $1 is not installed (the games are on the SD card image only)"; exit 1; }
 
-fcp=; pidof fastcarplay >/dev/null 2>&1 && fcp=1
-[ -n "$fcp" ] && /etc/init.d/S99carplay stop >/dev/null 2>&1
+# LEHU owns the display and the keyboards: stopped for the game (SIGTERM, it
+# says goodbye to the phone and saves), started again after it as f1c, as
+# ~/.profile starts it, in the background (its log: ~/.lehu/run.log).
+app=; pidof lehu >/dev/null 2>&1 && app=1
+if [ -n "$app" ]; then
+	killall lehu 2>/dev/null
+	n=0
+	while pidof lehu >/dev/null 2>&1 && [ "$n" -lt 70 ]; do
+		usleep 100000 2>/dev/null || sleep 1
+		n=$((n + 1))
+	done
+	killall -9 lehu 2>/dev/null
+fi
 was=$(cat $C/scaling_cur_freq 2>/dev/null)
 [ -w $C/scaling_setspeed ] && echo 792000 > $C/scaling_setspeed
 
@@ -53,5 +64,5 @@ rc=$?
 reset_display
 
 [ -n "$was" ] && [ -w $C/scaling_setspeed ] && echo "$was" > $C/scaling_setspeed
-[ -n "$fcp" ] && /etc/init.d/S99carplay start >/dev/null 2>&1
+[ -n "$app" ] && su f1c -c 'setsid lehu </dev/null >/dev/null 2>&1 &' 
 exit $rc

@@ -3,7 +3,7 @@ config BR2_PACKAGE_GAME_LAUNCHER
 	depends on BR2_PACKAGE_SDL_FBCON
 	help
 	  `game NAME` launches one of the bundled SDL 1.2 games on the LCD:
-	  it stops FastCarPlay (which owns the display and grabs the
+	  it stops LEHU (which owns the display and grabs the
 	  keyboards) and starts it again afterwards if it was running,
 	  runs the game at 792 MHz, and resets the VT and framebuffer
 	  around it (vtreset) so a game that crashed cannot leave VT
