@@ -196,9 +196,13 @@ BR2_PACKAGE_OPENSSH_SERVER=y
 # exist at both ends. Selects zlib + popt (zlib is already in via other
 # packages). Costs disk, not RAM: nothing runs until a push starts.
 BR2_PACKAGE_RSYNC=y
-# Boot splash: no psplash -- S00psplash was replaced by S00splash, which blits
-# a raw theme from /etc/splash/ into /dev/fb0. Runtime-selectable on the board
-# via /etc/splash-theme (persists; shows from the next boot).
+# Boot splash: psplash with LEHU's badge full screen, a progress bar and the
+# last three init scripts under it (patches/psplash/), as on LEHU OS.
+# S00splash starts it; rcS (rootfs-overlay) feeds it and tells it to quit.
+BR2_PACKAGE_PSPLASH=y
+BR2_PACKAGE_PSPLASH_IMAGE="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/splash/lehu.png"
+BR2_PACKAGE_PSPLASH_FULL_SCREEN=y
+# BR2_PACKAGE_PSPLASH_STARTUP_MSG is not set
 BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 

@@ -1,0 +1,154 @@
+From b44ae277d383853455a30f95b05d34cde8b1c780 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Thu, 5 Nov 2026 20:53:20 +0100
+Subject: [PATCH 1/2] LEHU's look: a flat amber bar, messages under it
+
+The LEHU badge fills the screen (fullscreen image) on black, so the
+default light colours and the bar's grey border image do not fit.
+
+- Colours: black background, grey text, an amber bar on a dark track.
+- The bar is a flat 6 px track 3/5 of the screen wide, with no border
+  image.
+- MSG draws up to three lines under the bar, left-aligned with it. A
+  '|' in the message starts a new line, since the command pipe splits
+  commands on newlines.
+
+Upstream-Status: Inappropriate [LEHU's look]
+---
+ psplash-colors.h |  8 +++----
+ psplash.c        | 56 ++++++++++++++++++++++++++----------------------
+ 2 files changed, 34 insertions(+), 30 deletions(-)
+
+diff --git a/psplash-colors.h b/psplash-colors.h
+index 82a9893..a58d0e7 100644
+--- a/psplash-colors.h
++++ b/psplash-colors.h
+@@ -12,15 +12,15 @@
+ #define _HAVE_PSPLASH_COLORS_H
+ 
+ /* This is the overall background color */
+-#define PSPLASH_BACKGROUND_COLOR 0xec,0xec,0xe1
++#define PSPLASH_BACKGROUND_COLOR 0x00,0x00,0x00
+ 
+ /* This is the color of any text output */
+-#define PSPLASH_TEXT_COLOR 0x6d,0x6d,0x70
++#define PSPLASH_TEXT_COLOR 0x8a,0x95,0xa1
+ 
+ /* This is the color of the progress bar indicator */
+-#define PSPLASH_BAR_COLOR 0x6d,0x6d,0x70
++#define PSPLASH_BAR_COLOR 0xf2,0xa2,0x1c
+ 
+ /* This is the color of the progress bar background */
+-#define PSPLASH_BAR_BACKGROUND_COLOR 0xec,0xec,0xe1
++#define PSPLASH_BAR_BACKGROUND_COLOR 0x1f,0x27,0x30
+ 
+ #endif
+diff --git a/psplash.c b/psplash.c
+index 261dd1c..ec98d81 100644
+--- a/psplash.c
++++ b/psplash.c
+@@ -14,7 +14,7 @@
+ #include "psplash-config.h"
+ #include "psplash-colors.h"
+ #include "psplash-poky-img.h"
+-#include "psplash-bar-img.h"
++/* The bar is drawn flat (BAR_WIDTH): no border image. */
+ #ifdef HAVE_SYSTEMD
+ #include <systemd/sd-daemon.h>
+ #endif
+@@ -27,6 +27,15 @@
+ 	    * (fb)->height / PSPLASH_IMG_SPLIT_DENOMINATOR) \
+ 	)
+ 
++/* A flat bar, 3/5 of the screen wide, with up to three lines of messages
++ * under it, left-aligned with the bar. */
++#define BAR_WIDTH(fb)   ((fb)->width * 3 / 5)
++#define BAR_HEIGHT      6
++#define BAR_X(fb)       (((fb)->width - BAR_WIDTH(fb)) / 2)
++#define BAR_Y(fb)       SPLIT_LINE_POS(fb)
++#define MSG_LINES       3
++#define MSG_Y(fb)       (BAR_Y(fb) + BAR_HEIGHT + 10)
++
+ void
+ psplash_exit (int UNUSED(signum))
+ {
+@@ -38,27 +47,32 @@ psplash_exit (int UNUSED(signum))
+ void
+ psplash_draw_msg (PSplashFB *fb, const char *msg)
+ {
+-  int w, h;
++  char text[512];
++  char *c;
+ 
+-  psplash_fb_text_size (&w, &h, &FONT_DEF, msg);
++  /* '|' starts a new line: the command pipe splits commands on '\n'. */
++  snprintf (text, sizeof text, "%s", msg);
++  for (c = text; *c; c++)
++    if (*c == '|')
++      *c = '\n';
+ 
+-  DBG("displaying '%s' %ix%i\n", msg, w, h);
++  DBG("displaying '%s'\n", text);
+ 
+   /* Clear */
+ 
+-  psplash_fb_draw_rect (fb, 
+-			0, 
+-			SPLIT_LINE_POS(fb) - h, 
++  psplash_fb_draw_rect (fb,
++			0,
++			MSG_Y(fb),
+ 			fb->width,
+-			h,
++			MSG_LINES * FONT_DEF.height,
+ 			PSPLASH_BACKGROUND_COLOR);
+ 
+   psplash_fb_draw_text (fb,
+-			(fb->width-w)/2, 
+-			SPLIT_LINE_POS(fb) - h,
++			BAR_X(fb),
++			MSG_Y(fb),
+ 			PSPLASH_TEXT_COLOR,
+ 			&FONT_DEF,
+-			msg);
++			text);
+ }
+ 
+ #ifdef PSPLASH_SHOW_PROGRESS_BAR
+@@ -67,11 +81,10 @@ psplash_draw_progress (PSplashFB *fb, int value)
+ {
+   int x, y, width, height, barwidth;
+ 
+-  /* 4 pix border */
+-  x      = ((fb->width  - BAR_IMG_WIDTH)/2) + 4 ;
+-  y      = SPLIT_LINE_POS(fb) + 4;
+-  width  = BAR_IMG_WIDTH - 8; 
+-  height = BAR_IMG_HEIGHT - 8;
++  x      = BAR_X(fb);
++  y      = BAR_Y(fb);
++  width  = BAR_WIDTH(fb);
++  height = BAR_HEIGHT;
+ 
+   if (value > 0)
+     {
+@@ -318,16 +331,7 @@ main (int argc, char** argv)
+ 			 POKY_IMG_RLE_PIXEL_DATA);
+ 
+ #ifdef PSPLASH_SHOW_PROGRESS_BAR
+-  /* Draw progress bar border */
+-  psplash_fb_draw_image (fb, 
+-			 (fb->width  - BAR_IMG_WIDTH)/2, 
+-			 SPLIT_LINE_POS(fb),
+-			 BAR_IMG_WIDTH,
+-			 BAR_IMG_HEIGHT,
+-			 BAR_IMG_BYTES_PER_PIXEL,
+-			 BAR_IMG_ROWSTRIDE,
+-			 BAR_IMG_RLE_PIXEL_DATA);
+-
++  /* The bar's empty track: no border image. */
+   psplash_draw_progress (fb, 0);
+ #endif
+ 
+-- 
+2.47.3
+

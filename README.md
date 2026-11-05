@@ -88,7 +88,6 @@ All of these run on the board and **persist across reboots**:
 net on | off | status        # eth0/usb0 + dropbear (SSH) — off by default
 autorun on | off | status    # FastCarPlay boot autostart (log: /tmp/carplay.log)
 carplay                      # run FastCarPlay manually (replaces a running instance)
-echo 03-tux > /etc/splash-theme   # boot splash — 10 themes in /etc/splash/
 ```
 
 ## USB OTG: host (default) ⇄ gadget

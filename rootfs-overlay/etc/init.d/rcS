@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# Start all init scripts in /etc/init.d, executing them in numerical order:
+# Buildroot's rcS, with the boot splash fed as it goes. S00splash starts
+# psplash; each script then moves its bar on and is listed under it, the
+# last three as "Starting <name>"; the splash quits when the last script is
+# done. Without psplash (or a framebuffer) this is Buildroot's rcS.
+#
+
+splash() {
+	[ -p /run/psplash_fifo ] && psplash-write "$1" 2>/dev/null
+}
+
+total=0
+for i in /etc/init.d/S??*; do
+	[ -f "$i" ] && total=$((total + 1))
+done
+
+done_=0
+l1=
+l2=
+l3=
+for i in /etc/init.d/S??*; do
+
+	# Ignore dangling symlinks (if any).
+	[ ! -f "$i" ] && continue
+
+	name=${i##*/S??}
+	l1=$l2
+	l2=$l3
+	l3="Starting $name"
+	splash "MSG $l1|$l2|$l3"
+
+	case "$i" in
+		*.sh)
+			# Source shell script for speed.
+			(
+				trap - INT QUIT TSTP
+				set start
+				# shellcheck source=/dev/null
+				. "$i"
+			)
+			;;
+		*)
+			# No sh extension, so fork subprocess.
+			"$i" start
+			;;
+	esac
+
+	done_=$((done_ + 1))
+	splash "PROGRESS $((done_ * 100 / total))"
+done
+
+splash QUIT

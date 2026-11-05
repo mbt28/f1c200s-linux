@@ -66,21 +66,33 @@ Two hard-won 64 MiB lessons baked into the patches:
 framebuffer sits inside the region Linux reserves for CMA, so nothing
 scribbles on it), until the sun4i DRM probe takes the pipeline over ~1 s in.
 
-## Boot splash (Linux, runtime-selectable)
+## Boot splash (psplash)
 
-No psplash: themes are raw 800×480 XRGB8888 framebuffer dumps (gzipped,
-~9 KB each) that `S00splash` blits straight into `/dev/fb0` at the first rcS
-step (with a short wait for the defer-probed DRM pipeline to create fb0).
+psplash (`BR2_PACKAGE_PSPLASH`), as on LEHU OS: LEHU's badge full screen on
+black, a flat amber progress bar under it and the last three init scripts
+under the bar ("Starting network", ...).
+
+- **The picture** is LEHU's badge (`lehu/assets/logo/lehu-display.svg`, also
+  its CarPlay icon), rendered by
+  `board/lctech/pi-f1c200s/splash/generate.py <lehu-display.svg>` (rsvg-convert
+  + Pillow) into `lehu.png` beside it.
+- **The look** is two patches to psplash (`patches/psplash/`, the same ones
+  LEHU OS applies):
+  - 0001: the colours, the flat bar, and up to three message lines under it
+    (`|` in a message starts a new line);
+  - 0002: psplash-systemd sending the units being started (LEHU OS only).
+- **Init:** `S00splash` starts `psplash` as soon as `/dev/fb0` exists (the
+  DRM pipeline defer-probes). `rcS` (`rootfs-overlay/etc/init.d/rcS`, Buildroot's
+  own plus the splash) sends a progress step and the script's name per init
+  script through `/run/psplash_fifo`, then `QUIT` after the last one.
 
 ```sh
-ls /etc/splash/                              # the ten shipped themes
-echo 03-tux > /etc/splash-theme              # select — persists, shows from next boot
-zcat /etc/splash/03-tux.fb.gz > /dev/fb0     # instant preview, no reboot
+psplash-write "MSG one|two|three"   # by hand, while it runs
+psplash-write "PROGRESS 50"
 ```
 
-Sources + the Pillow generator live in `board/lctech/pi-f1c200s/splash-themes/`
-(PNG previews + the `.fb.gz` exports into `rootfs-overlay/etc/splash/`). Add a
-theme = add a function to `generate.py`, run it, rebuild the rootfs.
+FastCarPlay's ten themes, its psplash image and the raw-framebuffer
+`S00splash` that blitted them were removed (git history has them).
 
 ## FastCarPlay rendering (`video-path = auto`)
 
