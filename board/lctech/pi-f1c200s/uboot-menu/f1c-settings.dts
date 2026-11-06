@@ -45,6 +45,14 @@
 				item-id = <ID_SAFE_OFF ID_SAFE_ON>;
 			};
 
+			zram {
+				type = "menu";
+				id = <ID_ZRAM>;
+				title = "zram swap";
+				item-label = "Off", "On";
+				item-id = <ID_ZRAM_OFF ID_ZRAM_ON>;
+			};
+
 			loglevel {
 				type = "menu";
 				id = <ID_LOG>;

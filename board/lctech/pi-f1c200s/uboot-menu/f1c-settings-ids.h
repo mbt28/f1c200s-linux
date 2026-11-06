@@ -3,7 +3,9 @@
  * IDs for the boot settings form (f1c-settings.dts), read by U-Boot's
  * tools/expo.py. Keep the order: `cedit read_env` restores a menu from the
  * item ID saved in f1c-settings.txt, so renumbering makes old files point at
- * the wrong item. Add new IDs at the end only.
+ * the wrong item. Add new IDs at the end only, and give a new menu its default
+ * in f1c-boot.cmd's f1c_settings_defaults (an older f1c-settings.txt lacks
+ * it, and cedit read_env fails on a missing setting).
  */
 
 enum {
@@ -45,6 +47,11 @@ enum {
 	ID_OS,
 	ID_OS_BUILDROOT,
 	ID_OS_LEHU,
+
+	/* added 2026-11-05: the compressed swap tier */
+	ID_ZRAM,
+	ID_ZRAM_OFF,
+	ID_ZRAM_ON,
 
 	ID_DYNAMIC_START,
 };

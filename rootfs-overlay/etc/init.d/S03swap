@@ -35,14 +35,16 @@
 #
 # Escape hatches, none needing a reflash:
 #   touch /etc/swap-disable   -> no swap at all
-#   touch /etc/swap-zram      -> add the zram tier (breaks the video decoder's
-#                                CMA allocations on this board, see above)
+#   zram swap = On in the boot menu's Settings (kernel argument f1c.zram=1),
+#   or touch /etc/swap-zram   -> add the zram tier. Without kernel patch 0037
+#                                it breaks the video decoder's CMA allocations
+#                                on this board (see above).
 #   rm /etc/swap-sd           -> no SD tier
 #   /etc/default/swap         -> override sizes/algorithm/priorities
 #   S03swap stop | start      -> live A/B without rebooting
 LOG=/var/log/swap.log
-ZRAM_SIZE=24M         # logical swap advertised (~0.5x MemTotal)
-ZRAM_MEM_LIMIT=16M    # HARD cap on physical RAM zsmalloc may hold
+ZRAM_SIZE=16M         # logical swap advertised
+ZRAM_MEM_LIMIT=6M     # HARD cap on RAM zsmalloc may hold: patch 0037 keeps it outside CMA, in the ~26 MiB left
 ZRAM_ALGO=lzo-rle     # fastest decompress on ARMv5; see linux.fragment
 ZRAM_PRI=100
 SD_DEV=/dev/mmcblk0p4
@@ -70,8 +72,12 @@ start)
 	[ -r /etc/sysctl.conf ] && sysctl -q -p /etc/sysctl.conf 2>/dev/null
 
 	# --- tier 1: zram (opt-in) -------------------------------------------
-	if [ ! -f /etc/swap-zram ]; then
-		log "zram skipped (no /etc/swap-zram)"
+	# Asked for by the boot menu (f1c.zram=1) or by /etc/swap-zram.
+	ZRAM=
+	grep -qw "f1c.zram=1" /proc/cmdline 2>/dev/null && ZRAM=boot-menu
+	[ -z "$ZRAM" ] && [ -f /etc/swap-zram ] && ZRAM=/etc/swap-zram
+	if [ -z "$ZRAM" ]; then
+		log "zram skipped (off in the boot menu, no /etc/swap-zram)"
 	elif [ ! -e /sys/block/zram0 ]; then
 		modprobe zram num_devices=1 2>/dev/null
 		# devtmpfs-only image: give the node a moment to appear.
@@ -82,7 +88,7 @@ start)
 		done
 	fi
 
-	if [ -f /etc/swap-zram ] && [ -e /sys/block/zram0 ]; then
+	if [ -n "$ZRAM" ] && [ -e /sys/block/zram0 ]; then
 		# ORDER IS LOAD-BEARING (Documentation/.../zram.rst): comp_algorithm
 		# must precede disksize (it returns -EBUSY once initialised);
 		# mem_limit is runtime-adjustable and follows.
@@ -91,11 +97,11 @@ start)
 		echo "$ZRAM_MEM_LIMIT" > /sys/block/zram0/mem_limit      2>/dev/null
 		if mkswap /dev/zram0 >/dev/null 2>&1 &&
 		   swapon -p "$ZRAM_PRI" /dev/zram0 2>/dev/null; then
-			log "zram0 up: $ZRAM_SIZE disk, $ZRAM_MEM_LIMIT cap, $(cat /sys/block/zram0/comp_algorithm 2>/dev/null)"
+			log "zram0 up ($ZRAM): $ZRAM_SIZE disk, $ZRAM_MEM_LIMIT cap, $(cat /sys/block/zram0/comp_algorithm 2>/dev/null)"
 		else
 			log "zram0 FAILED to activate"
 		fi
-	elif [ -f /etc/swap-zram ]; then
+	elif [ -n "$ZRAM" ]; then
 		log "zram0 absent (CONFIG_ZRAM=m not loaded?)"
 	fi
 
