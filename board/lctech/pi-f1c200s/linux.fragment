@@ -448,13 +448,18 @@ CONFIG_SND_SUN4I_CODEC=y
 # CONFIG_CMA_DEBUGFS is not set
 #
 # KEPT deliberately:
-#  - DEBUG_FS: needed by the overlay diagnostic tools and by zram's counters.
 #  - IKCONFIG: the shipped config is verified via /proc/config.gz.
 # DEBUG_KERNEL is not listed: EXPERT selects it regardless, so a line here
 # would be decorative. Reviving the MUSB work means reverting this hunk --
 # rootfs-overlay/usr/bin/musb-mux-trace degrades cleanly (it already checks for
 # the tracepoints and exits with a message).
-CONFIG_DEBUG_FS=y
+#
+# DEBUG_FS went too (2026-11-06). Nothing in either image reads it (zram's
+# counters are in sysfs; the debugfs ones need ZRAM_MEMORY_TRACKING, which is
+# off), and its ~1 500 entries kept ~0.7 MB of inodes and dentries resident.
+# For a debugging session (dma_buf/bufinfo, the cedrus dma-api entries of
+# docs/memory.md) put CONFIG_DEBUG_FS=y back here.
+# CONFIG_DEBUG_FS is not set
 CONFIG_IKCONFIG=y
 CONFIG_IKCONFIG_PROC=y
 
@@ -622,3 +627,31 @@ CONFIG_MAGIC_SYSRQ_SERIAL=y
 # adds sysvsem/sysvshm to task_struct, so the module tree must be installed
 # together with this kernel.
 CONFIG_SYSVIPC=y
+
+# ---------------------------------------------------------------------------
+# No-swap RAM (2026-11-06). Production runs without swap, so nothing but page
+# cache can leave RAM: every resident kernel byte comes straight out of the
+# room the programs' code has before it starts being read back from the card
+# (the 2026-10-03 freeze). Measured on the board and in System.map.
+
+# Legacy BSD ptys: 512 /dev/pty* + /dev/tty[p-za-e]* nodes nothing opens
+# (dropbear, sshd and terminals use Unix98 /dev/pts). Each one carries sysfs
+# and devtmpfs nodes and a udev database file in /run (tmpfs): ~2.5-3 MB.
+# CONFIG_LEGACY_PTYS is not set
+
+# Kernel W^X. ARM does it with 1 MiB section mappings, so the linker pads
+# .text and .rodata to 1 MiB (vmlinux.lds.S): 0.88 MB after the text and
+# 0.98 MB after the rodata, reserved for good (the init gap is freed after
+# boot). The trade: kernel text and rodata stay writable, so a kernel memory
+# bug or exploit can patch them. ARM's default for pre-v7 CPUs is already off
+# (ARCH_OPTIONAL_KERNEL_RWX_DEFAULT if CPU_V7); sunxi_defconfig turns it on.
+# DEBUG_ALIGN_RODATA depends on it and goes with it.
+# CONFIG_STRICT_KERNEL_RWX is not set
+
+# Multi-gen LRU: page reclaim that keeps the working set better than the
+# two-list LRU (fewer refaults of evicted code is the point here). Allowed
+# on 32-bit with FLATMEM (folio flag bits). Its min_ttl_ms thrash guard is
+# NOT used: on this board it OOM-kills with plenty free (S03swap explains).
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+# CONFIG_LRU_GEN_STATS is not set

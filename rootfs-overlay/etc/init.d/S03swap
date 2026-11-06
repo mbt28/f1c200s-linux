@@ -66,6 +66,20 @@ log() { echo "$(cut -d' ' -f1 /proc/uptime) $*" >> "$LOG" 2>/dev/null; }
 
 case "$1" in
 start)
+	# Multi-gen LRU (linux.fragment, "No-swap RAM"). Its thrash guard,
+	# min_ttl_ms, stays OFF (0) by default: set to 1000 on 2026-11-06 it made
+	# kswapd OOM-kill udevd 8 s into boot with 28 MB free. kswapd woke for a
+	# watermark boost and lru_gen_age_node() found no generation it counts as
+	# reclaimable -- every lruvec is "too small" at kswapd's priority on this
+	# RAM size (mm/vmscan.c says so) -- so it called out_of_memory(). Kept as
+	# a knob (LRU_MIN_TTL_MS in /etc/default/swap) for experiments only.
+	LRU_MIN_TTL_MS=${LRU_MIN_TTL_MS:-0}
+	if echo "$LRU_MIN_TTL_MS" > /sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null; then
+		log "lru_gen enabled=$(cat /sys/kernel/mm/lru_gen/enabled) min_ttl_ms=$LRU_MIN_TTL_MS"
+	else
+		log "lru_gen absent (kernel without CONFIG_LRU_GEN)"
+	fi
+
 	[ -f /etc/swap-disable ] && { log "disabled by /etc/swap-disable"; exit 0; }
 
 	# Before any swap exists, so the first reclaim uses the new watermarks.
