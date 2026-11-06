@@ -13,8 +13,12 @@ TARGET_DIR="$1"
 INITTAB="${TARGET_DIR}/etc/inittab"
 
 sed -i '/^ttyS0::respawn:/d; /^tty1::respawn:/d; /^# Auto-login as /d' "${INITTAB}"
-echo '# Auto-login as f1c (serial console)' >> "${INITTAB}"
-echo 'ttyS0::respawn:/bin/login -f f1c'    >> "${INITTAB}"
+# The login raises the real-time limit first (as root, before dropping to
+# f1c): f1c's ~/.profile starts LEHU, whose audio, mic, decoder and USB
+# reader threads ask for SCHED_FIFO, which an RLIMIT_RTPRIO of 0 refuses
+# quietly. 50, as LEHU's own S99lehu sets it. busybox login keeps the limit.
+echo '# Auto-login as f1c (serial console), real-time allowed up to 50' >> "${INITTAB}"
+echo "ttyS0::respawn:/bin/sh -c 'ulimit -r 50; exec /bin/login -f f1c'" >> "${INITTAB}"
 
 # sudo ignores a drop-in that is not 0440; git does not keep that mode.
 chmod 0440 "${TARGET_DIR}/etc/sudoers.d/f1c"
