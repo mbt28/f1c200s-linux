@@ -1,5 +1,6 @@
 # Fetched upstream trees (have their own history; pulled by scripts/fetch-sources.sh)
 /buildroot/
+/lehu
 
 # Out-of-tree build output
 /output/

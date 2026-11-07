@@ -33,6 +33,7 @@ BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
 # The f1c user: auto-login on the serial console, passwordless sudo (LIVI runs
 # as a user and reaches root through `sudo -n`). See board/.../users.table and
 # rootfs-overlay/etc/sudoers.d/f1c.
+BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/permissions.table"
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/users.table"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
 # Space-separated LIST. genimage.sh builds sdcard.img; post-image-nand.sh then
@@ -139,16 +140,20 @@ BR2_PACKAGE_HOST_SUNXI_TOOLS=y
 # libdrm: cedrus decode -> sun4i DEFE atomic NV12+tiled plane (zero-copy KMS).
 BR2_PACKAGE_LIBDRM=y
 
-# LEHU, the head unit (package/lehu, LEHU's own packaging): wired and
+# LEHU, the head unit (package/lehu in LEHU's repository, the external tree
+# packaging/buildroot; scripts/fetch-sources.sh fetches it): wired and
 # wireless CarPlay and Android Auto, its Slint screens on DRM, the phone's
 # video on cedrus through ffmpeg's v4l2-request hwaccel. Built with the host
 # Rust (1.96); it selects alsa-lib, opus, openssl, ffmpeg, dbus, BlueZ,
-# bluez-alsa and sudo, creates the lehu user and starts from S99lehu.
+# bluez-alsa and sudo. No lehu user or S99lehu (LEHU_SERVICE off): the
+# console's f1c login starts it from ~/.profile, and hostapd.conf is f1c's
+# to read (board/lctech/pi-f1c200s/permissions.table).
 # FastCarPlay, which it replaces, was dropped on 2026-11-05. C++ stays on:
 # turning it off rebuilds the toolchain, and the rest of the image builds
 # with it.
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_PACKAGE_LEHU=y
+# BR2_PACKAGE_LEHU_SERVICE is not set
 BR2_PACKAGE_I2C_TOOLS=y
 # v4l-utils (v4l2-ctl, v4l2-compliance, media-ctl) for the TV decoder: camera
 # controls, input/standard selection and test captures from the shell. The

@@ -1,0 +1,5 @@
+# Permissions on top of Buildroot's system/device_table.txt (makedevs format).
+# hostapd's config holds the access point's passphrase, which LEHU (run by
+# f1c, from its ~/.profile) hands to the phones: readable by f1c's group, by
+# no one else.
+/etc/hostapd.conf	f	0640	root	f1c	-	-	-	-	-

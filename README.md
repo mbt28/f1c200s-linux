@@ -4,7 +4,8 @@
 
 Mainline-Linux + Buildroot for the **Lctech Pi F1C200s** (Allwinner F1C200S /
 suniv, ARM926EJ-S / ARMv5TE, 64 MiB DDR, 800×480 LCD) — a wireless **CarPlay /
-Android-Auto** receiver. The head unit is **LEHU** (`package/lehu`), started
+Android-Auto** receiver. The head unit is **LEHU** (its Buildroot package is in LEHU's own
+repository, `packaging/buildroot`, a second external tree), started
 by the console's `f1c` login (`~/.profile`); the screenshots below show
 FastCarPlay, which it replaced on 2026-11-05.
 
@@ -40,7 +41,7 @@ push to a build branch gets a CI-built `sdcard.img` (Actions → run → Artifac
 ```sh
 git clone https://github.com/mbt28/f1c200s-linux.git
 cd f1c200s-linux
-scripts/fetch-sources.sh      # clone Buildroot (pinned) + the cedar driver
+scripts/fetch-sources.sh      # clone Buildroot (pinned) + LEHU (its packaging)
 scripts/build.sh              # fetch Linux + U-Boot, build the image
 sudo dd if=output/images/sdcard.img of=/dev/sdX bs=1M conv=fsync   # your SD device!
 ```
@@ -50,7 +51,8 @@ Versions are pinned in `config.env`; any Buildroot target is forwarded, e.g.
 
 ## Layout
 
-This repo root is the Buildroot `BR2_EXTERNAL` tree.
+This repo root is a Buildroot `BR2_EXTERNAL` tree (CARPLAY); LEHU's
+`packaging/buildroot` is the second one (LEHU).
 
 ```
 config.env                 pinned versions + upstream URLs
@@ -59,12 +61,14 @@ configs/…_defconfig        the board defconfig
 board/lctech/pi-f1c200s/   linux/uboot fragments · genimage · post-build · flash-nand.sh
 patches/linux-lctech/      LCD+GT911 touch · VE/codec clocks · USB-OTG host · cedrus suniv fixes · audio codec
 patches/ffmpeg/            v4l2-request hwaccel
-package/                   lehu · livi · esp-hosted-ng · libimobiledevice stack
+package/                   livi · esp-hosted-ng · libimobiledevice stack
 rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · audio · splash) · f1c's .profile (LEHU)
 docs/                      display · audio · hardware-fixes · cedrus-status · …
 ```
 
-Upstream sources land in `buildroot/` and `output/` (both git-ignored).
+Upstream sources land in `buildroot/`, `lehu/` and `output/` (all git-ignored);
+a symlink `lehu -> ~/path/to/lehu` makes the build use a local LEHU checkout's
+packaging.
 
 ## Boot: SD card, or on-board NAND
 
