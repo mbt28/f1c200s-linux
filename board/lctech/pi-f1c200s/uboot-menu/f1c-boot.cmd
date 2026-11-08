@@ -73,8 +73,16 @@ setenv f1c_lehu_boot 'run f1c_bt_reset; setenv f1c_extra; run f1c_args_safe; run
 # script checks that this program is there: the deployment's path is the
 # ostree= value, cut out of the arguments in two steps (everything up to
 # "ostree=", then everything from the next space).
+#
+# The update boot: lehu-os-update leaves /boot/lehu-update on p6 when an
+# update is to be installed with the RAM to itself. The menu then boots the
+# current deployment with f1c.update=1 by default, whatever the "Default
+# system" setting: LEHU does not start, the update is installed, the file
+# removed, and the board reboots.
 setenv f1c_ostree
+setenv f1c_ostree_update
 if test -e mmc 0:6 /boot/loader/uEnv.txt; then
+	if test -e mmc 0:6 /boot/lehu-update; then setenv f1c_ostree_update 1; fi
 	setenv kernel_image; setenv fdt_file; setenv kernel_image2; setenv fdt_file2; setenv bootargs2
 	load mmc 0:6 0x80C00000 /boot/loader/uEnv.txt
 	env import -t 0x80C00000 ${filesize} kernel_image fdt_file bootargs kernel_image2 fdt_file2 bootargs2
@@ -83,9 +91,10 @@ if test -e mmc 0:6 /boot/loader/uEnv.txt; then
 	setenv f1c_ostree_args2 "${bootargs2}"
 	setenv bootargs "${f1c_base_args}"
 fi
-setenv f1c_lehu_ostree_boot 'run f1c_bt_reset; setenv f1c_extra; run f1c_args_safe; run f1c_args_log; setexpr f1c_odir sub ".*ostree=" "" "${f1c_oargs}"; setexpr f1c_odir sub " .*" "" "${f1c_odir}"; setenv bootargs "${f1c_lehu_base_args}${f1c_extra} ${f1c_oargs}"; if test -e mmc 0:6 ${f1c_odir}/usr/lib/ostree/ostree-prepare-root && load mmc 0:6 0x80008000 ${f1c_okernel} && load mmc 0:6 0x80C00000 ${f1c_ofdt}; then run f1c_lehu_cpu; echo "LEHU OS ${f1c_odir}, kernel arguments: ${bootargs}"; setenv fdt_high 0x81800000; bootz 0x80008000 - 0x80C00000; fi; echo "LEHU OS: cannot boot ${f1c_odir} (${f1c_okernel})"; bootmenu 10'
-setenv f1c_lehu_ostree_cur 'setenv f1c_oargs "${f1c_ostree_args}"; setenv f1c_okernel "${kernel_image}"; setenv f1c_ofdt "${fdt_file}"; run f1c_lehu_ostree_boot'
-setenv f1c_lehu_ostree_prev 'setenv f1c_oargs "${f1c_ostree_args2}"; setenv f1c_okernel "${kernel_image2}"; setenv f1c_ofdt "${fdt_file2}"; run f1c_lehu_ostree_boot'
+setenv f1c_lehu_ostree_boot 'run f1c_bt_reset; setenv f1c_extra; run f1c_args_safe; run f1c_args_log; setexpr f1c_odir sub ".*ostree=" "" "${f1c_oargs}"; setexpr f1c_odir sub " .*" "" "${f1c_odir}"; setenv bootargs "${f1c_lehu_base_args}${f1c_extra}${f1c_oupd} ${f1c_oargs}"; if test -e mmc 0:6 ${f1c_odir}/usr/lib/ostree/ostree-prepare-root && load mmc 0:6 0x80008000 ${f1c_okernel} && load mmc 0:6 0x80C00000 ${f1c_ofdt}; then run f1c_lehu_cpu; echo "LEHU OS ${f1c_odir}, kernel arguments: ${bootargs}"; setenv fdt_high 0x81800000; bootz 0x80008000 - 0x80C00000; fi; echo "LEHU OS: cannot boot ${f1c_odir} (${f1c_okernel})"; bootmenu 10'
+setenv f1c_lehu_ostree_cur 'setenv f1c_oupd; setenv f1c_oargs "${f1c_ostree_args}"; setenv f1c_okernel "${kernel_image}"; setenv f1c_ofdt "${fdt_file}"; run f1c_lehu_ostree_boot'
+setenv f1c_lehu_ostree_upd 'setenv f1c_oupd " f1c.update=1"; setenv f1c_oargs "${f1c_ostree_args}"; setenv f1c_okernel "${kernel_image}"; setenv f1c_ofdt "${fdt_file}"; run f1c_lehu_ostree_boot'
+setenv f1c_lehu_ostree_prev 'setenv f1c_oupd; setenv f1c_oargs "${f1c_ostree_args2}"; setenv f1c_okernel "${kernel_image2}"; setenv f1c_ofdt "${fdt_file2}"; run f1c_lehu_ostree_boot'
 
 # cedit read_env fails (-ENOENT, "Failed to read settings from environment:
 # -2") if any menu of the form has no c.<name> variable, as in a
@@ -103,18 +112,29 @@ setenv f1c_settings 'if cedit load mmc 0:1 f1c-settings.dtb; then run f1c_settin
 # The menu. bootmenu_default is the entry the countdown boots, and bootcmd
 # the same system, for "boot" typed at the console. An OSTree LEHU OS with
 # a previous deployment gets an entry for it too: the version before the
-# last update, picked by hand.
+# last update, picked by hand; and one for the update boot when an update
+# waits, which is then the default. The entries after the first two are
+# numbered as they are added (f1c_n).
 setenv bootmenu_3
+setenv bootmenu_4
 if test -n "${f1c_ostree}"; then
 	setenv bootmenu_0 'Buildroot=run f1c_boot'
 	setenv bootmenu_1 'LEHU OS=run f1c_lehu_ostree_cur'
+	setenv f1c_n 2
 	if test -n "${kernel_image2}"; then
-		setenv bootmenu_2 'LEHU OS, previous version=run f1c_lehu_ostree_prev'
-		setenv bootmenu_3 'Settings=run f1c_settings'
-	else
-		setenv bootmenu_2 'Settings=run f1c_settings'
+		setenv bootmenu_${f1c_n} 'LEHU OS, previous version=run f1c_lehu_ostree_prev'
+		setexpr f1c_n ${f1c_n} + 1
 	fi
-	if test "${c.os-str}" = "LEHU OS"; then
+	if test -n "${f1c_ostree_update}"; then
+		setenv bootmenu_${f1c_n} 'LEHU OS, install the update=run f1c_lehu_ostree_upd'
+		setenv f1c_upd_entry ${f1c_n}
+		setexpr f1c_n ${f1c_n} + 1
+	fi
+	setenv bootmenu_${f1c_n} 'Settings=run f1c_settings'
+	if test -n "${f1c_ostree_update}"; then
+		setenv bootmenu_default ${f1c_upd_entry}
+		setenv bootcmd 'run f1c_lehu_ostree_upd'
+	elif test "${c.os-str}" = "LEHU OS"; then
 		setenv bootmenu_default 1
 		setenv bootcmd 'run f1c_lehu_ostree_cur'
 	else
