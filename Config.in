@@ -13,3 +13,6 @@ source "$BR2_EXTERNAL_CARPLAY_PATH/package/freedoom/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/game-launcher/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/cp-mux-probe/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/musb-collision-test/Config.in"
+# Whole-system updates: OSTree, and the root filesystem as an OSTree system.
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/ostree/Config.in"
+source "$BR2_EXTERNAL_CARPLAY_PATH/package/ostreefs/Config.in"

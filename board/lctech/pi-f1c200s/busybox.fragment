@@ -16,3 +16,8 @@ CONFIG_FEATURE_SWAPON_PRI=y
 # Deliberately NOT enabled: CONFIG_FEATURE_SWAPON_DISCARD. Discard-on-swap
 # issues a TRIM per freed page, multiplying small writes on a cheap card in a
 # vehicle that loses power without warning.
+
+# stat -c is REQUIRED by /usr/sbin/lehu-os-update (the upload's owner, which
+# deployment is booted, the update's progress).
+CONFIG_STAT=y
+CONFIG_FEATURE_STAT_FORMAT=y

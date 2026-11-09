@@ -1,0 +1,27 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] prepare-root-static: reuse a /sysroot.tmp left by the last boot
+
+Without an initramfs, ostree-prepare-root runs as PID 1 with / as the root
+mount point. It creates /sysroot.tmp, bind-mounts the deployment there and
+pivot_root()s into it, which leaves the directory on the physical root:
+only the initramfs path (MS_MOVE) removes it. The next boot then fails at
+mkdir() with EEXIST, init exits and the kernel panics, for every
+deployment. Accept an existing directory.
+
+Upstream-Status: Pending
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+--- a/src/switchroot/ostree-prepare-root-static.c
++++ b/src/switchroot/ostree-prepare-root-static.c
+@@ -213,7 +213,10 @@
+   if (mount (NULL, "/", NULL, MS_REC | MS_PRIVATE | MS_SILENT, NULL) < 0)
+     err (EXIT_FAILURE, "failed to make \"/\" private mount");
+ 
+-  if (mkdir (TMP_SYSROOT, 0755) < 0)
++  /* With / as the root mount point (no initramfs) the pivot_root below
++   * leaves TMP_SYSROOT behind on the physical root: it is only removed on
++   * the initramfs path. Reuse it on the next boot rather than failing. */
++  if (mkdir (TMP_SYSROOT, 0755) < 0 && errno != EEXIST)
+     err (EXIT_FAILURE, "couldn't create temporary sysroot %s", TMP_SYSROOT);
+ 
+   /* Run in the deploy_path dir so we can use relative paths below */

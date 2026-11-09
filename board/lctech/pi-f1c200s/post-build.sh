@@ -20,6 +20,13 @@ sed -i '/^ttyS0::respawn:/d; /^tty1::respawn:/d; /^# Auto-login as /d' "${INITTA
 echo '# Auto-login as f1c (serial console), real-time allowed up to 50' >> "${INITTAB}"
 echo "ttyS0::respawn:/bin/sh -c 'ulimit -r 50; exec /bin/login -f f1c'" >> "${INITTAB}"
 
+# The kernel mounts devtmpfs on the partition's /dev. On an OSTree system
+# ostree-prepare-root then pivots into the deployment, whose /dev is empty and
+# which nothing else fills under BusyBox init (systemd does it on LEHU OS). It
+# comes first: the later lines need /dev. The NAND image has /dev already.
+sed -i '/ -t devtmpfs devtmpfs \/dev/d' "${INITTAB}"
+sed -i "0,/^::sysinit:/s||::sysinit:/bin/sh -c 'mountpoint -q /dev \|\| exec /bin/mount -t devtmpfs devtmpfs /dev'\n::sysinit:|" "${INITTAB}"
+
 # sudo ignores a drop-in that is not 0440; git does not keep that mode.
 chmod 0440 "${TARGET_DIR}/etc/sudoers.d/f1c"
 

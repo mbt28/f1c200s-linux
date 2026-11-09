@@ -52,6 +52,13 @@ BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctec
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="allwinner/suniv-f1c200s-lctech-pi"
 BR2_LINUX_KERNEL_PATCH="$(BR2_EXTERNAL_CARPLAY_PATH)/patches/linux-lctech"
+# The SD card's root is an OSTree system (docs/ostree.md): /bin, /sbin and /lib
+# in /usr, and the image from package/ostreefs. e2fsprogs is here for ostree's
+# libe2p, with none of its programs.
+BR2_ROOTFS_MERGED_USR=y
+BR2_PACKAGE_OSTREE=y
+BR2_TARGET_ROOTFS_OSTREEFS=y
+# BR2_PACKAGE_E2FSPROGS_FSCK is not set
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
 # squashfs for the NAND rootfs (mtd2 "rom"), built ALONGSIDE ext4 -- one build

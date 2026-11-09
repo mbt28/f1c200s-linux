@@ -1,0 +1,13 @@
+config BR2_TARGET_ROOTFS_OSTREEFS
+	bool "root filesystem as an OSTree system (rootfs.ostreefs)"
+	depends on BR2_PACKAGE_OSTREE
+	depends on BR2_ROOTFS_MERGED_USR # OSTree keeps the system in /usr
+	help
+	  The root filesystem in OSTree's layout, committed to the
+	  repository <output>/ostree_repo, and an ext4 image for p2 holding
+	  one deployment of that commit (docs/ostree.md).
+
+config BR2_TARGET_ROOTFS_OSTREEFS_SIZE
+	int "size of the image, in KiB"
+	default 524288
+	depends on BR2_TARGET_ROOTFS_OSTREEFS

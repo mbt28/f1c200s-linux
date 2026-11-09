@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# Buildroot as an OSTree system (docs/ostree.md): what systemd does on LEHU OS.
+# ostree-prepare-root made the deployment / and bound /var and /boot before
+# this system's init started. What is left:
+#   - /run/ostree-booted, which tells ostree this system is booted from it (the
+#     tmpfs on /run is mounted after prepare-root);
+#   - shared mounts, which "ostree admin unlock" needs;
+#   - the files of /usr/share/factory/var that /var does not have, so that the
+#     first boot gets /home and /root, and a version's new files arrive. A file
+#     already in /var stays as it is, even if the version has another one;
+#   - the folders of the updates (lehu-os-update).
+#
+# It runs on any boot and does nothing outside OSTree (the NAND path).
+
+case "$1" in
+start)
+	case " $(cat /proc/cmdline) " in
+	*" ostree="*) ;;
+	*) exit 0 ;;
+	esac
+	: > /run/ostree-booted
+
+	# Mounts shared, as systemd makes them, with /sysroot private, as ostree
+	# wants it. ostree works in a mount namespace of its own, and "admin unlock"
+	# mounts its overlay on /usr there: on private mounts that overlay is gone
+	# when ostree exits, and it says it worked all the same.
+	mount --make-rshared /
+	mount --make-rprivate /sysroot
+
+	if cd /usr/share/factory/var 2>/dev/null; then
+		find . -mindepth 1 | while read -r p; do
+			if [ ! -e "/var/$p" ] && [ ! -L "/var/$p" ]; then
+				cp -a "$p" "/var/$p"
+			fi
+		done
+	fi
+
+	# Sticky: LEHU, in the group, cannot move or remove what root unpacks.
+	mkdir -p /var/cache/lehu-update /var/lib/lehu-os-update
+	chown root:f1c /var/cache/lehu-update
+	chmod 1770 /var/cache/lehu-update
+	;;
+stop) ;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
