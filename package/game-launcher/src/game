@@ -57,8 +57,8 @@ was=$(cat $C/scaling_cur_freq 2>/dev/null)
 
 reset_display
 # SDL 1.2: framebuffer backend, keyboard through the VT, no mouse device
-cd /root
-HOME=/root SDL_VIDEODRIVER=fbcon SDL_FBDEV=/dev/fb0 SDL_NOMOUSE=1 \
+cd $HOME
+HOME=$HOME SDL_VIDEODRIVER=fbcon SDL_FBDEV=/dev/fb0 SDL_NOMOUSE=1 \
 	"$@" > /tmp/game.log 2>&1
 rc=$?
 reset_display
