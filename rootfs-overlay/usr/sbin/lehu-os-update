@@ -1,0 +1,492 @@
+#!/bin/sh
+# lehu-os-update: install an update of this system (docs/ostree.md). The same
+# file serves LEHU OS (lehu-os: under systemd) and Buildroot (f1c200s-linux:
+# under BusyBox init); /usr/lib/lehu-os-update.conf says which, if not LEHU OS.
+#
+#   lehu-os-update check UPLOAD          verify it, and say what it is
+#   lehu-os-update apply [--boot] [--no-reboot] UPLOAD
+#                                        install it, and restart
+#   lehu-os-update discard UPLOAD        remove an upload not wanted any more
+#   lehu-os-update status                the last update, and the version running
+#   lehu-os-update boot                  (the update boot's service or S05 only)
+#
+# UPLOAD is what scripts/make-update.sh makes on the build host: a tar file,
+# or the folder it unpacks to, in /var/cache/lehu-update. The tar is
+# unpacked (and removed) by the first command given it; the same name keeps
+# working after that. Unpacking it removes the uploads unpacked before, and
+# an upload that fails its checks is removed too, tar or folder, unless its
+# install had started (an install cut off resumes). It is a small
+# OSTree repository: the new version's commit, signed with LEHU OS's key,
+# and the static delta from the version the board runs. LEHU receives it
+# from the phone, runs "check" to show it, and runs "apply" when the car is
+# parked, through sudo (sudoers.d/lehu-os-update).
+#
+# A small update (up to LEHU_UPDATE_INPLACE_KB, 4 MB: a new LEHU) is
+# installed in the running system, beside LEHU: pull, deploy, reboot. A
+# larger one (the OS itself) goes through the update boot: apply writes the
+# upload's path to /boot/lehu-update (p6's /boot) and reboots; U-Boot sees
+# the file and boots LEHU OS with f1c.update=1, where LEHU does not start
+# and lehu-os-update-boot.service runs "lehu-os-update boot" with the RAM
+# to itself. It removes the file before anything else, so the update boot
+# happens once whatever the outcome, installs, and reboots. --boot sends
+# any update through the update boot.
+#
+# Either way the new version is the default from the next boot on, and the
+# version before stays on the boot menu as "LEHU OS, previous version".
+# The upload is deleted once installed.
+#
+# The state is in /var/lib/lehu-os-update/status, name=value lines:
+#   state=checking|installing|update-boot|installed|failed
+#   version=  the update's version     commit=  its commit
+#   message=  what went wrong, or what happened
+# "status" adds booted= and booted_version=, the version running: after
+# the reboot, an update went in when booted= is its commit= (state stays
+# "installed"). "installing" with no update running means it was cut off
+# (power lost): apply it again, the pull resumes.
+#
+# While apply or the update boot works, /run/lehu-os-update/progress says
+# where it is, rewritten whole at each step:
+#   percent=  0 to 100      version=  the update's version
+#   phase=checking|update-boot|receiving|installing|installed|failed
+#   message=  a line for the screen
+# Each step is also a line on the serial console ("LEHU OS update: 40%
+# Receiving the update: 11 of 27 parts") and, when the splash runs (the
+# update boot: LEHU is off and psplash-systemd too), its message and bar.
+# The pull is followed by the delta parts it has read (their atime; ostree
+# says nothing without a terminal), the deploy by the time it usually takes.
+#
+# The output of check and status is name=value lines too. Exit status: 0,
+# or 1 with message= on the last line.
+set -eu
+# LEHU reads the status and the progress without root, whoever ran this: an SSH
+# session has 077 from dropbear.
+umask 022
+
+UPLOADS=/var/cache/lehu-update
+STATE=/var/lib/lehu-os-update
+FLAG=/boot/lehu-update
+BRANCH=lehu-os
+OS_NAME="LEHU OS"
+REMOTE=lehu-update
+# shellcheck disable=SC1091
+[ ! -r /usr/lib/lehu-os-update.conf ] || . /usr/lib/lehu-os-update.conf
+# Under BusyBox init there is no unit: flock on this file is the "one update
+# at a time", and it goes with the process.
+LOCK=/run/lehu-os-update/lock
+if [ -d /run/systemd/system ]; then SYSTEMD=1; else SYSTEMD=; fi
+LEHU_UPDATE_INPLACE_KB=${LEHU_UPDATE_INPLACE_KB:-4096}
+PROGRESS=/run/lehu-os-update/progress
+FIFO=/run/psplash_fifo
+# For the progress: the pull reads about 230 KB of delta a second at
+# 792 MHz, and the deploy takes about 45 s, whatever the update's size.
+PULL_KB_PER_S=230
+DEPLOY_S=45
+
+fail() {
+	echo "message=$*"
+	if [ -n "${status_on:-}" ]; then
+		stop_meter
+		set_status state=failed "message=$*"
+		progress 0 failed "The update failed: $*"
+	fi
+	reject
+	exit 1
+}
+
+# An upload that fails its checks goes: the tar, the folder it unpacked to,
+# and the unpacking's scratch folder. Root unpacked it, so LEHU could not
+# remove it. Not once its install has started (install_update clears
+# $rejects): an install cut off resumes when applied again.
+reject() {
+	[ -n "${rejects:-}" ] || return 0
+	rm -rf "$rejects" "$rejects.tar" $UPLOADS/.unpack
+}
+
+# An update being installed, by apply's unit: check and discard leave the
+# uploads alone meanwhile.
+busy() {
+	[ -z "${LEHU_OS_UPDATE_UNIT:-}" ] || return 1
+	if [ -n "$SYSTEMD" ]; then
+		systemctl -q is-active lehu-os-update 2>/dev/null
+	else
+		[ -e $LOCK ] && ! flock -n $LOCK true
+	fi
+}
+
+free_kb() {
+	df -Pk "$1" | awk 'NR == 2 { print $4 }'
+}
+
+# Every upload unpacked before, but $1: a new upload replaces them. Only
+# root's folders (upload_dir's), and the update boot one of them waited for.
+drop_uploads() {
+	for d in $UPLOADS/*; do
+		[ "$d" != "$1" ] && [ -d "$d" ] && [ ! -L "$d" ] && [ "$(stat -c %u "$d")" = 0 ] || continue
+		rm -rf "$d"
+	done
+	if [ -f $FLAG ] && [ ! -d "$(cat $FLAG)" ]; then
+		rm -f $FLAG
+		set_status state=failed "message=the update waiting for the update boot was replaced by another upload"
+	fi
+}
+
+# The splash's message (up to three lines, '|' between them) and its bar,
+# if psplash runs: psplash-write would wait forever on a pipe nobody reads.
+splash() {
+	[ -p $FIFO ] && pidof psplash psplash-default >/dev/null 2>&1 || return 0
+	psplash-write "MSG $1" 2>/dev/null || true
+	psplash-write "PROGRESS $2" 2>/dev/null || true
+}
+
+# progress PERCENT PHASE MESSAGE: the progress file, and the console and
+# splash when something changed.
+progress() {
+	mkdir -p ${PROGRESS%/*}
+	printf 'percent=%s\nphase=%s\nmessage=%s\nversion=%s\n' "$1" "$2" "$3" "${version:-}" > $PROGRESS.new
+	mv $PROGRESS.new $PROGRESS
+	[ "$1 $3" != "${last_progress:-}" ] || return 0
+	last_progress="$1 $3"
+	echo "$OS_NAME update: $1% $3" > /dev/console 2>/dev/null || true
+	splash "Updating $OS_NAME to ${version:-a new version}|$3|Keep the power on" "$1"
+}
+
+# The meters, in the background while ostree works; stop_meter ends one.
+# receive_meter FROM SPAN: the delta parts and fallback objects of the
+# upload, set to an atime of 2000 before the pull. A part is read once its
+# atime is newer (the card is mounted relatime: a read updates an atime
+# older than the file's mtime).
+receive_meter() {
+	parts=$(find "$dir/deltas" -type f ! -name superblock; find "$dir/objects" -name '*.filez')
+	total=$(echo "$parts" | grep -c .) || total=1
+	# shellcheck disable=SC2086
+	touch -a -d "2000-01-01 00:00:00" $parts
+	(
+		while :; do
+			n=0
+			for f in $parts; do
+				[ "$(stat -c %X "$f" 2>/dev/null || echo 0)" -gt 946684800 ] && n=$((n + 1))
+			done
+			progress $(($1 + $2 * n / total)) receiving "Receiving the update: $n of $total parts"
+			sleep 1
+		done
+	) &
+	meter=$!
+}
+# install_meter FROM TO: from FROM toward TO over DEPLOY_S, then TO.
+install_meter() {
+	(
+		t=0
+		while :; do
+			p=$(($1 + ($2 - $1) * t / DEPLOY_S))
+			[ $p -le $2 ] || p=$2
+			progress $p installing "Installing the new version"
+			sleep 2
+			t=$((t + 2))
+		done
+	) &
+	meter=$!
+}
+stop_meter() {
+	[ -n "${meter:-}" ] || return 0
+	kill $meter 2>/dev/null || true
+	wait $meter 2>/dev/null || true
+	meter=
+}
+trap stop_meter EXIT
+
+# The status file, rewritten whole: the name=value pairs given, then the
+# update's version and commit when known.
+set_status() {
+	mkdir -p $STATE
+	{
+		for kv in "$@"; do echo "$kv"; done
+		[ -n "${version:-}" ] && echo "version=$version"
+		[ -n "${to:-}" ] && echo "commit=$to"
+		echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	} > $STATE/status.new
+	mv $STATE/status.new $STATE/status
+	sync
+}
+
+# The commit the system runs: the deployment that is /, by its device and
+# inode, readable without root, unlike "ostree admin status". Not by the
+# kernel's ostree=: that goes through /ostree/boot.N, which the next deploy
+# replaces, and would name nothing between an install and its reboot.
+booted_commit() {
+	r=$(stat -c %d:%i /)
+	for d in /sysroot/ostree/deploy/*/deploy/*.[0-9]*; do
+		[ "$(stat -c %d:%i "$d" 2>/dev/null)" = "$r" ] || continue
+		basename "$d" | sed -n 's/^\([0-9a-f]\{64\}\)\.[0-9]*$/\1/p'
+		return 0
+	done
+}
+
+commit_version() {
+	ostree --repo="$1" show --print-metadata-key=version "$2" 2>/dev/null | tr -d "'"
+}
+
+# The upload's folder, in dir. A tar file is unpacked beside itself and
+# removed, and the uploads unpacked before go. It comes from the phone and
+# root unpacks it, so it may hold only plain files and folders, with no
+# absolute names and no "..". LEHU (group lehu) can write to $UPLOADS: the
+# tar is moved into a folder of root's before it is looked at, so it cannot
+# be changed between the checks and the unpacking, and the sticky bit on
+# $UPLOADS keeps LEHU from moving root's folders (lehu-os-update.tmpfiles).
+upload_dir() {
+	p=$(realpath "$1" 2>/dev/null) || fail "no upload: $1"
+	# check unpacked it already: apply takes the same name.
+	case $p in *.tar) [ -e "$p" ] || [ ! -d "${p%.tar}" ] || p=${p%.tar} ;; esac
+	# In $UPLOADS itself, and not one of the hidden scratch folders.
+	case ${p#"$UPLOADS"/} in
+	"$p" | */* | .*) fail "an upload is in $UPLOADS: $1" ;;
+	esac
+	dir=${p%.tar}
+	rejects=$dir
+	case $p in
+	*.tar)
+		[ -f "$p" ] || fail "no upload: $1"
+		w=$UPLOADS/.unpack
+		rm -rf $w && mkdir -m 0700 $w && mv -f "$p" $w/upload.tar || fail "the upload cannot be moved: $1"
+		[ -f $w/upload.tar ] && [ ! -L $w/upload.tar ] || fail "no upload: $1"
+		# Room for the unpacked copy, about the tar's size.
+		need_kb=$(($(du -k $w/upload.tar | cut -f1) + 16384))
+		[ "$(free_kb $UPLOADS)" -ge $need_kb ] \
+			|| fail "not enough room on the card to unpack the update: $((need_kb / 1024)) MB needed"
+		tar -t -v -f $w/upload.tar > /dev/null 2>&1 || fail "the upload is not a tar file: $1"
+		if tar -t -v -f $w/upload.tar | grep -qv '^[-d]' \
+			|| tar -t -f $w/upload.tar | grep -qE '^/|(^|/)\.\.(/|$)'; then
+			fail "the upload holds more than files and folders: $1"
+		fi
+		mkdir $w/repo
+		tar -x -o -f $w/upload.tar -C $w/repo || fail "the upload does not unpack: $1"
+		rm -f $w/upload.tar
+		drop_uploads "$dir"
+		rm -rf "$dir"
+		# -T: into $dir, never into a folder a link there points to.
+		mv -T $w/repo "$dir" || fail "the upload cannot be moved: $1"
+		rmdir $w
+		;;
+	*)
+		# A folder upload_dir unpacked before (root's).
+		[ -d "$p" ] && [ "$(stat -c %u "$p")" = 0 ] || fail "no upload: $1"
+		;;
+	esac
+}
+
+# Verify the upload in $dir, and set to, version, booted, size_kb and mode.
+check() {
+	[ -f "$dir/config" ] && [ -f "$dir/summary" ] || fail "not an update: $dir"
+	to=$(ostree --repo="$dir" rev-parse $BRANCH 2>/dev/null) || fail "not an update of $BRANCH: $dir"
+	# The commit's ed25519 signature against the keys in
+	# /usr/share/ostree/trusted.ed25519.d; the pull checks it again, and the
+	# summary's.
+	ostree --repo="$dir" sign --verify "$to" >/dev/null 2>&1 \
+		|| fail "the update is not signed with $OS_NAME's key"
+	version=$(commit_version "$dir" "$to")
+	booted=$(booted_commit)
+	[ -n "$booted" ] || fail "the system is not an OSTree $OS_NAME"
+	[ "$to" != "$booted" ] || fail "version $version runs already"
+	ostree --repo="$dir" static-delta list 2>/dev/null | grep -qx "$booted-$to" \
+		|| fail "the update is not for the version running ($(commit_version /ostree/repo "$booted"))"
+	size_kb=$(du -sk "$dir" | cut -f1)
+	# Room for the pull, on the same card: the delta's objects, unpacked,
+	# into /ostree/repo, and a part at a time in $UPLOADS/.tmp. An estimate
+	# from the upload's size (135 MB unpacked from 38 MB in the large test):
+	# "static-delta show" has the exact size but unpacks every part to say
+	# so, 35 s for that update. The pull keeps its own margin too, and fails
+	# cleanly at it. Not much above the real ratio: Buildroot's partition is
+	# 512 MiB, and more would refuse updates that fit.
+	need_kb=$((size_kb * 4 + 32768))
+	[ "$(free_kb /sysroot)" -ge $need_kb ] \
+		|| fail "not enough room on the card to install the update: $((need_kb / 1024)) MB needed"
+	if [ "$size_kb" -le "$LEHU_UPDATE_INPLACE_KB" ]; then mode=inplace; else mode=update-boot; fi
+}
+
+# Pull the update in $dir from the version running, and deploy it. The
+# percentages: 3 for the check; the pull and the deploy share the rest by
+# the time each takes.
+install_update() {
+	rejects=
+	set_status state=installing
+	pull_s=$((size_kb / PULL_KB_PER_S + 2))
+	pull_end=$((3 + 95 * pull_s / (pull_s + DEPLOY_S)))
+	ostree remote delete --if-exists $REMOTE
+	ostree remote add --no-gpg-verify --set=sign-verify=true --set=sign-verify-summary=true \
+		$REMOTE "file://$dir" $BRANCH
+	# A file:// remote is imported object by object unless the deltas are
+	# required: the delta is the update. ostree unpacks each delta part into
+	# a temporary file in TMPDIR, by default /var/tmp, which is RAM here:
+	# on the card instead.
+	rm -rf $UPLOADS/.tmp && mkdir -p $UPLOADS/.tmp
+	receive_meter 3 $((pull_end - 3))
+	TMPDIR=$UPLOADS/.tmp ostree pull --require-static-deltas $REMOTE $BRANCH >&2 \
+		|| { rm -rf $UPLOADS/.tmp; fail "the pull failed"; }
+	stop_meter
+	rm -rf $UPLOADS/.tmp
+	install_meter $pull_end 98
+	ostree admin deploy $REMOTE:$BRANCH >&2 || fail "the deploy failed"
+	stop_meter
+	ostree remote delete --if-exists $REMOTE
+	# The deploy merged /etc while the remote was in it: not in the new version.
+	rm -f /ostree/deploy/*/deploy/"$to".*/etc/ostree/remotes.d/$REMOTE.conf
+	rm -rf "$dir"
+	set_status state=installed "message=version $version is installed; it starts at the next boot"
+}
+
+# reboot.target directly: "systemctl reboot" asks logind first, which LEHU
+# OS masks, and only reboots after printing that the call failed.
+#
+# BusyBox init: a plain "reboot" is handled by init, but the update boot runs
+# inside rcS, and init would wait for rcS to end first. There -f: the card is
+# synced, and the file system has a journal.
+reboot_now() {
+	sync
+	if [ -n "$SYSTEMD" ]; then
+		systemctl start --no-block --job-mode=replace-irreversibly reboot.target
+	elif grep -qw f1c.update=1 /proc/cmdline; then
+		reboot -f
+	else
+		reboot
+	fi
+}
+
+# apply under BusyBox init, as the unit does under systemd: in a session of its
+# own, so that LEHU stopping or restarting does not cut an update off halfway,
+# with the caller waiting for it. Its output goes through a file: the caller's
+# pipe may be gone by the time it writes.
+apply_detached() {
+	busy && fail "an update is being installed"
+	d=${PROGRESS%/*}
+	mkdir -p "$d"
+	rm -f "$d/apply.rc"
+	setsid sh -c '
+		d=$1; shift
+		LEHU_OS_UPDATE_UNIT=1 /usr/sbin/lehu-os-update apply "$@" > "$d/apply.out" 2>&1
+		echo $? > "$d/apply.rc"
+	' lehu-os-update "$d" "$@" < /dev/null > /dev/null 2>&1 &
+	wait $! || true
+	cat "$d/apply.out" 2>/dev/null || true
+	exit "$(cat "$d/apply.rc" 2>/dev/null || echo 1)"
+}
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case $cmd in
+check)
+	[ $# = 1 ] || fail "usage: lehu-os-update check UPLOAD"
+	! busy || fail "an update is being installed"
+	upload_dir "$1"
+	check
+	echo "version=$version"
+	echo "commit=$to"
+	echo "booted=$booted"
+	echo "size_kb=$size_kb"
+	echo "mode=$mode"
+	;;
+apply)
+	boot= reboot=1
+	while [ $# -gt 1 ]; do
+		case $1 in
+		--boot) boot=1 ;;
+		--no-reboot) reboot= ;;
+		*) fail "usage: lehu-os-update apply [--boot] [--no-reboot] UPLOAD" ;;
+		esac
+		shift
+	done
+	[ $# = 1 ] || fail "usage: lehu-os-update apply [--boot] [--no-reboot] UPLOAD"
+	# The work is done in a unit of its own, outside the caller's: LEHU
+	# stopping or restarting does not cut an update off halfway. The unit's
+	# name keeps it to one update at a time.
+	if [ -z "${LEHU_OS_UPDATE_UNIT:-}" ]; then
+		set -- ${boot:+--boot} $([ -n "$reboot" ] || echo --no-reboot) "$1"
+		[ -n "$SYSTEMD" ] || apply_detached "$@"
+		exec systemd-run --quiet --unit=lehu-os-update --collect --wait --pipe \
+			--setenv=LEHU_OS_UPDATE_UNIT=1 /usr/sbin/lehu-os-update apply "$@"
+	fi
+	if [ -z "$SYSTEMD" ]; then
+		exec 9> $LOCK
+		flock -n 9 || fail "an update is being installed"
+	fi
+	status_on=1
+	progress 0 checking "Checking the update"
+	upload_dir "$1"
+	set_status state=checking
+	check
+	if [ "$mode" = update-boot ] || [ -n "$boot" ]; then
+		rejects=
+		# Without the reboot, the next boot, whenever it is, installs it.
+		echo "$dir" > $FLAG.new && mv $FLAG.new $FLAG
+		set_status state=update-boot "message=version $version installs in the update boot"
+		progress 0 update-boot "Restarting to install the update"
+		echo "message=version $version installs in the update boot"
+	else
+		install_update
+		progress 100 installed "Installed. Restarting"
+		echo "message=version $version is installed"
+	fi
+	[ -z "$reboot" ] || reboot_now
+	;;
+boot)
+	# The update boot: once, whatever happens.
+	[ -f $FLAG ] || { echo "message=no update to install"; reboot_now; exit 0; }
+	dir=$(cat $FLAG)
+	rm -f $FLAG
+	sync
+	if [ -e $FLAG ]; then
+		echo "message=$FLAG cannot be removed: no update, no reboot" >&2
+		exit 1
+	fi
+	status_on=1
+	progress 0 checking "Checking the update"
+	(
+		upload_dir "$dir"
+		check
+		install_update
+	) || true
+	# The outcome stays on the splash for a moment before the reboot.
+	if grep -qx state=installed $STATE/status; then
+		version=$(sed -n 's/^version=//p' $STATE/status)
+		progress 100 installed "Installed. Restarting"
+		sleep 3
+	else
+		version=$(sed -n 's/^version=//p' $STATE/status)
+		splash "The update to ${version:-a new version} failed|$(sed -n 's/^message=//p' $STATE/status)|Restarting with the version installed" 0
+		sleep 10
+	fi
+	reboot_now
+	;;
+discard)
+	# An upload LEHU no longer wants (cancelled, or failed to install):
+	# the tar or its folder, and the update boot waiting for it.
+	[ $# = 1 ] || fail "usage: lehu-os-update discard UPLOAD"
+	! busy || fail "an update is being installed"
+	n=${1#"$UPLOADS"/}
+	n=${n%.tar}
+	case $n in
+	"$1" | "${1%.tar}" | */* | .* | '') fail "an upload is in $UPLOADS: $1" ;;
+	esac
+	rm -rf "${UPLOADS:?}/$n" "$UPLOADS/$n.tar"
+	if [ -f $FLAG ] && [ "$(cat $FLAG)" = "$UPLOADS/$n" ]; then
+		rm -f $FLAG
+		set_status state=failed "message=the update waiting for the update boot was discarded"
+	fi
+	echo "message=discarded"
+	;;
+status)
+	b=$(booted_commit)
+	# Once it runs, an installed version no longer "starts at the next boot".
+	if [ -f $STATE/status ]; then
+		if grep -qx "commit=$b" $STATE/status; then
+			grep -v '^booted' $STATE/status | sed 's/; it starts at the next boot$//'
+		else
+			grep -v '^booted' $STATE/status
+		fi
+	fi
+	echo "booted=$b"
+	echo "booted_version=$(commit_version /ostree/repo "$b")"
+	;;
+*)
+	echo "usage: lehu-os-update check|apply|discard|status UPLOAD" >&2
+	exit 1
+	;;
+esac

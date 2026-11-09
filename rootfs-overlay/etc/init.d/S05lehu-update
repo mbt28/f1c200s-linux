@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# The update boot (docs/ostree.md): U-Boot boots with f1c.update=1 when an
+# update waits in /boot/lehu-update. lehu-os-update installs it and restarts
+# the board, so nothing after this script starts, LEHU above all: the update
+# has the RAM to itself.
+
+case "$1" in
+start)
+	case " $(cat /proc/cmdline) " in
+	*" f1c.update=1 "*) exec /usr/sbin/lehu-os-update boot ;;
+	esac
+	;;
+stop) ;;
+*)
+	echo "usage: $0 {start|stop}"
+	;;
+esac
