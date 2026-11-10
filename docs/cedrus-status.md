@@ -23,6 +23,63 @@ on F1C200s hardware on the 7.1.x branch on 2026-07-03; the evidence trail
 (`cedrus-development/ANALYSIS.md`). Everything below is the historical
 pre-root-cause investigation.
 
+## JPEG decoding (patches 0038-0039) — WORKING, 2026-11-10
+
+The VE's JPEG decoder (it shares the MPEG engine) is a V4L2 mem2mem decoder
+on cedrus's `/dev/video*`: a whole baseline JPEG in on OUTPUT
+(`V4L2_PIX_FMT_JPEG`, no request needed; the kernel parses the headers with
+`v4l2-jpeg`), the picture out on CAPTURE. For LEHU's offline map tiles.
+
+- **Where the registers come from.** The F1C200s manual (V1.2, section 2.5)
+  only lists "JPEG decode up to 16384x16384"; it documents the VE's clock,
+  gate, reset and address range, but no VE register. 0038 is patch 2/4 of the
+  unmerged upstream series "media: cedrus: Add a JPEG decoder" (Emmanuel Gil
+  Peyrot, 2024-07-31,
+  https://lore.kernel.org/all/20240731164422.206503-1-linkmauve@linkmauve.fr/),
+  written from the linux-sunxi VE register guide and the legacy cedar
+  userland. 0039 is ours: suniv only, 4:2:0 only, requests JPEG-only.
+- **CAPTURE format: `NV12_32L32` (ST12, 32x32 tiles)**, like H.264 here: this
+  variant has no `CEDRUS_CAPABILITY_UNTILED`. The DEFE video plane scans it
+  out directly (`DRM_FORMAT_NV12` + `DRM_FORMAT_MOD_ALLWINNER_TILED`, the
+  CarPlay path). `VIDIOC_EXPBUF` gives a dma-buf. A 256x256 picture is 98304
+  bytes: luma 256x256, then chroma 256x128.
+- **4:2:0 only.** This A10-generation engine does not downsample to 4:2:0: a
+  4:4:4 JPEG comes out as 4:2:2 (63 dB against a 4:2:2 reference) and the
+  engine wrote 32 KiB past the end of the CAPTURE buffer. Upstream's patches
+  offer 4:4:4 on the A10 too. 0039 refuses anything but 4:2:0 on the
+  tiled-only VEs, and the buffers come back with `V4L2_BUF_FLAG_ERROR`.
+- **H.264** still requires requests: 0039's `cedrus_qbuf()` returns `EBADR`
+  for a non-JPEG OUTPUT buffer without one (upstream's 4/4 dropped the rule for
+  all codecs, which Jernej Skrabec objected to in review). With the patched
+  module loaded, a wired CarPlay session decoded its H.264 on v4l2-request as
+  before (172 frames, 13-24 fps, 2026-11-10).
+- **Memory:** both are modules. `sunxi_cedrus` grows from 40960 to 45056 bytes
+  and `v4l2_jpeg` adds 12288, so about 16 KiB resident. No zImage change. A
+  256x256 CAPTURE buffer takes 96 KiB of CMA.
+
+Measured on the board (Buildroot, 792 MHz, `tools/cedrus_jpeg_test.c`, 1000
+decodes of four synthetic 256x256 4:2:0 tiles at quality 75-85, 8-10 KB each):
+
+| | |
+|---|---|
+| queue JPEG to dequeue picture | 1.26 ms average (1.14 min, 2.34 max) |
+| throughput, one tile at a time | 705 tiles/s |
+| copy of the JPEG into the OUTPUT buffer | 0.1 ms |
+| CPU over the loop | this process 45% of the wall (user 110 ms, sys 521 ms per 1000) |
+| CPU read of one picture from its CAPTURE buffer (98 KB, uncached) | 0.96 ms |
+| output vs libjpeg (Pillow), 4:2:0 | PSNR Y 69 dB, Cb/Cr 48-55 dB |
+
+The CPU cost is about 0.63 ms per tile, mostly in the kernel: header
+parsing from the uncached OUTPUT buffer, about 600 register writes of
+Huffman tables, and the ioctls. Decoding several tiles at a time (more
+CAPTURE buffers queued) would overlap that with the engine.
+
+To test: `tools/cedrus_jpeg_compare.py make DIR` writes test tiles on the
+build host; on the board, `cedrus_jpeg_test -o /tmp/hw tile0.jpg ...`, then
+`cedrus_jpeg_compare.py check hw tile0.jpg ...` on the host. Use
+`cedrus_jpeg_test -n 1000 ...` for timing, and `cedrus_jpeg_test -H` for the
+H.264 request rule.
+
 ---
 
 # Cedrus historical status (pre-fix) — was: NOT working

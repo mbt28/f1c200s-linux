@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Tue, 10 Nov 2026 12:19:08 +0100
+Subject: [PATCH] media: cedrus: enable JPEG decoding on suniv, 4:2:0 only,
+ without requests
+
+Enable the JPEG decoder of the previous patch on the suniv F1C100s
+variant (VE 0x1663, F1C100s/F1C200s): its manual lists "JPEG decode up to
+16384x16384" for the VE, though it documents no VE register.
+
+Take only 4:2:0 JPEGs on the VEs with tiled output only (the A10
+generation and suniv). They do not downsample to 4:2:0: a 4:4:4 JPEG
+comes out as 4:2:2, as the upstream series' cover letter says of the A10,
+and its chroma is twice what the NV12 CAPTURE buffer holds. On the
+F1C200s the engine wrote 32 KiB past the end of a 256x256 picture's
+buffer. 4:2:2 has no downsampling at all there.
+
+A whole JPEG needs no controls, so let it be queued without a request:
+the OUTPUT queue no longer requires requests, and cedrus_qbuf() still
+returns -EBADR for an OUTPUT buffer without one when the format is not
+JPEG, as Jernej Skrabec asked in review of the upstream series' patch 4/4
+(which dropped the requirement for every codec): the stateless codecs do
+not decode correctly without their per-frame controls.
+
+The picture comes out as NV12_32L32 (32x32 tiles) like the other codecs,
+since this variant has no CEDRUS_CAPABILITY_UNTILED.
+
+Tested on the F1C200s with tools/cedrus_jpeg_test.c: 256x256 baseline
+4:2:0 tiles decode in 1.26 ms on average (submit to dequeue) and match a
+libjpeg decode (PSNR Y 69 dB, Cb/Cr 48-55 dB); a 4:4:4 one is refused
+with the ERROR flag; an H.264 buffer without a request still gets EBADR.
+---
+ drivers/staging/media/sunxi/cedrus/cedrus.c   |  1 +
+ .../staging/media/sunxi/cedrus/cedrus_jpeg.c  | 15 +++++++++++
+ .../staging/media/sunxi/cedrus/cedrus_video.c | 25 +++++++++++++++++--
+ 3 files changed, 39 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus.c b/drivers/staging/media/sunxi/cedrus/cedrus.c
+index 3e7e364..a893be7 100644
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
+@@ -653,6 +653,7 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
+ 
+ static const struct cedrus_variant suniv_f1c100s_cedrus_variant = {
+ 	.capabilities	= CEDRUS_CAPABILITY_MPEG2_DEC |
++			  CEDRUS_CAPABILITY_JPEG_DEC |
+ 			  CEDRUS_CAPABILITY_H264_DEC,
+ 	.quirks		= CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS |
+ 			  CEDRUS_QUIRK_NO_DRAM_MODE_CONFIG,
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+index 1e8978e..9e1d0b4 100644
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+@@ -239,6 +239,21 @@ static int cedrus_jpeg_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * The VEs with tiled output only (the A10 generation, suniv) do not
++	 * downsample to 4:2:0: they turn 4:4:4 into 4:2:2 and leave 4:2:2 as
++	 * it is, whose chroma is twice what the NV12 CAPTURE buffer holds, and
++	 * the engine writes on past its end (seen on the F1C200s: 32 KiB past
++	 * a 256x256 picture). Take only 4:2:0 there.
++	 */
++	if (subsampling != VE_DEC_MPEG_TRIGGER_CHROMA_FMT_420 &&
++	    !cedrus_is_capable(ctx, CEDRUS_CAPABILITY_UNTILED)) {
++		v4l2_err(&dev->v4l2_dev,
++			 "only 4:2:0 JPEGs on this VE (subsampling %06x)\n",
++			 index);
++		return -EINVAL;
++	}
++
+ 	ctx->codec.jpeg.subsampling = subsampling;
+ 
+ 	/* Activate MPEG engine and select JPEG subengine. */
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_video.c b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+index 7dc7ca5..a887e37 100644
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+@@ -419,6 +419,23 @@ static int cedrus_s_fmt_vid_out(struct file *file, void *priv,
+ 	return cedrus_s_fmt_vid_out_p(cedrus_file2ctx(file), &f->fmt.pix);
+ }
+ 
++static int cedrus_qbuf(struct file *file, void *priv, struct v4l2_buffer *buf)
++{
++	struct cedrus_ctx *ctx = cedrus_file2ctx(file);
++
++	/*
++	 * The OUTPUT queue no longer requires requests because of JPEG:
++	 * keep requiring them for the stateless codecs, which do not
++	 * decode correctly without their per-frame controls.
++	 */
++	if (V4L2_TYPE_IS_OUTPUT(buf->type) &&
++	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_JPEG &&
++	    !(buf->flags & V4L2_BUF_FLAG_REQUEST_FD))
++		return -EBADR;
++
++	return v4l2_m2m_ioctl_qbuf(file, priv, buf);
++}
++
+ const struct v4l2_ioctl_ops cedrus_ioctl_ops = {
+ 	.vidioc_querycap		= cedrus_querycap,
+ 
+@@ -434,7 +451,7 @@ const struct v4l2_ioctl_ops cedrus_ioctl_ops = {
+ 
+ 	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
+ 	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
+-	.vidioc_qbuf			= v4l2_m2m_ioctl_qbuf,
++	.vidioc_qbuf			= cedrus_qbuf,
+ 	.vidioc_dqbuf			= v4l2_m2m_ioctl_dqbuf,
+ 	.vidioc_prepare_buf		= v4l2_m2m_ioctl_prepare_buf,
+ 	.vidioc_create_bufs		= v4l2_m2m_ioctl_create_bufs,
+@@ -626,7 +643,11 @@ int cedrus_queue_init(void *priv, struct vb2_queue *src_vq,
+ 	src_vq->lock = &ctx->dev->dev_mutex;
+ 	src_vq->dev = ctx->dev->dev;
+ 	src_vq->supports_requests = true;
+-	src_vq->requires_requests = true;
++	/*
++	 * A whole JPEG needs no controls, so it may be queued without a
++	 * request; the stateless codecs still need one (cedrus_qbuf).
++	 */
++	src_vq->requires_requests = false;
+ 
+ 	ret = vb2_queue_init(src_vq);
+ 	if (ret)
