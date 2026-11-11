@@ -21,3 +21,8 @@ CONFIG_FEATURE_SWAPON_PRI=y
 # deployment is booted, the update's progress).
 CONFIG_STAT=y
 CONFIG_FEATURE_STAT_FORMAT=y
+
+# mount LABEL=... is REQUIRED by fstab's /maps line (post-build.sh): the map
+# partition is found by its label, LEHU-MAPS, which a card formatted again on
+# a PC keeps if it is given the same name. VOLUMEID_EXFAT, already on, reads it.
+CONFIG_FEATURE_MOUNT_LABEL=y

@@ -5,3 +5,9 @@ CONFIG_EXT4_FS=y
 CONFIG_VFAT_FS=y
 CONFIG_NLS_CODEPAGE_437=y
 CONFIG_NLS_ISO8859_1=y
+
+# The map partition (p7, LEHU-MAPS, genimage-sdcard.cfg): exFAT, so the card
+# can be written on any PC. A module: `mount` loads it, so a card without the
+# partition spends no RAM on it. exFAT converts names to UTF-8 itself
+# (EXFAT_DEFAULT_IOCHARSET "utf8"), so NLS_UTF8 is not needed.
+CONFIG_EXFAT_FS=m

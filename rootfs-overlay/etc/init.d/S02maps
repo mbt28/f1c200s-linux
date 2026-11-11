@@ -1,0 +1,97 @@
+#!/bin/sh
+# The map partition, LEHU-MAPS: on the first boot of a card flashed with
+# sdcard.img, add p6 and p7 to the card and format p7, empty.
+#
+# sdcard.img ends at p5, the swap area in the extended p4
+# (board/lctech/pi-f1c200s/post-image-sdcard.sh): it cannot know how big the
+# card is. Laid out here, the card gets the layout of one shared with LEHU OS
+# (lehu-os/docs/dual-boot.md), plus p7:
+#   p6  1332224, 4 GiB, Linux: LEHU OS's root, left empty (install-p6.sh)
+#   p7  9723904, the rest of the card, exFAT "LEHU-MAPS" (0x07), on /maps:
+#       the first 4 MiB boundary after p6 (SD cards erase 4 MiB at a time)
+# p4 grows to the end of the card to hold them. p1-p5 do not move.
+#
+# The map data is written on a PC: fstab mounts p7 READ-ONLY on /maps, and
+# nothing on the board writes into it. This script formats it once, right
+# after it has created it, and never again: a p7 it did not make in the same
+# run is never touched, whatever is or is not on it.
+#
+# It does nothing unless the card is still exactly as the image laid it out:
+# root on mmcblk0p2, p4 extended and ending where p5 ends, no p6 or p7. A card
+# laid out by hand (the dual-boot card, where p4 already fills the card) or
+# by this script before never qualifies.
+
+DISK=${MAPS_DISK:-/dev/mmcblk0}
+PART=${MAPS_PART:-${DISK}p}
+P6_START=1332224
+P6_SECTORS=8388608	# 4 GiB, what install-p6.sh checks
+P7_START=9723904	# 4 MiB-aligned, past p6's end and p7's extended boot record
+P7_MIN=2097152		# 1 GiB: a smaller card gets no p6 or p7
+
+log() { echo "maps: $*"; }
+
+# Partition $1's start, end or size (field 1, 2 or 3), in sectors, from
+# parted's machine-readable listing in $table.
+get() {
+	echo "$table" | sed -n "s/^$1:\([0-9]*\)s:\([0-9]*\)s:\([0-9]*\)s:.*/\\$2/p"
+}
+
+setup() {
+	grep -q 'root=/dev/mmcblk0p2 ' /proc/cmdline || return 0
+	[ -e /sys/class/block/mmcblk0p6 ] && return 0
+	[ -e /sys/class/block/mmcblk0p7 ] && return 0
+	command -v parted >/dev/null && command -v mkfs.exfat >/dev/null || {
+		log "parted or mkfs.exfat missing: no map partition"
+		return 0
+	}
+	table=$(parted -s -m $DISK unit s print 2>/dev/null) || return 0
+	# A p5 means p4 is the extended partition. It must hold p5 alone, as
+	# genimage made it: it ends where p5 ends.
+	[ -n "$(get 4 1)" ] && [ -n "$(get 5 1)" ] || return 0
+	[ "$(get 5 3)" = 131072 ] || return 0
+	[ "$(get 4 2)" = "$(get 5 2)" ] || return 0
+	[ "$(get 5 2)" -lt $((P6_START - 1)) ] || return 0
+	[ -z "$(get 6 1)$(get 7 1)" ] || return 0
+
+	disk=$(cat /sys/block/mmcblk0/size)
+	last=$((disk - 1))
+	if [ $((disk - P7_START)) -lt $P7_MIN ]; then
+		log "card too small for a map partition ($((disk / 2048)) MiB)"
+		return 0
+	fi
+	log "first boot of this card: adding p6 (LEHU OS, empty) and p7 (LEHU-MAPS)"
+
+	# p4 to the end of the card, then p6 and p7 in it: p6 type 0x83, p7 0x07
+	# (parted's "ntfs" is the MBR type exFAT uses too). p1-p5 do not move.
+	# parted tells the kernel about the partitions it changed, one by one (p2
+	# and p3 are mounted); its exit status also counts the extended partition,
+	# which the kernel cannot resize, so the table itself is checked after, and
+	# parted's partprobe asks again if the kernel still has no p7.
+	parted -s $DISK unit s resizepart 4 ${last}s \
+		mkpart logical ${P6_START}s $((P6_START + P6_SECTORS - 1))s \
+		mkpart logical ntfs ${P7_START}s ${last}s > /var/log/maps-parted.log 2>&1
+	table=$(parted -s -m $DISK unit s print 2>/dev/null)
+	if [ "$(get 6 1):$(get 6 3)" != "$P6_START:$P6_SECTORS" ] ||
+	   [ "$(get 7 1):$(get 7 2)" != "$P7_START:$last" ]; then
+		log "parted did not make p6 and p7 (/var/log/maps-parted.log): no map partition"
+		return 0
+	fi
+	[ -e /sys/class/block/mmcblk0p7 ] || partprobe $DISK 2>/dev/null
+	if [ ! -e /sys/class/block/mmcblk0p7 ] ||
+	   [ "$(cat /sys/class/block/mmcblk0p7/size)" != $((disk - P7_START)) ]; then
+		log "the kernel does not see p7 yet: format it on a PC (exFAT, LEHU-MAPS)"
+		return 0
+	fi
+	if mkfs.exfat -L LEHU-MAPS ${PART}7 > /var/log/maps-mkfs.log 2>&1; then
+		log "p7 formatted: exFAT, LEHU-MAPS, $(((disk - P7_START) / 2048)) MiB, empty"
+		mount /maps 2>/dev/null || true
+	else
+		log "mkfs.exfat failed (/var/log/maps-mkfs.log): format p7 on a PC"
+	fi
+}
+
+case "$1" in
+start) setup ;;
+stop) ;;
+*) echo "usage: $0 {start|stop}" ;;
+esac

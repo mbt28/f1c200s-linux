@@ -30,17 +30,22 @@ BR2_TARGET_GENERIC_ROOT_PASSWD="*"
 # (~1 MiB RSS). The kernel uevent helper S46usb0-up uses keeps working beside
 # it: S10udevd clears /proc/sys/kernel/hotplug at boot and S46 sets it later.
 BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+# The time zone LEHU shows the time in. post-build.sh keeps this zone alone.
+BR2_TARGET_TZ_INFO=y
+BR2_TARGET_TZ_ZONELIST="europe"
+BR2_TARGET_LOCALTIME="Europe/Budapest"
 # The f1c user: auto-login on the serial console, passwordless sudo (LIVI runs
 # as a user and reaches root through `sudo -n`). See board/.../users.table and
 # rootfs-overlay/etc/sudoers.d/f1c.
 BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/permissions.table"
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/users.table"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-build.sh"
-# Space-separated LIST. genimage.sh builds sdcard.img; post-image-nand.sh then
-# builds kernel.itb and the NAND bundle. NOTE both receive the SAME
-# BR2_ROOTFS_POST_SCRIPT_ARGS below (Buildroot cannot vary args per script),
-# so post-image-nand.sh ignores the stray "-c <genimage cfg>".
-BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-image-nand.sh"
+# Space-separated LIST. genimage.sh builds sdcard.img (p1-p3);
+# post-image-sdcard.sh adds the extended p4 and the swap area p5;
+# post-image-nand.sh then builds kernel.itb and the NAND bundle. NOTE all
+# receive the SAME BR2_ROOTFS_POST_SCRIPT_ARGS below (Buildroot cannot vary
+# args per script), so the last two ignore the stray "-c <genimage cfg>".
+BR2_ROOTFS_POST_IMAGE_SCRIPT="support/scripts/genimage.sh $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-image-sdcard.sh $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/post-image-nand.sh"
 BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/genimage-sdcard.cfg"
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION=y
@@ -59,6 +64,15 @@ BR2_ROOTFS_MERGED_USR=y
 BR2_PACKAGE_OSTREE=y
 BR2_TARGET_ROOTFS_OSTREEFS=y
 # BR2_PACKAGE_E2FSPROGS_FSCK is not set
+# The map partition, p7 (exFAT "LEHU-MAPS", read-only on /maps): S02maps
+# makes it on a fresh card's first boot. parted grows the extended p4 and adds
+# p6 and p7; its partprobe (it replaces busybox's) tells the kernel if parted
+# could not. util-linux's sfdisk comes only with its basic set, whose ~45
+# programs would replace busybox's swapon, mkswap, dmesg and fdisk (busybox
+# installs noclobber). mkfs.exfat formats p7, once. fsck.exfat and the rest
+# come with it; /maps is never written, so nothing runs them at boot.
+BR2_PACKAGE_PARTED=y
+BR2_PACKAGE_EXFATPROGS=y
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
 # squashfs for the NAND rootfs (mtd2 "rom"), built ALONGSIDE ext4 -- one build

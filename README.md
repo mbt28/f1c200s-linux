@@ -42,6 +42,28 @@ sudo dd if=output/images/sdcard.img of=/dev/sdX bs=1M conv=fsync   # your SD dev
 Versions are pinned in `config.env`; any Buildroot target is forwarded, e.g.
 `scripts/build.sh menuconfig` or `scripts/build.sh linux-rebuild`.
 
+## The SD card
+
+| | Start (sector) | Size | Type | Use |
+|---|---|---|---|---|
+| p1 | 1024 | 8 MiB | FAT (0x0c) | kernel, dtb, boot menu |
+| p2 | 17408 | 512 MiB | Linux | the OSTree root (`docs/ostree.md`) |
+| p3 | 1065984 | 64 MiB | Linux | `/var/log` |
+| p4 | 1197056 | rest of the card | extended (0x0f) | holds p5-p7 |
+| p5 | 1199104 | 64 MiB | swap (0x82) | emergency swap (`S03swap`) |
+| p6 | 1332224 | 4 GiB | Linux | empty: LEHU OS's root, if it is installed (LEHU OS's `docs/dual-boot.md`) |
+| p7 | 9723904 | the rest | exFAT (0x07), `LEHU-MAPS` | LEHU's map data, read-only on `/maps` |
+
+`sdcard.img` holds p1-p5; it cannot know how big the card is. On the first boot of
+a card flashed with it, `S02maps` grows p4 to the end of the card, adds p6 and p7,
+and formats p7 empty. It never touches a card laid out differently, and never formats
+a p7 it did not just make. The card needs about 6 GiB.
+
+The map data is written to p7 on a PC (Windows, macOS or Linux) with a card reader:
+the board mounts it read-only and never writes there, and no image or update carries
+map data. A card without p7 still boots: `mount -a` reports the missing `LEHU-MAPS`
+and LEHU uses `/var/lib/lehu` instead.
+
 ## Layout
 
 This repo root is a Buildroot `BR2_EXTERNAL` tree (CARPLAY); LEHU's

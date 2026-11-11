@@ -3,4 +3,7 @@
 # rootfs-overlay/home/f1c/.ssh/authorized_keys, and root is one passwordless
 # `sudo` away (rootfs-overlay/etc/sudoers.d/f1c). i2c is created here for the MFi
 # coprocessor and the GT911 (see rootfs-overlay/etc/udev/rules.d).
-f1c -2 f1c -2 * /home/f1c /bin/sh video,input,audio,dialout,plugdev,netdev,i2c F1C200s user
+# uid and gid 1000, fixed (the first automatic one, which boards have): fstab
+# mounts /maps as uid=1000,gid=1000 (post-build.sh), and /var/home/f1c on a
+# board keeps its owner across updates.
+f1c 1000 f1c 1000 * /home/f1c /bin/sh video,input,audio,dialout,plugdev,netdev,i2c F1C200s user

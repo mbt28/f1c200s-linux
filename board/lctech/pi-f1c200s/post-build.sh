@@ -88,6 +88,32 @@ printf 'tmpfs\t/dev/shm\ttmpfs\tmode=1777,size=4M,noatime\t0\t0\n'              
 sed -i '\#^/dev/mmcblk0p4#d' "${FSTAB}"
 printf '/dev/mmcblk0p4\tnone\tswap\tnoauto,pri=10\t0\t0\n' >> "${FSTAB}"
 
+# The map data (LEHU's regions under /maps/<region>, voices under
+# /maps/voice/<lang>): p7, exFAT "LEHU-MAPS", written on a PC with a card
+# reader. ALWAYS read-only on the board -- LEHU never writes there, and an
+# exFAT volume the head unit never writes cannot be torn by the ignition.
+# Found by its label, which a card formatted again on a PC keeps if it is
+# given the same name (busybox FEATURE_MOUNT_LABEL, busybox.fragment). S02maps
+# creates p7 on a fresh card's first boot. Without it (an older card) `mount -a`
+# prints one error and carries on, and LEHU falls back to /var/lib/lehu.
+# uid/gid are numbers: busybox mount does not look names up. f1c is 1000
+# (users.table). fmask/dmask: files 0644, folders 0755.
+sed -i '\#[[:space:]]/maps[[:space:]]#d' "${FSTAB}"
+printf 'LABEL=LEHU-MAPS\t/maps\texfat\tro,noatime,nofail,uid=1000,gid=1000,fmask=0133,dmask=0022\t0\t0\n' >> "${FSTAB}"
+mkdir -p "${TARGET_DIR}/maps"
+
+# Time zone data: Europe/Budapest only (BR2_TARGET_LOCALTIME; /etc/localtime
+# points at it). tzdata installs a whole zone list; the head unit needs the one
+# zone it shows the time in.
+ZI="${TARGET_DIR}/usr/share/zoneinfo"
+if [ -f "${ZI}/posix/Europe/Budapest" ]; then
+	find "${ZI}" -mindepth 1 -maxdepth 1 ! -name posix -exec rm -rf {} +
+	find "${ZI}/posix" -mindepth 1 -maxdepth 1 ! -name Europe -exec rm -rf {} +
+	find "${ZI}/posix/Europe" -mindepth 1 ! -name Budapest -exec rm -rf {} +
+	mkdir -p "${ZI}/Europe"
+	ln -sfn ../posix/Europe/Budapest "${ZI}/Europe/Budapest"
+fi
+
 # LOCK root's password. This cannot be done from BR2_TARGET_GENERIC_ROOT_PASSWD:
 # Buildroot only passes a value through verbatim when it starts with $1$/$5$/$6$
 # (system/Config.in:380), so "*" there is taken as CLEAR TEXT and crypt-encoded
