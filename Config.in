@@ -1,10 +1,4 @@
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libudev-zero/Config.in"
-# libimobiledevice (libplist comes from upstream Buildroot): FastCarPlay's
-# wired-CarPlay stack, kept for the idevice tools; nothing selects it now.
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice-glue/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/libusbmuxd/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/libtatsu/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/libimobiledevice/Config.in"
 # LIVI (CarPlay / Android Auto head unit), Slint UI on DRM; selects what it needs.
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/livi/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"

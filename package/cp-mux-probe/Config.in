@@ -1,8 +1,8 @@
 config BR2_PACKAGE_CP_MUX_PROBE
 	bool "cp-mux-probe"
 	help
-	  Standalone usbmux VERSION probe for the iPhone, with no FastCarPlay
-	  involved. Claims the mux interface (ff/fe, EP 0x04 OUT / 0x85 IN) in
+	  Standalone usbmux VERSION probe for the iPhone, with no head-unit
+	  app involved. Claims the mux interface (ff/fe, EP 0x04 OUT / 0x85 IN) in
 	  USB config 6, sends a usbmux VERSION packet and reports whether the
 	  phone replies.
 

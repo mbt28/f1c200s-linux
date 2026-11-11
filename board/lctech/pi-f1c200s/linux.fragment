@@ -6,23 +6,23 @@
 # CONFIG_ARCH_MULTI_V7 is not set
 
 # Networking core is required: libusb's hotplug backend uses a netlink uevent
-# socket (NETLINK_KOBJECT_UEVENT) to init, and FastCarPlay's libusb_init() fails
-# with LIBUSB_ERROR_OTHER without it. (IPv4 is not added here -- it already
-# arrives from the base sunxi defconfig, CONFIG_INET=y.)
+# socket (NETLINK_KOBJECT_UEVENT) to init, and an app's libusb_init() fails
+# with LIBUSB_ERROR_OTHER without it (seen with FastCarPlay). (IPv4 is not added
+# here -- it already arrives from the base sunxi defconfig, CONFIG_INET=y.)
 CONFIG_NET=y
 CONFIG_UEVENT_HELPER=y
 
-# IPv6 is REQUIRED by FastCarPlay's CarPlay backends. The base sunxi defconfig
-# explicitly turns it off ("# CONFIG_IPV6 is not set"), which is why the board
-# had no /proc/net/if_inet6 and the app's :7000 control server died on its
-# AF_INET6 socket with EAFNOSUPPORT (observed on-target, 6.6.143).
-# BOTH CarPlay paths hand the phone an IPv6 link-local address to connect back
-# to -- wired sends CarPlayStartSession { ip = fe80::..%usb0, port = 7000 } and
-# wireless does the same over wlan0. There is no IPv4 form of that handshake,
-# so it cannot be worked around in the app. Android Auto (IPv4 over AOAP) is
-# unaffected. Kconfig gate: IPV6 sits inside "if INET" in net/Kconfig, so the
-# base defconfig's INET=y is what makes this stick. It costs kernel text on
-# this 64 MiB part (cf. the RAM diet below) -- unavoidable, CarPlay cannot
+# IPv6 is REQUIRED by CarPlay (LEHU's LINUX_CONFIG_FIXUPS declare it too). The
+# base sunxi defconfig explicitly turns it off ("# CONFIG_IPV6 is not set"),
+# which is why the board had no /proc/net/if_inet6 and the app's :7000 control
+# server died on its AF_INET6 socket with EAFNOSUPPORT (observed on-target,
+# 6.6.143). BOTH CarPlay paths hand the phone an IPv6 link-local address to
+# connect back to -- wired sends CarPlayStartSession { ip = fe80::..%usb0, port
+# = 7000 } and wireless does the same over wlan0. There is no IPv4 form of that
+# handshake, so it cannot be worked around in the app. Android Auto (IPv4 over
+# AOAP) is unaffected. Kconfig gate: IPV6 sits inside "if INET" in net/Kconfig,
+# so the base defconfig's INET=y is what makes this stick. It costs kernel text
+# on this 64 MiB part (cf. the RAM diet below) -- unavoidable, CarPlay cannot
 # start without it.
 CONFIG_IPV6=y
 
@@ -35,7 +35,7 @@ CONFIG_DRM_SUN4I_BACKEND=y
 CONFIG_DRM_PANEL_SIMPLE=y
 CONFIG_DRM_FBDEV_EMULATION=y
 # Framebuffer present, but NO text console on the LCD: this is a CarPlay
-# appliance, the panel is owned by the video (FastCarPlay -> /dev/fb0) and the
+# appliance, the panel is owned by the head unit's video and the
 # console lives on the serial port. Disabling FRAMEBUFFER_CONSOLE keeps /dev/fb0
 # (from DRM fbdev emulation) while stopping the text console/cursor from
 # fighting the video. (cf. removing console=tty0 from the bootargs.)
@@ -75,11 +75,12 @@ CONFIG_I2C=y
 CONFIG_I2C_MV64XXX=y
 CONFIG_INPUT_TOUCHSCREEN=y
 CONFIG_TOUCHSCREEN_GOODIX=y
-# MFi authentication coprocessor -- FastCarPlay drives it from userspace via the
-# i2c-dev chardev (mfi-i2c-bus = /dev/i2c-0). It shares i2c0, the only bus this
-# board enables: MFi answers at 0x10/0x11, the GT911 at 0x5d, so no clash.
-# The base sunxi defconfig happens to set this; declared here so a defconfig
-# bump cannot silently drop it and take CarPlay authentication with it.
+# MFi authentication coprocessor -- the head unit drives it from userspace via
+# the i2c-dev chardev (/dev/i2c-0; LEHU's fixups declare I2C_CHARDEV). It shares
+# i2c0, the only bus this board enables: MFi answers at 0x10/0x11, the GT911 at
+# 0x5d, so no clash. The base sunxi defconfig happens to set this; declared here
+# so a defconfig bump cannot silently drop it and take CarPlay authentication
+# with it.
 CONFIG_I2C_CHARDEV=y
 
 # Mainline cedrus (V4L2 stateless H.264) video decoder -- the only decoder on
@@ -119,12 +120,12 @@ CONFIG_GENERIC_ALLOCATOR=y
 # 2 MiB comb-filter field memory) come from CMA only while streaming.
 CONFIG_VIDEO_SUN4I_TVD=m
 
-# USB host -- needed for the CarPlay / Android Auto dongle (talked to via
-# libusb from FastCarPlay). The musb + usb-phy suniv drivers are mainline
-# since ~6.3.
+# USB host -- needed for the phone and the CarPlay / Android Auto dongle,
+# which the head unit talks to from userspace. The musb + usb-phy suniv drivers
+# are mainline since ~6.3.
 # NOTE: the in-tree lctech DT sets the OTG port to dr_mode = "peripheral".
 # A dr_mode = "host" (or "otg") DT override is still required before the
-# dongle will enumerate -- added with the FastCarPlay layer.
+# dongle will enumerate -- added with the head-unit layer.
 CONFIG_USB=y
 CONFIG_USB_MUSB_HDRC=y
 CONFIG_USB_MUSB_SUNXI=y
@@ -363,15 +364,16 @@ CONFIG_BT=m
 CONFIG_BT_HCIUART=m
 CONFIG_BT_HCIUART_H4=y
 # RFCOMM: bluetoothd needs kernel RFCOMM to bind the profile listener and
-# publish the SDP channel for FastCarPlay's wireless-Android-Auto profile
-# (UUID 4de17a00-...) and HFP. Without it, RegisterProfile logs success but
-# the adapter advertises nothing, so the phone bonds then finds no AA service
-# over SDP and drops the link ("couldn't pair" -- btmon-confirmed on-target
-# 2026-07-10). =m, NOT =y: the BT core is modular (CONFIG_BT=m), so a built-in
-# RFCOMM cannot link against bluetooth.ko. kconfig does NOT catch this (the
-# intermediary BT_BREDR is a bool that launders BT's tristate), so =y survives
-# olddefconfig and then breaks the kernel link. As a module, rfcomm.ko lands
-# in modules.dep and autoloads when bluetoothd opens the RFCOMM socket.
+# publish the SDP channel for a wireless-Android-Auto profile (FastCarPlay's
+# was UUID 4de17a00-...) and HFP; LEHU's fixups declare BT_RFCOMM. Without it,
+# RegisterProfile logs success but the adapter advertises nothing, so the phone
+# bonds then finds no AA service over SDP and drops the link ("couldn't pair" --
+# btmon-confirmed on-target 2026-07-10). =m, NOT =y: the BT core is modular
+# (CONFIG_BT=m), so a built-in RFCOMM cannot link against bluetooth.ko. kconfig
+# does NOT catch this (the intermediary BT_BREDR is a bool that launders BT's
+# tristate), so =y survives olddefconfig and then breaks the kernel link. As a
+# module, rfcomm.ko lands in modules.dep and autoloads when bluetoothd opens the
+# RFCOMM socket.
 CONFIG_BT_RFCOMM=m
 # Bluetooth HID input (keyboards, remotes, game pads), all modular so the
 # zImage and resident RAM do not change until `bt on` loads them.
@@ -396,9 +398,8 @@ CONFIG_UHID=m
 CONFIG_CC_OPTIMIZE_FOR_SIZE=y
 # NFS client (+ sunrpc): ~0.8 MiB, never used on the appliance.
 # CONFIG_NFS_FS is not set
-# Sound: minimal ALSA for the F1C200s internal codec (CarPlay audio output is
-# planned; FastCarPlay's PcmAudio plays through SDL/ALSA once the dummy audio
-# driver is dropped). The unused transports stay off: USB-audio class, I2S,
+# Sound: minimal ALSA for the F1C200s internal codec (the head unit's CarPlay
+# audio). The unused transports stay off: USB-audio class, I2S,
 # SPDIF and the dummy/loopback SND_DRIVERS gate - that keeps ~half of the
 # original 302 KiB sound-stack saving.
 CONFIG_SOUND=y
@@ -620,12 +621,12 @@ CONFIG_MAGIC_SYSRQ=y
 CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1
 CONFIG_MAGIC_SYSRQ_SERIAL=y
 
-# dmix needs System V IPC (2026-10-04). FastCarPlay mixes its music and
-# voice sinks through ALSA dmix, which keeps its state in SysV shared memory
-# guarded by a SysV semaphore; without this every dmix open fails with
-# "unable to create IPC semaphore: Function not implemented". NOTE: SYSVIPC
-# adds sysvsem/sysvshm to task_struct, so the module tree must be installed
-# together with this kernel.
+# dmix needs System V IPC (2026-10-04). The default ALSA device is a dmix
+# (/etc/asound.conf, made for FastCarPlay's music and voice sinks), which keeps
+# its state in SysV shared memory guarded by a SysV semaphore; without this
+# every dmix open fails with "unable to create IPC semaphore: Function not
+# implemented". NOTE: SYSVIPC adds sysvsem/sysvshm to task_struct, so the module
+# tree must be installed together with this kernel.
 CONFIG_SYSVIPC=y
 
 # ---------------------------------------------------------------------------

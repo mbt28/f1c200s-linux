@@ -1,7 +1,7 @@
 #!/bin/sh
 # Wireless-AA radios: bring up the ESP32 WiFi transport (wlan0) + the Bluetooth
 # stack (dbus, bluetoothd, bluealsa HFP AG+HF, Audio+Telephony CoD) + the dev
-# network, at boot, INDEPENDENT of the FastCarPlay app autostart. WiFi already
+# network, at boot, INDEPENDENT of the head-unit app. WiFi already
 # had its own autostart (S43wifi); this gives Bluetooth the same independence,
 # so `autorun off` (app off) still leaves WiFi + BT up. No gate: since app
 # d58e335 every boot runs the settings UI (Slint since native), which

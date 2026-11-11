@@ -6,14 +6,7 @@ Mainline-Linux + Buildroot for the **Lctech Pi F1C200s** (Allwinner F1C200S /
 suniv, ARM926EJ-S / ARMv5TE, 64 MiB DDR, 800×480 LCD) — a wireless **CarPlay /
 Android-Auto** receiver. The head unit is **LEHU** (its Buildroot package is in LEHU's own
 repository, `packaging/buildroot`, a second external tree), started
-by the console's `f1c` login (`~/.profile`); the screenshots below show
-FastCarPlay, which it replaced on 2026-11-05.
-
-<img src="docs/img/carplay.jpg" width="610" alt="FastCarPlay dashboard on the F1C200s">
-
-| FastCarPlay settings | CarPlay session paused |
-|:---:|:---:|
-| <img src="docs/img/settings.jpg" height="400" alt="FastCarPlay settings menu"> | <img src="docs/img/paused.jpg" height="400" alt="CarPlay Wireless — session paused"> |
+by the console's `f1c` login (`~/.profile`).
 
 **Patch-only:** this repo ships the scripts, patches, configs and docs that
 fetch the Linux kernel and Buildroot from upstream and apply our customizations

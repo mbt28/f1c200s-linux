@@ -7,7 +7,7 @@
 # LIVI with the F1C200s port (the f1c200s branch of the owner's fork of
 # f-io/LIVI): the Slint UI on DRM/KMS, which also decodes and shows the phone's
 # video; gst-host for audio and handing the video over; livi-core; and the root
-# helper. Like fastcarplay it TRACKS THE BRANCH TIP: the head is resolved to a
+# helper. It TRACKS THE BRANCH TIP: the head is resolved to a
 # commit sha at build time, so a moved branch is a new version. For local work
 # point output/local.mk at a checkout instead (no network needed for the source):
 #   LIVI_OVERRIDE_SRCDIR = /path/to/LIVI
@@ -39,9 +39,10 @@ LIVI_DEPENDENCIES = \
 	openssl \
 	$(BR2_CMAKE_HOST_DEPENDENCY)
 
-# Kernel features LIVI cannot run without (see fastcarplay.mk for why they are
-# declared here): IPv6 link-local and the iPhone's NCM interface for wired
-# CarPlay, /dev/i2c-N for the MFi coprocessor, evdev for touch and keys.
+# Kernel features LIVI cannot run without (declared here so that
+# post-build.sh's kernel check and the fixups agree): IPv6 link-local and the
+# iPhone's NCM interface for wired CarPlay, /dev/i2c-N for the MFi coprocessor,
+# evdev for touch and keys.
 define LIVI_LINUX_CONFIG_FIXUPS
 	$(call KCONFIG_ENABLE_OPT,CONFIG_INET)
 	$(call KCONFIG_ENABLE_OPT,CONFIG_IPV6)

@@ -163,7 +163,7 @@ int main(int argc, char **argv)
 	}
 	if (!claimed) {
 		fprintf(stderr, "claim interface %d: %s\n", iface, strerror(errno));
-		fprintf(stderr, "  (is fastcarplay still running? it holds this interface)\n");
+		fprintf(stderr, "  (is the head unit still running? it may hold this interface)\n");
 		close(fd);
 		return 1;
 	}

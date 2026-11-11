@@ -1,7 +1,7 @@
 #!/bin/sh
 # On-chip audio codec (sun4i-codec, suniv) mixer setup. The card comes up with
 # the headphone path muted and the DAC not routed, so nothing is audible until
-# these are set. Runs before the app stack (S45) so FastCarPlay (SDL -> ALSA
+# these are set. Runs before the app stack (S45) so the head unit (ALSA
 # "default" = this card) and the CarPlay mic work from the first session.
 #
 # Playback: DAC -> headphone (HPL/HPR), which also drives the board's PAM8301

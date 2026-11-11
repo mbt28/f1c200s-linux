@@ -28,7 +28,7 @@
 # with the rootfs on the same physical card.
 #
 # Runs at S03: after S01logs (so /var/log exists and the log persists), long
-# before S20cedrus/S99carplay, and AFTER busybox's S02sysctl. S02sysctl
+# before S20cedrus and the head unit, and AFTER busybox's S02sysctl. S02sysctl
 # re-applies /etc/sysctl.conf, which is written for zram; as S02swap this script
 # sorted before it, so the SD tuning below was undone on every boot until
 # 2026-10-23. Nothing here may ever fail the boot.

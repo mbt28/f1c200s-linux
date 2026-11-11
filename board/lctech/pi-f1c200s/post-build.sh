@@ -61,7 +61,7 @@ printf '/dev/mmcblk0p3\t/var/log\text4\tnoatime,nofail\t0\t2\n' >> "${FSTAB}"
 # against 52 MiB of RAM. This frees nothing by itself (tmpfs only consumes what
 # is written); what it buys is blast radius. A runaway writer now gets ENOSPC on
 # an 8 MiB filesystem instead of consuming RAM until the OOM killer picks a
-# victim, and the victim on this board would plausibly be fastcarplay.
+# victim, and the victim on this board would plausibly be the head unit.
 #
 # It matters MORE once zram exists, not less: tmpfs pages are swappable, so an
 # uncapped /tmp writer would push through zram and out onto the SD card.

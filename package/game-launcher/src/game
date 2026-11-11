@@ -1,7 +1,7 @@
 #!/bin/sh
 # game NAME [args...] -- play one of the bundled games on the LCD (SD card
-# image only: the NAND image ships without them). FastCarPlay owns the display
-# and grabs the keyboards, so it is stopped for the game and started again
+# image only: the NAND image ships without them). LEHU owns the display and
+# grabs the keyboards, so it is stopped for the game and started again
 # afterwards -- only if it was running before. The CPU runs the game at
 # 792 MHz (the clock validated on this board, docs/cpu-overclock.md) and goes
 # back to its previous speed when the game quits.

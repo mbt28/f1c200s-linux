@@ -6,7 +6,7 @@
 #                   frequency the OPP table offers is accepted; anything else
 #                   leaves the boot clock (408 MHz) and says so in the log.
 #   f1c.safe=1      safe mode: 408 MHz, and /run/f1c-safe tells the app
-#                   autostart (S99carplay) to stay down. Networking and the
+#                   autostart to stay down. Networking and the
 #                   radios still come up, so the board stays reachable.
 # The clock is raised here, after the filesystems are mounted, not in U-Boot,
 # which keeps U-Boot and the early boot at the stock 408 MHz.

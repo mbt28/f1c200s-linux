@@ -90,7 +90,8 @@ BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_CARPLAY_PATH)/rootfs-overlay"
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/busybox.fragment"
 # ffmpeg for a quick video-playback test (software decode).
 # OUTDEVS pulls in the fbdev output device: ffmpeg ... -f fbdev /dev/fb0
-# ffmpeg, trimmed to what FastCarPlay calls (2026-10-05): libavcodec h264/hevc
+# ffmpeg, trimmed to what the head unit calls (2026-10-05, for FastCarPlay;
+# kept for LEHU): libavcodec h264/hevc
 # (V4L2-request hwaccels onto cedrus, software fallback), aac_fixed (+ float
 # aac as the documented fallback), the h264/hevc parsers, swscale for the SDL
 # fallback renderer. No encoders, (de)muxers, protocols, filters, devices, no
@@ -111,16 +112,12 @@ BR2_PACKAGE_FFMPEG_PROTOCOLS=""
 BR2_PACKAGE_FFMPEG_FILTERS=""
 # BR2_PACKAGE_FFMPEG_INDEVS is not set
 # BR2_PACKAGE_FFMPEG_OUTDEVS is not set
-# libopus (fixed-point on this soft-float target): FastCarPlay decodes the
-# CarPlay Opus channels (Siri, nav) with it directly, in integers like AAC
-# via aac_fixed (docs/audio.md). ffmpeg.mk still passes --enable-libopus,
-# but the decoder list above leaves ffmpeg's libopus wrapper out.
+# libopus (fixed-point on this soft-float target), selected by LEHU: the
+# CarPlay Opus channels (Siri, nav) are decoded with it directly, in integers
+# like AAC via aac_fixed (docs/audio.md). ffmpeg.mk still passes
+# --enable-libopus, but the decoder list above leaves ffmpeg's libopus
+# wrapper out.
 BR2_PACKAGE_OPUS=y
-# libogg + opusfile (fixed-point, same as libopus) for Ogg Opus files/streams
-# in FastCarPlay; opusfile's http part (libopusurl) comes along because
-# openssl is in the image.
-BR2_PACKAGE_LIBOGG=y
-BR2_PACKAGE_OPUSFILE=y
 BR2_PACKAGE_FFMPEG_SWSCALE=y
 BR2_TARGET_UBOOT=y
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
@@ -205,9 +202,9 @@ BR2_PACKAGE_LIVI=y
 # the board, which is the wrong direction for deployment.
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_OPENSSH_SERVER=y
-# rsync for the deploy loop: the fastcarplay binary is ~3 MB and changes only
-# slightly per build, so rsync-over-SSH delta transfer should cut most of the
-# measured 6.0 s push at ~516 KB/s over the AP. Target-side only -- rsync must
+# rsync for the deploy loop: a rebuilt app binary changes only slightly per
+# build, so rsync-over-SSH delta transfer cuts most of a push over the AP (a
+# 3 MB binary took 6.0 s at ~516 KB/s). Target-side only -- rsync must
 # exist at both ends. Selects zlib + popt (zlib is already in via other
 # packages). Costs disk, not RAM: nothing runs until a push starts.
 BR2_PACKAGE_RSYNC=y
@@ -269,18 +266,18 @@ BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HOG=y
 BR2_PACKAGE_BLUEZ_ALSA=y
 # tinyalsa + tools (tinymix/tinyplay/tinycap, ~100 KB): S41audio sets up the
 # on-chip codec's mixer at boot (headphone/speaker out, mic in) and they give a
-# tiny on-target test path. FastCarPlay plays audio through alsa-lib directly.
+# tiny on-target test path. The head unit plays through alsa-lib directly.
 BR2_PACKAGE_TINYALSA=y
 BR2_PACKAGE_TINYALSA_TOOLS=y
 # --- Games, SD card image only -----------------------------------------------
 # Software-rendered classics that suit the ARM926 (no FPU, no GPU: integer
 # engines). SDL 1.2 draws straight to /dev/fb0 (fbcon backend) and reads the
 # keyboard through a virtual terminal (CONFIG_VT, linux.fragment); SDL2 has no
-# backend here (its KMSDRM driver needs EGL/OpenGL). FastCarPlay owns the
-# display: stop it first (/etc/init.d/S99carplay stop). All of this, the SDL
-# 1.2 libraries included, is stripped from rootfs.squashfs -- the NAND image,
-# which has to fit the 128 MiB SPI NAND -- by a squashfs pre-gen hook in
-# external.mk, so only the SD card's ext4 rootfs carries it.
+# backend here (its KMSDRM driver needs EGL/OpenGL). The head unit owns the
+# display: the `game` launcher stops LEHU for a game and starts it again. All of
+# this, the SDL 1.2 libraries included, is stripped from rootfs.squashfs -- the
+# NAND image, which has to fit the 128 MiB SPI NAND -- by a squashfs pre-gen
+# hook in external.mk, so only the SD card's ext4 rootfs carries it.
 BR2_PACKAGE_SDL=y
 BR2_PACKAGE_SDL_FBCON=y
 # Doom engine + Freedoom (BSD-licensed IWADs, external package)
