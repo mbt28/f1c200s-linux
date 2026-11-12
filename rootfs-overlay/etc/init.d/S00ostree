@@ -40,6 +40,13 @@ start)
 	mkdir -p /var/cache/lehu-update /var/lib/lehu-os-update
 	chown root:f1c /var/cache/lehu-update
 	chmod 1770 /var/cache/lehu-update
+
+	# LEHU's status file, /run/lehu/status.json. LEHU runs as f1c from the
+	# console login, and this image has neither the lehu user nor its init
+	# script, which would make the folder (LEHU's packaging: lehu.tmpfiles).
+	mkdir -p /run/lehu
+	chown root:f1c /run/lehu
+	chmod 0775 /run/lehu
 	;;
 stop) ;;
 *)
