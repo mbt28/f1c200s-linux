@@ -1,0 +1,82 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: frontend: suniv: load the 4-tap scaler filter
+
+suniv (F1C100s/F1C200s) ran its frontend scaler with the FIR filter off:
+COEF_ACCESS_CTRL left set and no coefficients loaded, because the A10
+tables gave a green image. Scaled planes were point-sampled, so a 2x
+enlargement looked blocky.
+
+The F1C200s manual (5.2.5.38-41) gives this DEFE 4-tap filters in both
+directions: one word per phase at 0x400/0x500 (channel 0) and
+0x600/0x700 (channel 1), and nothing at the HORZCOEF1 offsets the A10/A33
+8-tap horizontal table also writes. Load the 4-tap vertical table into
+all four, and give the coefficient RAM back to the scaler by clearing
+COEF_ACCESS_CTRL. At 1:1 phase 0 is [0, 64, 0, 0], so unscaled planes
+are unchanged.
+
+sun4i_frontend.fir=0, or the same parameter in sysfs from the next
+frontend power-up, keeps the old unfiltered sampling.
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+@@ -23,6 +23,10 @@
+ #include "sun4i_drv.h"
+ #include "sun4i_frontend.h"
+ 
++static bool sun4i_frontend_fir = true;
++module_param_named(fir, sun4i_frontend_fir, bool, 0644);
++MODULE_PARM_DESC(fir, "suniv: filter when scaling (0: sample, as before)");
++
+ static const u32 sun4i_frontend_vert_coef[32] = {
+ 	0x00004000, 0x000140ff, 0x00033ffe, 0x00043ffd,
+ 	0x00063efc, 0xff083dfc, 0x000a3bfb, 0xff0d39fb,
+@@ -117,15 +121,44 @@
+ 	int i;
+ 
+ 	/*
+-	 * suniv (F1C100s/F1C200s): the FIR scaler filter produces working luma
+-	 * but dead chroma (whole image green). Allwinner's bare-metal code
+-	 * leaves COEF_ACCESS_CTRL set, which bypasses the FIR filter, and loads
+-	 * no coefficients. Do the same -- we only need 1:1 video here.
++	 * suniv (F1C100s/F1C200s) has 4-tap filters only, horizontal as well as
++	 * vertical (F1C200s User Manual 5.2.5.38-41): one word per phase at
++	 * 0x400/0x500 (channel 0) and 0x600/0x700 (channel 1), and nothing at
++	 * the HORZCOEF1 offsets. The A10/A33 tables below have an 8-tap
++	 * horizontal filter, which there gave working luma but no chroma (a
++	 * green image). The vertical table is a 4-tap one, so it serves both
++	 * directions. COEF_ACCESS_CTRL gives the coefficient RAM to the CPU
++	 * while it is loaded and back to the scaler after; left set, the
++	 * scaler samples without filtering (blocky when it enlarges).
++	 *
++	 * sun4i_frontend.fir=0 (or 0 in /sys/module/sun4i_frontend/parameters/
++	 * fir, from the next time the frontend powers up) keeps the filter off,
++	 * as before.
+ 	 */
+ 	if (frontend->data->scaler_bypass) {
+ 		regmap_write_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
+ 				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL,
+ 				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL);
++		if (!sun4i_frontend_fir)
++			return;
++
++		for (i = 0; i < 32; i++) {
++			regmap_write(frontend->regs,
++				     SUN4I_FRONTEND_CH0_HORZCOEF0_REG(i),
++				     sun4i_frontend_vert_coef[i]);
++			regmap_write(frontend->regs,
++				     SUN4I_FRONTEND_CH0_VERTCOEF_REG(i),
++				     sun4i_frontend_vert_coef[i]);
++			regmap_write(frontend->regs,
++				     SUN4I_FRONTEND_CH1_HORZCOEF0_REG(i),
++				     sun4i_frontend_vert_coef[i]);
++			regmap_write(frontend->regs,
++				     SUN4I_FRONTEND_CH1_VERTCOEF_REG(i),
++				     sun4i_frontend_vert_coef[i]);
++		}
++
++		regmap_write_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++				  SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL, 0);
+ 		return;
+ 	}
+ 
