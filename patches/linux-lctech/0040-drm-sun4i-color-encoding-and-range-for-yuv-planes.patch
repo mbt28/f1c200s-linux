@@ -1,0 +1,144 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: COLOR_ENCODING and COLOR_RANGE for YUV planes
+
+The frontend (DEFE) and the backend's YUV channel always converted YUV
+with the BT.601 limited-range table. Hardware-decoded JPEG (cedrus) is
+full range, so an application had to squeeze every byte into 16-235
+first.
+
+Give every layer the standard COLOR_ENCODING (BT.601, BT.709) and
+COLOR_RANGE (limited, full) properties and load the matching table on
+each update. The defaults, BT.601 limited, keep the old behaviour. The
+DEFE CSC registers (0x070-0x09c) are double-buffered, so the range can
+change from one commit to the next, e.g. between a JPEG canvas and
+H.264 video on the same plane.
+
+The tables are in the layout of the existing one: rows G, R, B of
+[Y, U, V, constant]; coefficients are 13-bit two's complement with 10
+fractional bits, the constant 14-bit with 4.
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -199,13 +199,14 @@
+ 	struct drm_framebuffer *fb = state->fb;
+ 	const struct drm_format_info *format = fb->format;
+ 	const uint32_t fmt = format->format;
++	const u32 *coef = sunxi_yuv2rgb_coef(state);
+ 	u32 val = SUN4I_BACKEND_IYUVCTL_EN;
+ 	int i;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(sunxi_bt601_yuv2rgb_coef); i++)
+ 		regmap_write(backend->engine.regs,
+ 			     SUN4I_BACKEND_YGCOEF_REG(i),
+-			     sunxi_bt601_yuv2rgb_coef[i]);
++			     coef[i]);
+ 
+ 	/*
+ 	 * We should do that only for a single plane, but the
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+@@ -76,6 +76,42 @@
+ };
+ EXPORT_SYMBOL(sunxi_bt601_yuv2rgb_coef);
+ 
++/*
++ * The other three conversions, in the same layout, for the planes'
++ * COLOR_ENCODING and COLOR_RANGE properties. Full range is Y, U and V in
++ * [0:255] (JPEG/JFIF); limited is the table above, and its BT.709 variant.
++ */
++static const u32 sunxi_bt601_full_yuv2rgb_coef[12] = {
++	0x00000400, 0x00001ea0, 0x00001d25, 0x00000877,
++	0x00000400, 0x00000000, 0x0000059c, 0x000034c9,
++	0x00000400, 0x00000717, 0x00000000, 0x000031d3,
++};
++
++static const u32 sunxi_bt709_yuv2rgb_coef[12] = {
++	0x000004a8, 0x00001f26, 0x00001dde, 0x000004ce,
++	0x000004a8, 0x00000000, 0x0000072c, 0x0000307e,
++	0x000004a8, 0x00000873, 0x00000000, 0x00002df0,
++};
++
++static const u32 sunxi_bt709_full_yuv2rgb_coef[12] = {
++	0x00000400, 0x00001f40, 0x00001e21, 0x0000053e,
++	0x00000400, 0x00000000, 0x0000064d, 0x00003367,
++	0x00000400, 0x0000076c, 0x00000000, 0x00003128,
++};
++
++/* The YUV to RGB table (12 words, as above) for a plane's state. */
++const u32 *sunxi_yuv2rgb_coef(const struct drm_plane_state *state)
++{
++	bool full = state->color_range == DRM_COLOR_YCBCR_FULL_RANGE;
++
++	if (state->color_encoding == DRM_COLOR_YCBCR_BT709)
++		return full ? sunxi_bt709_full_yuv2rgb_coef :
++			      sunxi_bt709_yuv2rgb_coef;
++
++	return full ? sunxi_bt601_full_yuv2rgb_coef : sunxi_bt601_yuv2rgb_coef;
++}
++EXPORT_SYMBOL(sunxi_yuv2rgb_coef);
++
+ static void sun4i_frontend_scaler_init(struct sun4i_frontend *frontend)
+ {
+ 	int i;
+@@ -476,13 +512,19 @@
+ 	 * the CSC engine too.
+ 	 */
+ 	if (format->is_yuv) {
+-		/* Setup the CSC engine for YUV to RGB conversion. */
++		/*
++		 * Setup the CSC engine for YUV to RGB conversion, as the
++		 * plane's COLOR_ENCODING and COLOR_RANGE ask. These registers
++		 * are double-buffered: a change takes effect at the next frame.
++		 */
++		const u32 *coef = sunxi_yuv2rgb_coef(state);
++
+ 		bypass = 0;
+ 
+ 		for (i = 0; i < ARRAY_SIZE(sunxi_bt601_yuv2rgb_coef); i++)
+ 			regmap_write(frontend->regs,
+ 				     SUN4I_FRONTEND_CSC_COEF_REG(i),
+-				     sunxi_bt601_yuv2rgb_coef[i]);
++				     coef[i]);
+ 	} else {
+ 		bypass = SUN4I_FRONTEND_BYPASS_CSC_EN;
+ 	}
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.h b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+@@ -137,6 +137,9 @@
+ extern const struct of_device_id sun4i_frontend_of_table[];
+ extern const u32 sunxi_bt601_yuv2rgb_coef[12];
+ 
++struct drm_plane_state;
++const u32 *sunxi_yuv2rgb_coef(const struct drm_plane_state *state);
++
+ int sun4i_frontend_init(struct sun4i_frontend *frontend);
+ void sun4i_frontend_exit(struct sun4i_frontend *frontend);
+ int sun4i_frontend_enable(struct sun4i_frontend *frontend);
+diff --git a/drivers/gpu/drm/sun4i/sun4i_layer.c b/drivers/gpu/drm/sun4i/sun4i_layer.c
+--- a/drivers/gpu/drm/sun4i/sun4i_layer.c
++++ b/drivers/gpu/drm/sun4i/sun4i_layer.c
+@@ -228,6 +228,21 @@
+ 	drm_plane_create_zpos_property(&layer->plane, layer->id,
+ 				       0, SUN4I_BACKEND_NUM_LAYERS - 1);
+ 
++	/*
++	 * How YUV framebuffers are turned into RGB: hardware-decoded JPEG is
++	 * full range, video limited. The defaults are what the driver always
++	 * did. RGB framebuffers ignore both.
++	 */
++	ret = drm_plane_create_color_properties(&layer->plane,
++						BIT(DRM_COLOR_YCBCR_BT601) |
++						BIT(DRM_COLOR_YCBCR_BT709),
++						BIT(DRM_COLOR_YCBCR_LIMITED_RANGE) |
++						BIT(DRM_COLOR_YCBCR_FULL_RANGE),
++						DRM_COLOR_YCBCR_BT601,
++						DRM_COLOR_YCBCR_LIMITED_RANGE);
++	if (ret)
++		dev_warn(drm->dev, "Couldn't add the color properties\n");
++
+ 	return layer;
+ }
+ 
