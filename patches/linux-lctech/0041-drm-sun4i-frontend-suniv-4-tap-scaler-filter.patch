@@ -14,8 +14,8 @@ all four, and give the coefficient RAM back to the scaler by clearing
 COEF_ACCESS_CTRL. At 1:1 phase 0 is [0, 64, 0, 0], so unscaled planes
 are unchanged.
 
-sun4i_frontend.fir=0, or the same parameter in sysfs from the next
-frontend power-up, keeps the old unfiltered sampling.
+OFF BY DEFAULT: on the board the picture still came out green (dead
+chroma), 1:1 included. sun4i_frontend.fir=1 turns it on for tests.
 ---
 diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4i_frontend.c
 --- a/drivers/gpu/drm/sun4i/sun4i_frontend.c
@@ -24,9 +24,9 @@ diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4
  #include "sun4i_drv.h"
  #include "sun4i_frontend.h"
  
-+static bool sun4i_frontend_fir = true;
++static bool sun4i_frontend_fir;
 +module_param_named(fir, sun4i_frontend_fir, bool, 0644);
-+MODULE_PARM_DESC(fir, "suniv: filter when scaling (0: sample, as before)");
++MODULE_PARM_DESC(fir, "suniv: filter when scaling (off: chroma came out green)");
 +
  static const u32 sun4i_frontend_vert_coef[32] = {
  	0x00004000, 0x000140ff, 0x00033ffe, 0x00043ffd,
@@ -49,9 +49,9 @@ diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4
 +	 * while it is loaded and back to the scaler after; left set, the
 +	 * scaler samples without filtering (blocky when it enlarges).
 +	 *
-+	 * sun4i_frontend.fir=0 (or 0 in /sys/module/sun4i_frontend/parameters/
-+	 * fir, from the next time the frontend powers up) keeps the filter off,
-+	 * as before.
++	 * OFF BY DEFAULT: on the F1C200s this still gave a green picture (dead
++	 * chroma, even at 1:1). sun4i_frontend.fir=1 turns it on for tests; a
++	 * change in sysfs applies only when the frontend next powers up.
  	 */
  	if (frontend->data->scaler_bypass) {
  		regmap_write_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
