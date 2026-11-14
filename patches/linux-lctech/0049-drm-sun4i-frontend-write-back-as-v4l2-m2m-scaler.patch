@@ -1,0 +1,930 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: frontend: write-back as a V4L2 mem2mem scaler (suniv)
+
+The display frontend can write its output to memory instead of handing
+it to the backend (F1C200s User Manual 5.2.5: FRM_CTRL WB_EN and
+OUT_CTRL, WB_ADDR 0x50, the WB-end interrupt, IRQ 30): a scaler, YUV to
+RGB converter and untiler in one pass. Register it as a V4L2 mem2mem
+device (DRM_SUN4I_FRONTEND_M2M): NV12 (linear or 32x32-tiled), NV16,
+YUYV or XRGB in, up to 2048x2048; XRGB8888 (V4L2 XBGR32) out, up to
+1280x1280 -- planar outputs would need a pass per channel. The YUV to
+RGB table follows the source's ycbcr_enc and quantization (0040).
+
+There is one frontend and the display comes first: no job starts while
+a plane uses the frontend (drm_active, set in sun4i_frontend_init()),
+and a plane that takes it waits up to 100 ms for a running job. The
+phase setup is shared (sun4i_frontend_update_phases()). suniv only.
+---
+diff --git a/drivers/gpu/drm/sun4i/Kconfig b/drivers/gpu/drm/sun4i/Kconfig
+--- a/drivers/gpu/drm/sun4i/Kconfig
++++ b/drivers/gpu/drm/sun4i/Kconfig
+@@ -46,6 +46,17 @@
+ 	  do some alpha blending and feed graphics to TCON. If M is
+ 	  selected the module will be called sun4i-backend.
+ 
++config DRM_SUN4I_FRONTEND_M2M
++	bool "Display frontend as a memory-to-memory scaler (V4L2)"
++	depends on DRM_SUN4I_BACKEND && VIDEO_DEV
++	depends on VIDEO_DEV=y || DRM_SUN4I_BACKEND=m
++	select V4L2_MEM2MEM_DEV
++	select VIDEOBUF2_DMA_CONTIG
++	help
++	  The display frontend's write-back as a V4L2 mem2mem device:
++	  scaling, YUV to RGB and untiling in one pass, while no plane
++	  uses the frontend. Only on the F1C100s/F1C200s for now.
++
+ config DRM_SUN6I_DSI
+ 	tristate "Allwinner A31/A64 MIPI-DSI Controller Support"
+ 	default DRM_SUN4I
+diff --git a/drivers/gpu/drm/sun4i/Makefile b/drivers/gpu/drm/sun4i/Makefile
+--- a/drivers/gpu/drm/sun4i/Makefile
++++ b/drivers/gpu/drm/sun4i/Makefile
+@@ -2,6 +2,7 @@
+ sun4i-backend-y			+= sun4i_backend.o sun4i_layer.o sun4i_cursor.o \
+ 				   sun4i_writeback.o
+ sun4i-frontend-y		+= sun4i_frontend.o
++sun4i-frontend-$(CONFIG_DRM_SUN4I_FRONTEND_M2M) += sun4i_frontend_m2m.o
+ 
+ sun4i-drm-y			+= sun4i_drv.o
+ sun4i-drm-y			+= sun4i_framebuffer.o
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.c b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.c
+@@ -191,12 +191,20 @@
+ 
+ int sun4i_frontend_init(struct sun4i_frontend *frontend)
+ {
++	/* the plane takes the frontend: let a memory-to-memory job end */
++	WRITE_ONCE(frontend->drm_active, true);
++	if (frontend->m2m)
++		wait_event_timeout(frontend->m2m_wait,
++				   !READ_ONCE(frontend->m2m_busy),
++				   msecs_to_jiffies(100));
++
+ 	return pm_runtime_get_sync(frontend->dev);
+ }
+ EXPORT_SYMBOL(sun4i_frontend_init);
+ 
+ void sun4i_frontend_exit(struct sun4i_frontend *frontend)
+ {
++	WRITE_ONCE(frontend->drm_active, false);
+ 	pm_runtime_put(frontend->dev);
+ }
+ EXPORT_SYMBOL(sun4i_frontend_exit);
+@@ -481,6 +489,26 @@
+ }
+ EXPORT_SYMBOL(sun4i_frontend_format_is_supported);
+ 
++void sun4i_frontend_update_phases(struct sun4i_frontend *frontend,
++				  bool chroma_plane)
++{
++	unsigned int ch1_phase_idx = chroma_plane ? 1 : 0;
++
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_HORZPHASE_REG,
++		     frontend->data->ch_phase[0]);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_HORZPHASE_REG,
++		     frontend->data->ch_phase[ch1_phase_idx]);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_VERTPHASE0_REG,
++		     frontend->data->ch_phase[0]);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_VERTPHASE0_REG,
++		     frontend->data->ch_phase[ch1_phase_idx]);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_VERTPHASE1_REG,
++		     frontend->data->ch_phase[0]);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_VERTPHASE1_REG,
++		     frontend->data->ch_phase[ch1_phase_idx]);
++}
++EXPORT_SYMBOL(sun4i_frontend_update_phases);
++
+ int sun4i_frontend_update_formats(struct sun4i_frontend *frontend,
+ 				  struct drm_plane *plane, uint32_t out_fmt)
+ {
+@@ -488,7 +516,6 @@
+ 	struct drm_framebuffer *fb = state->fb;
+ 	const struct drm_format_info *format = fb->format;
+ 	uint64_t modifier = fb->modifier;
+-	unsigned int ch1_phase_idx;
+ 	u32 out_fmt_val;
+ 	u32 in_fmt_val, in_mod_val, in_ps_val;
+ 	unsigned int i;
+@@ -524,19 +551,7 @@
+ 	 * I have no idea what this does exactly, but it seems to be
+ 	 * related to the scaler FIR filter phase parameters.
+ 	 */
+-	ch1_phase_idx = (format->num_planes > 1) ? 1 : 0;
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_HORZPHASE_REG,
+-		     frontend->data->ch_phase[0]);
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_HORZPHASE_REG,
+-		     frontend->data->ch_phase[ch1_phase_idx]);
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_VERTPHASE0_REG,
+-		     frontend->data->ch_phase[0]);
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_VERTPHASE0_REG,
+-		     frontend->data->ch_phase[ch1_phase_idx]);
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH0_VERTPHASE1_REG,
+-		     frontend->data->ch_phase[0]);
+-	regmap_write(frontend->regs, SUN4I_FRONTEND_CH1_VERTPHASE1_REG,
+-		     frontend->data->ch_phase[ch1_phase_idx]);
++	sun4i_frontend_update_phases(frontend, format->num_planes > 1);
+ 
+ 	/*
+ 	 * Checking the input format is sufficient since we currently only
+@@ -700,6 +715,9 @@
+ 	list_add_tail(&frontend->list, &drv->frontend_list);
+ 	pm_runtime_enable(dev);
+ 
++	if (frontend->data->has_m2m && sun4i_frontend_m2m_init(frontend))
++		dev_warn(dev, "No memory-to-memory scaler\n");
++
+ 	return 0;
+ }
+ 
+@@ -708,6 +726,7 @@
+ {
+ 	struct sun4i_frontend *frontend = dev_get_drvdata(dev);
+ 
++	sun4i_frontend_m2m_exit(frontend);
+ 	list_del(&frontend->list);
+ 	pm_runtime_force_suspend(dev);
+ }
+@@ -792,6 +811,7 @@
+ static const struct sun4i_frontend_data suniv_f1c100s_frontend = {
+ 	.ch_phase		= { 0x000, 0xfc000 },
+ 	.scaler_bypass		= true,
++	.has_m2m		= true,
+ };
+ 
+ const struct of_device_id sun4i_frontend_of_table[] = {
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend.h b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend.h
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/list.h>
+ #include <linux/mod_devicetable.h>
++#include <linux/wait.h>
+ 
+ #define SUN4I_FRONTEND_EN_REG			0x000
+ #define SUN4I_FRONTEND_EN_EN				BIT(0)
+@@ -16,6 +17,8 @@
+ #define SUN4I_FRONTEND_FRM_CTRL_REG		0x004
+ #define SUN4I_FRONTEND_FRM_CTRL_COEF_ACCESS_CTRL	BIT(23)
+ #define SUN4I_FRONTEND_FRM_CTRL_FRM_START		BIT(16)
++#define SUN4I_FRONTEND_FRM_CTRL_OUT_CTRL		BIT(11)
++#define SUN4I_FRONTEND_FRM_CTRL_WB_EN			BIT(2)
+ #define SUN4I_FRONTEND_FRM_CTRL_COEF_RDY		BIT(1)
+ #define SUN4I_FRONTEND_FRM_CTRL_REG_RDY			BIT(0)
+ 
+@@ -69,10 +72,16 @@
+ #define SUN4I_FRONTEND_INPUT_FMT_DATA_PS_BGRX		0
+ #define SUN4I_FRONTEND_INPUT_FMT_DATA_PS_XRGB		1
+ 
++#define SUN4I_FRONTEND_WB_ADDR_REG		0x050
++
+ #define SUN4I_FRONTEND_OUTPUT_FMT_REG		0x05c
+ #define SUN4I_FRONTEND_OUTPUT_FMT_DATA_FMT_BGRX8888	1
+ #define SUN4I_FRONTEND_OUTPUT_FMT_DATA_FMT_XRGB8888	2
+ 
++#define SUN4I_FRONTEND_INT_EN_REG		0x060
++#define SUN4I_FRONTEND_INT_STATUS_REG		0x064
++#define SUN4I_FRONTEND_INT_WB_END			BIT(7)
++
+ #define SUN4I_FRONTEND_CSC_COEF_REG(c)		(0x070 + (0x4 * (c)))
+ 
+ #define SUN4I_FRONTEND_CH0_INSIZE_REG		0x100
+@@ -117,6 +126,8 @@
+ 	bool	has_coef_access_ctrl;
+ 	bool	has_coef_rdy;
+ 	bool	scaler_bypass;
++	/* the write-back can serve as a memory-to-memory scaler (V4L2) */
++	bool	has_m2m;
+ 	u32	ch_phase[2];
+ };
+ 
+@@ -132,6 +143,16 @@
+ 	struct reset_control	*reset;
+ 
+ 	const struct sun4i_frontend_data	*data;
++
++	/*
++	 * A plane uses the frontend; a memory-to-memory job runs. The
++	 * display comes first: no job starts while drm_active, and
++	 * sun4i_frontend_init() waits for a running one (m2m_wait).
++	 */
++	bool			drm_active;
++	bool			m2m_busy;
++	wait_queue_head_t	m2m_wait;
++	struct sun4i_fe_m2m	*m2m;
+ };
+ 
+ extern const struct of_device_id sun4i_frontend_of_table[];
+@@ -151,5 +172,18 @@
+ int sun4i_frontend_update_formats(struct sun4i_frontend *frontend,
+ 				  struct drm_plane *plane, uint32_t out_fmt);
+ bool sun4i_frontend_format_is_supported(uint32_t fmt, uint64_t modifier);
++void sun4i_frontend_update_phases(struct sun4i_frontend *frontend,
++				  bool chroma_plane);
++
++#if IS_ENABLED(CONFIG_DRM_SUN4I_FRONTEND_M2M)
++int sun4i_frontend_m2m_init(struct sun4i_frontend *frontend);
++void sun4i_frontend_m2m_exit(struct sun4i_frontend *frontend);
++#else
++static inline int sun4i_frontend_m2m_init(struct sun4i_frontend *frontend)
++{
++	return 0;
++}
++static inline void sun4i_frontend_m2m_exit(struct sun4i_frontend *frontend) {}
++#endif
+ 
+ #endif /* _SUN4I_FRONTEND_H_ */
+diff --git a/drivers/gpu/drm/sun4i/sun4i_frontend_m2m.c b/drivers/gpu/drm/sun4i/sun4i_frontend_m2m.c
+--- a/drivers/gpu/drm/sun4i/sun4i_frontend_m2m.c
++++ b/drivers/gpu/drm/sun4i/sun4i_frontend_m2m.c
+@@ -0,0 +1,689 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * The display frontend's write-back, as a V4L2 mem2mem scaler.
++ *
++ * The frontend (DEFE) scales and colour-converts a picture for the backend;
++ * in write-back mode it writes the result to memory instead (F1C200s User
++ * Manual 5.2.5.2/17/18/19: FRM_CTRL WB_EN and OUT_CTRL, WB_ADDR, OUTPUT_FMT,
++ * the WB_EN interrupt). That makes it a memory-to-memory engine: NV12
++ * (linear or in 32x32 tiles), NV16, YUYV or XRGB in, up to 2048x2048; XRGB
++ * out, up to 1280x1280, scaled and converted in one pass.
++ *
++ * There is one frontend, and the display comes first: a job waits while a
++ * plane uses the frontend, and a plane that takes it waits for a running
++ * job to end (sun4i_frontend_init()).
++ */
++
++#include <linux/interrupt.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/regmap.h>
++#include <linux/wait.h>
++
++#include <drm/drm_blend.h>
++#include <drm/drm_color_mgmt.h>
++#include <drm/drm_plane.h>
++
++#include <media/v4l2-device.h>
++#include <media/v4l2-ioctl.h>
++#include <media/v4l2-mem2mem.h>
++#include <media/videobuf2-dma-contig.h>
++
++#include "sun4i_frontend.h"
++
++#define SUN4I_FE_M2M_NAME		"sun4i-frontend-m2m"
++
++#define SUN4I_FE_MIN_SIZE		8U
++#define SUN4I_FE_MAX_IN			2048U
++#define SUN4I_FE_MAX_OUT		1280U
++
++struct sun4i_fe_m2m {
++	struct sun4i_frontend	*frontend;
++	struct v4l2_device	v4l2_dev;
++	struct video_device	vfd;
++	struct v4l2_m2m_dev	*m2m_dev;
++	struct mutex		lock;
++};
++
++struct sun4i_fe_m2m_ctx {
++	struct v4l2_fh		fh;
++	struct sun4i_fe_m2m	*m2m;
++	struct v4l2_pix_format	src_fmt;
++	struct v4l2_pix_format	dst_fmt;
++};
++
++static const u32 sun4i_fe_m2m_src_formats[] = {
++	V4L2_PIX_FMT_NV12,
++	V4L2_PIX_FMT_NV12_32L32,
++	V4L2_PIX_FMT_NV16,
++	V4L2_PIX_FMT_YUYV,
++	V4L2_PIX_FMT_XBGR32,
++};
++
++/* little endian B G R X: DRM_FORMAT_XRGB8888, what the backend takes */
++static const u32 sun4i_fe_m2m_dst_formats[] = {
++	V4L2_PIX_FMT_XBGR32,
++};
++
++static inline struct sun4i_fe_m2m_ctx *sun4i_fe_m2m_file2ctx(struct file *file)
++{
++	return container_of(file_to_v4l2_fh(file), struct sun4i_fe_m2m_ctx, fh);
++}
++
++static bool sun4i_fe_m2m_is_yuv(u32 fourcc)
++{
++	return fourcc != V4L2_PIX_FMT_XBGR32;
++}
++
++/* the luma (or only) plane's size, the chroma plane following it */
++static unsigned int sun4i_fe_m2m_luma_size(const struct v4l2_pix_format *fmt)
++{
++	if (fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32)
++		return fmt->bytesperline * ALIGN(fmt->height, 32);
++
++	return fmt->bytesperline * fmt->height;
++}
++
++static void sun4i_fe_m2m_prepare_format(struct v4l2_pix_format *fmt,
++					unsigned int max)
++{
++	fmt->width = ALIGN(clamp(fmt->width, SUN4I_FE_MIN_SIZE, max), 2);
++	fmt->height = ALIGN(clamp(fmt->height, SUN4I_FE_MIN_SIZE, max), 2);
++	fmt->field = V4L2_FIELD_NONE;
++
++	switch (fmt->pixelformat) {
++	case V4L2_PIX_FMT_NV12_32L32:
++		fmt->bytesperline = ALIGN(fmt->width, 32);
++		fmt->sizeimage = sun4i_fe_m2m_luma_size(fmt) +
++				 fmt->bytesperline * ALIGN(fmt->height / 2, 32);
++		break;
++	case V4L2_PIX_FMT_NV12:
++		fmt->bytesperline = ALIGN(fmt->width, 4);
++		fmt->sizeimage = fmt->bytesperline * fmt->height * 3 / 2;
++		break;
++	case V4L2_PIX_FMT_NV16:
++		fmt->bytesperline = ALIGN(fmt->width, 4);
++		fmt->sizeimage = fmt->bytesperline * fmt->height * 2;
++		break;
++	case V4L2_PIX_FMT_YUYV:
++		fmt->bytesperline = fmt->width * 2;
++		fmt->sizeimage = fmt->bytesperline * fmt->height;
++		break;
++	default:
++		fmt->bytesperline = fmt->width * 4;
++		fmt->sizeimage = fmt->bytesperline * fmt->height;
++		break;
++	}
++}
++
++static void sun4i_fe_m2m_device_run(void *priv)
++{
++	struct sun4i_fe_m2m_ctx *ctx = priv;
++	struct sun4i_frontend *frontend = ctx->m2m->frontend;
++	const struct v4l2_pix_format *src = &ctx->src_fmt;
++	const struct v4l2_pix_format *dst = &ctx->dst_fmt;
++	struct regmap *regs = frontend->regs;
++	struct vb2_v4l2_buffer *in, *out;
++	unsigned int cw = src->width, ch = src->height;
++	u32 mod, fmt, ps = 0, stride;
++	dma_addr_t in_addr;
++	unsigned int i;
++
++	in = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
++	out = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
++	v4l2_m2m_buf_copy_metadata(in, out, true);
++
++	frontend->m2m_busy = true;
++
++	/* the state machine back to idle, then this job's registers */
++	regmap_update_bits(regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++			   SUN4I_FRONTEND_FRM_CTRL_FRM_START, 0);
++
++	switch (src->pixelformat) {
++	case V4L2_PIX_FMT_NV12_32L32:
++		mod = SUN4I_FRONTEND_INPUT_FMT_DATA_MOD_MB32_SEMIPLANAR;
++		fmt = SUN4I_FRONTEND_INPUT_FMT_DATA_FMT_YUV420;
++		ps = SUN4I_FRONTEND_INPUT_FMT_DATA_PS_UV;
++		cw = DIV_ROUND_UP(cw, 2);
++		ch = DIV_ROUND_UP(ch, 2);
++		break;
++	case V4L2_PIX_FMT_NV12:
++		mod = SUN4I_FRONTEND_INPUT_FMT_DATA_MOD_SEMIPLANAR;
++		fmt = SUN4I_FRONTEND_INPUT_FMT_DATA_FMT_YUV420;
++		ps = SUN4I_FRONTEND_INPUT_FMT_DATA_PS_UV;
++		cw = DIV_ROUND_UP(cw, 2);
++		ch = DIV_ROUND_UP(ch, 2);
++		break;
++	case V4L2_PIX_FMT_NV16:
++		mod = SUN4I_FRONTEND_INPUT_FMT_DATA_MOD_SEMIPLANAR;
++		fmt = SUN4I_FRONTEND_INPUT_FMT_DATA_FMT_YUV422;
++		ps = SUN4I_FRONTEND_INPUT_FMT_DATA_PS_UV;
++		cw = DIV_ROUND_UP(cw, 2);
++		break;
++	case V4L2_PIX_FMT_YUYV:
++		mod = SUN4I_FRONTEND_INPUT_FMT_DATA_MOD_PACKED;
++		fmt = SUN4I_FRONTEND_INPUT_FMT_DATA_FMT_YUV422;
++		ps = SUN4I_FRONTEND_INPUT_FMT_DATA_PS_YUYV;
++		cw = DIV_ROUND_UP(cw, 2);
++		break;
++	default:
++		mod = SUN4I_FRONTEND_INPUT_FMT_DATA_MOD_PACKED;
++		fmt = SUN4I_FRONTEND_INPUT_FMT_DATA_FMT_RGB;
++		ps = SUN4I_FRONTEND_INPUT_FMT_DATA_PS_BGRX;
++		break;
++	}
++	regmap_write(regs, SUN4I_FRONTEND_INPUT_FMT_REG, mod | fmt | ps);
++	regmap_write(regs, SUN4I_FRONTEND_OUTPUT_FMT_REG,
++		     SUN4I_FRONTEND_OUTPUT_FMT_DATA_FMT_XRGB8888);
++
++	/* the source */
++	in_addr = vb2_dma_contig_plane_dma_addr(&in->vb2_buf, 0);
++	if (src->pixelformat == V4L2_PIX_FMT_NV12_32L32) {
++		u32 x1 = SUN4I_FRONTEND_TB_OFF_X1((src->width - 1) & 31);
++
++		stride = SUN4I_FRONTEND_LINESTRD_TILED(src->bytesperline);
++		regmap_write(regs, SUN4I_FRONTEND_TB_OFF0_REG, x1);
++		regmap_write(regs, SUN4I_FRONTEND_TB_OFF1_REG, x1);
++	} else {
++		stride = src->bytesperline;
++	}
++	regmap_write(regs, SUN4I_FRONTEND_LINESTRD0_REG, stride);
++	regmap_write(regs, SUN4I_FRONTEND_LINESTRD1_REG, stride);
++	regmap_write(regs, SUN4I_FRONTEND_BUF_ADDR0_REG, in_addr);
++	regmap_write(regs, SUN4I_FRONTEND_BUF_ADDR1_REG,
++		     in_addr + sun4i_fe_m2m_luma_size(src));
++
++	/* YUV to RGB as the source's encoding and range say, else bypassed */
++	if (sun4i_fe_m2m_is_yuv(src->pixelformat)) {
++		struct drm_plane_state state = {
++			.color_encoding = src->ycbcr_enc == V4L2_YCBCR_ENC_709 ?
++				DRM_COLOR_YCBCR_BT709 : DRM_COLOR_YCBCR_BT601,
++			.color_range = src->quantization == V4L2_QUANTIZATION_FULL_RANGE ?
++				DRM_COLOR_YCBCR_FULL_RANGE :
++				DRM_COLOR_YCBCR_LIMITED_RANGE,
++		};
++		const u32 *coef = sunxi_yuv2rgb_coef(&state);
++
++		for (i = 0; i < 12; i++)
++			regmap_write(regs, SUN4I_FRONTEND_CSC_COEF_REG(i), coef[i]);
++		regmap_update_bits(regs, SUN4I_FRONTEND_BYPASS_REG,
++				   SUN4I_FRONTEND_BYPASS_CSC_EN, 0);
++	} else {
++		regmap_update_bits(regs, SUN4I_FRONTEND_BYPASS_REG,
++				   SUN4I_FRONTEND_BYPASS_CSC_EN,
++				   SUN4I_FRONTEND_BYPASS_CSC_EN);
++	}
++
++	/* the scaler, both channels to the destination size */
++	regmap_write(regs, SUN4I_FRONTEND_CH0_INSIZE_REG,
++		     SUN4I_FRONTEND_INSIZE(src->height, src->width));
++	regmap_write(regs, SUN4I_FRONTEND_CH1_INSIZE_REG,
++		     SUN4I_FRONTEND_INSIZE(ch, cw));
++	regmap_write(regs, SUN4I_FRONTEND_CH0_OUTSIZE_REG,
++		     SUN4I_FRONTEND_OUTSIZE(dst->height, dst->width));
++	regmap_write(regs, SUN4I_FRONTEND_CH1_OUTSIZE_REG,
++		     SUN4I_FRONTEND_OUTSIZE(dst->height, dst->width));
++	regmap_write(regs, SUN4I_FRONTEND_CH0_HORZFACT_REG,
++		     (src->width << 16) / dst->width);
++	regmap_write(regs, SUN4I_FRONTEND_CH1_HORZFACT_REG,
++		     (cw << 16) / dst->width);
++	regmap_write(regs, SUN4I_FRONTEND_CH0_VERTFACT_REG,
++		     (src->height << 16) / dst->height);
++	regmap_write(regs, SUN4I_FRONTEND_CH1_VERTFACT_REG,
++		     (ch << 16) / dst->height);
++	sun4i_frontend_update_phases(frontend,
++				     src->pixelformat != V4L2_PIX_FMT_YUYV &&
++				     src->pixelformat != V4L2_PIX_FMT_XBGR32);
++
++	/* the destination, then go: one frame, written back, not shown */
++	regmap_write(regs, SUN4I_FRONTEND_WB_ADDR_REG,
++		     vb2_dma_contig_plane_dma_addr(&out->vb2_buf, 0));
++	regmap_write(regs, SUN4I_FRONTEND_INT_STATUS_REG,
++		     SUN4I_FRONTEND_INT_WB_END);
++	regmap_write(regs, SUN4I_FRONTEND_INT_EN_REG, SUN4I_FRONTEND_INT_WB_END);
++	regmap_update_bits(regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++			   SUN4I_FRONTEND_FRM_CTRL_OUT_CTRL |
++			   SUN4I_FRONTEND_FRM_CTRL_WB_EN |
++			   SUN4I_FRONTEND_FRM_CTRL_REG_RDY,
++			   SUN4I_FRONTEND_FRM_CTRL_OUT_CTRL |
++			   SUN4I_FRONTEND_FRM_CTRL_WB_EN |
++			   SUN4I_FRONTEND_FRM_CTRL_REG_RDY);
++	regmap_update_bits(regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++			   SUN4I_FRONTEND_FRM_CTRL_FRM_START,
++			   SUN4I_FRONTEND_FRM_CTRL_FRM_START);
++}
++
++static irqreturn_t sun4i_fe_m2m_irq(int irq, void *data)
++{
++	struct sun4i_fe_m2m *m2m = data;
++	struct sun4i_frontend *frontend = m2m->frontend;
++	struct sun4i_fe_m2m_ctx *ctx;
++	struct vb2_v4l2_buffer *src, *dst;
++	u32 status;
++
++	regmap_read(frontend->regs, SUN4I_FRONTEND_INT_STATUS_REG, &status);
++	if (!(status & SUN4I_FRONTEND_INT_WB_END))
++		return IRQ_NONE;
++
++	regmap_write(frontend->regs, SUN4I_FRONTEND_INT_STATUS_REG,
++		     SUN4I_FRONTEND_INT_WB_END);
++	regmap_write(frontend->regs, SUN4I_FRONTEND_INT_EN_REG, 0);
++
++	/* idle again, and showing to the backend again for the display */
++	regmap_update_bits(frontend->regs, SUN4I_FRONTEND_FRM_CTRL_REG,
++			   SUN4I_FRONTEND_FRM_CTRL_FRM_START |
++			   SUN4I_FRONTEND_FRM_CTRL_OUT_CTRL |
++			   SUN4I_FRONTEND_FRM_CTRL_WB_EN, 0);
++
++	ctx = v4l2_m2m_get_curr_priv(m2m->m2m_dev);
++	if (ctx) {
++		src = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);
++		dst = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
++		v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
++		v4l2_m2m_buf_done(dst, VB2_BUF_STATE_DONE);
++	}
++
++	frontend->m2m_busy = false;
++	wake_up_all(&frontend->m2m_wait);
++
++	if (ctx)
++		v4l2_m2m_job_finish(m2m->m2m_dev, ctx->fh.m2m_ctx);
++
++	return IRQ_HANDLED;
++}
++
++/* not while a plane has the frontend */
++static int sun4i_fe_m2m_job_ready(void *priv)
++{
++	struct sun4i_fe_m2m_ctx *ctx = priv;
++
++	return !READ_ONCE(ctx->m2m->frontend->drm_active) &&
++	       v4l2_m2m_num_src_bufs_ready(ctx->fh.m2m_ctx) &&
++	       v4l2_m2m_num_dst_bufs_ready(ctx->fh.m2m_ctx);
++}
++
++static int sun4i_fe_m2m_querycap(struct file *file, void *priv,
++				 struct v4l2_capability *cap)
++{
++	strscpy(cap->driver, SUN4I_FE_M2M_NAME, sizeof(cap->driver));
++	strscpy(cap->card, "Allwinner display frontend", sizeof(cap->card));
++	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
++		 SUN4I_FE_M2M_NAME);
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_enum_fmt_vid_out(struct file *file, void *priv,
++					 struct v4l2_fmtdesc *f)
++{
++	if (f->index >= ARRAY_SIZE(sun4i_fe_m2m_src_formats))
++		return -EINVAL;
++
++	f->pixelformat = sun4i_fe_m2m_src_formats[f->index];
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_enum_fmt_vid_cap(struct file *file, void *priv,
++					 struct v4l2_fmtdesc *f)
++{
++	if (f->index >= ARRAY_SIZE(sun4i_fe_m2m_dst_formats))
++		return -EINVAL;
++
++	f->pixelformat = sun4i_fe_m2m_dst_formats[f->index];
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_g_fmt_vid_out(struct file *file, void *priv,
++				      struct v4l2_format *f)
++{
++	f->fmt.pix = sun4i_fe_m2m_file2ctx(file)->src_fmt;
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_g_fmt_vid_cap(struct file *file, void *priv,
++				      struct v4l2_format *f)
++{
++	f->fmt.pix = sun4i_fe_m2m_file2ctx(file)->dst_fmt;
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_try_fmt_vid_out(struct file *file, void *priv,
++					struct v4l2_format *f)
++{
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(sun4i_fe_m2m_src_formats); i++)
++		if (f->fmt.pix.pixelformat == sun4i_fe_m2m_src_formats[i])
++			break;
++	if (i == ARRAY_SIZE(sun4i_fe_m2m_src_formats))
++		f->fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
++
++	sun4i_fe_m2m_prepare_format(&f->fmt.pix, SUN4I_FE_MAX_IN);
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_try_fmt_vid_cap(struct file *file, void *priv,
++					struct v4l2_format *f)
++{
++	f->fmt.pix.pixelformat = V4L2_PIX_FMT_XBGR32;
++	sun4i_fe_m2m_prepare_format(&f->fmt.pix, SUN4I_FE_MAX_OUT);
++	f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
++	f->fmt.pix.quantization = V4L2_QUANTIZATION_FULL_RANGE;
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_s_fmt(struct file *file, struct v4l2_format *f,
++			      struct v4l2_pix_format *fmt)
++{
++	struct sun4i_fe_m2m_ctx *ctx = sun4i_fe_m2m_file2ctx(file);
++
++	if (vb2_is_busy(v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type)))
++		return -EBUSY;
++
++	*fmt = f->fmt.pix;
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_s_fmt_vid_out(struct file *file, void *priv,
++				      struct v4l2_format *f)
++{
++	sun4i_fe_m2m_try_fmt_vid_out(file, priv, f);
++
++	return sun4i_fe_m2m_s_fmt(file, f, &sun4i_fe_m2m_file2ctx(file)->src_fmt);
++}
++
++static int sun4i_fe_m2m_s_fmt_vid_cap(struct file *file, void *priv,
++				      struct v4l2_format *f)
++{
++	sun4i_fe_m2m_try_fmt_vid_cap(file, priv, f);
++
++	return sun4i_fe_m2m_s_fmt(file, f, &sun4i_fe_m2m_file2ctx(file)->dst_fmt);
++}
++
++static const struct v4l2_ioctl_ops sun4i_fe_m2m_ioctl_ops = {
++	.vidioc_querycap		= sun4i_fe_m2m_querycap,
++
++	.vidioc_enum_fmt_vid_cap	= sun4i_fe_m2m_enum_fmt_vid_cap,
++	.vidioc_g_fmt_vid_cap		= sun4i_fe_m2m_g_fmt_vid_cap,
++	.vidioc_try_fmt_vid_cap		= sun4i_fe_m2m_try_fmt_vid_cap,
++	.vidioc_s_fmt_vid_cap		= sun4i_fe_m2m_s_fmt_vid_cap,
++
++	.vidioc_enum_fmt_vid_out	= sun4i_fe_m2m_enum_fmt_vid_out,
++	.vidioc_g_fmt_vid_out		= sun4i_fe_m2m_g_fmt_vid_out,
++	.vidioc_try_fmt_vid_out		= sun4i_fe_m2m_try_fmt_vid_out,
++	.vidioc_s_fmt_vid_out		= sun4i_fe_m2m_s_fmt_vid_out,
++
++	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
++	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
++	.vidioc_qbuf			= v4l2_m2m_ioctl_qbuf,
++	.vidioc_dqbuf			= v4l2_m2m_ioctl_dqbuf,
++	.vidioc_prepare_buf		= v4l2_m2m_ioctl_prepare_buf,
++	.vidioc_create_bufs		= v4l2_m2m_ioctl_create_bufs,
++	.vidioc_expbuf			= v4l2_m2m_ioctl_expbuf,
++
++	.vidioc_streamon		= v4l2_m2m_ioctl_streamon,
++	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
++};
++
++static int sun4i_fe_m2m_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
++				    unsigned int *nplanes, unsigned int sizes[],
++				    struct device *alloc_devs[])
++{
++	struct sun4i_fe_m2m_ctx *ctx = vb2_get_drv_priv(vq);
++	struct v4l2_pix_format *fmt = V4L2_TYPE_IS_OUTPUT(vq->type) ?
++				      &ctx->src_fmt : &ctx->dst_fmt;
++
++	if (*nplanes)
++		return sizes[0] < fmt->sizeimage ? -EINVAL : 0;
++
++	sizes[0] = fmt->sizeimage;
++	*nplanes = 1;
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_buf_prepare(struct vb2_buffer *vb)
++{
++	struct sun4i_fe_m2m_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
++	struct v4l2_pix_format *fmt = V4L2_TYPE_IS_OUTPUT(vb->vb2_queue->type) ?
++				      &ctx->src_fmt : &ctx->dst_fmt;
++
++	if (vb2_plane_size(vb, 0) < fmt->sizeimage)
++		return -EINVAL;
++
++	vb2_set_plane_payload(vb, 0, fmt->sizeimage);
++
++	return 0;
++}
++
++static void sun4i_fe_m2m_buf_queue(struct vb2_buffer *vb)
++{
++	struct sun4i_fe_m2m_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
++
++	v4l2_m2m_buf_queue(ctx->fh.m2m_ctx, to_vb2_v4l2_buffer(vb));
++}
++
++static int sun4i_fe_m2m_start_streaming(struct vb2_queue *vq, unsigned int count)
++{
++	struct sun4i_fe_m2m_ctx *ctx = vb2_get_drv_priv(vq);
++	struct vb2_v4l2_buffer *vbuf;
++	int ret;
++
++	if (!V4L2_TYPE_IS_OUTPUT(vq->type))
++		return 0;
++
++	ret = pm_runtime_resume_and_get(ctx->m2m->frontend->dev);
++	if (ret >= 0)
++		return 0;
++
++	while ((vbuf = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx)))
++		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_QUEUED);
++
++	return ret;
++}
++
++static void sun4i_fe_m2m_stop_streaming(struct vb2_queue *vq)
++{
++	struct sun4i_fe_m2m_ctx *ctx = vb2_get_drv_priv(vq);
++	struct vb2_v4l2_buffer *vbuf;
++
++	for (;;) {
++		vbuf = V4L2_TYPE_IS_OUTPUT(vq->type) ?
++		       v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx) :
++		       v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
++		if (!vbuf)
++			break;
++		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
++	}
++
++	if (V4L2_TYPE_IS_OUTPUT(vq->type))
++		pm_runtime_put(ctx->m2m->frontend->dev);
++}
++
++static const struct vb2_ops sun4i_fe_m2m_qops = {
++	.queue_setup		= sun4i_fe_m2m_queue_setup,
++	.buf_prepare		= sun4i_fe_m2m_buf_prepare,
++	.buf_queue		= sun4i_fe_m2m_buf_queue,
++	.start_streaming	= sun4i_fe_m2m_start_streaming,
++	.stop_streaming		= sun4i_fe_m2m_stop_streaming,
++};
++
++static int sun4i_fe_m2m_queue_init(void *priv, struct vb2_queue *src_vq,
++				   struct vb2_queue *dst_vq)
++{
++	struct sun4i_fe_m2m_ctx *ctx = priv;
++	struct vb2_queue *qs[] = { src_vq, dst_vq };
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(qs); i++) {
++		struct vb2_queue *q = qs[i];
++
++		q->type = i ? V4L2_BUF_TYPE_VIDEO_CAPTURE :
++			      V4L2_BUF_TYPE_VIDEO_OUTPUT;
++		q->io_modes = VB2_MMAP | VB2_DMABUF;
++		q->drv_priv = ctx;
++		q->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
++		q->ops = &sun4i_fe_m2m_qops;
++		q->mem_ops = &vb2_dma_contig_memops;
++		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
++		q->lock = &ctx->m2m->lock;
++		q->dev = ctx->m2m->frontend->dev;
++
++		ret = vb2_queue_init(q);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_open(struct file *file)
++{
++	struct sun4i_fe_m2m *m2m = video_drvdata(file);
++	struct sun4i_fe_m2m_ctx *ctx;
++	int ret;
++
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx)
++		return -ENOMEM;
++
++	ctx->m2m = m2m;
++	ctx->src_fmt.pixelformat = V4L2_PIX_FMT_NV12;
++	ctx->src_fmt.width = 800;
++	ctx->src_fmt.height = 480;
++	sun4i_fe_m2m_prepare_format(&ctx->src_fmt, SUN4I_FE_MAX_IN);
++	ctx->dst_fmt.pixelformat = V4L2_PIX_FMT_XBGR32;
++	ctx->dst_fmt.width = 800;
++	ctx->dst_fmt.height = 480;
++	sun4i_fe_m2m_prepare_format(&ctx->dst_fmt, SUN4I_FE_MAX_OUT);
++
++	v4l2_fh_init(&ctx->fh, video_devdata(file));
++
++	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(m2m->m2m_dev, ctx,
++					    &sun4i_fe_m2m_queue_init);
++	if (IS_ERR(ctx->fh.m2m_ctx)) {
++		ret = PTR_ERR(ctx->fh.m2m_ctx);
++		v4l2_fh_exit(&ctx->fh);
++		kfree(ctx);
++		return ret;
++	}
++
++	v4l2_fh_add(&ctx->fh, file);
++
++	return 0;
++}
++
++static int sun4i_fe_m2m_release(struct file *file)
++{
++	struct sun4i_fe_m2m_ctx *ctx = sun4i_fe_m2m_file2ctx(file);
++	struct sun4i_fe_m2m *m2m = ctx->m2m;
++
++	mutex_lock(&m2m->lock);
++	v4l2_fh_del(&ctx->fh, file);
++	v4l2_fh_exit(&ctx->fh);
++	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
++	mutex_unlock(&m2m->lock);
++
++	kfree(ctx);
++
++	return 0;
++}
++
++static const struct v4l2_file_operations sun4i_fe_m2m_fops = {
++	.owner		= THIS_MODULE,
++	.open		= sun4i_fe_m2m_open,
++	.release	= sun4i_fe_m2m_release,
++	.poll		= v4l2_m2m_fop_poll,
++	.unlocked_ioctl	= video_ioctl2,
++	.mmap		= v4l2_m2m_fop_mmap,
++};
++
++static const struct v4l2_m2m_ops sun4i_fe_m2m_ops = {
++	.device_run	= sun4i_fe_m2m_device_run,
++	.job_ready	= sun4i_fe_m2m_job_ready,
++};
++
++int sun4i_frontend_m2m_init(struct sun4i_frontend *frontend)
++{
++	struct platform_device *pdev = to_platform_device(frontend->dev);
++	struct sun4i_fe_m2m *m2m;
++	int irq, ret;
++
++	init_waitqueue_head(&frontend->m2m_wait);
++
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0)
++		return irq;
++
++	m2m = devm_kzalloc(frontend->dev, sizeof(*m2m), GFP_KERNEL);
++	if (!m2m)
++		return -ENOMEM;
++
++	m2m->frontend = frontend;
++	mutex_init(&m2m->lock);
++
++	ret = devm_request_irq(frontend->dev, irq, sun4i_fe_m2m_irq, 0,
++			       SUN4I_FE_M2M_NAME, m2m);
++	if (ret)
++		return ret;
++
++	ret = v4l2_device_register(frontend->dev, &m2m->v4l2_dev);
++	if (ret)
++		return ret;
++
++	m2m->m2m_dev = v4l2_m2m_init(&sun4i_fe_m2m_ops);
++	if (IS_ERR(m2m->m2m_dev)) {
++		ret = PTR_ERR(m2m->m2m_dev);
++		goto err_v4l2;
++	}
++
++	m2m->vfd = (struct video_device) {
++		.name		= SUN4I_FE_M2M_NAME,
++		.vfl_dir	= VFL_DIR_M2M,
++		.fops		= &sun4i_fe_m2m_fops,
++		.ioctl_ops	= &sun4i_fe_m2m_ioctl_ops,
++		.minor		= -1,
++		.release	= video_device_release_empty,
++		.device_caps	= V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING,
++		.lock		= &m2m->lock,
++		.v4l2_dev	= &m2m->v4l2_dev,
++	};
++	video_set_drvdata(&m2m->vfd, m2m);
++
++	ret = video_register_device(&m2m->vfd, VFL_TYPE_VIDEO, -1);
++	if (ret)
++		goto err_m2m;
++
++	frontend->m2m = m2m;
++	dev_info(frontend->dev, "memory-to-memory scaler as /dev/video%d\n",
++		 m2m->vfd.num);
++
++	return 0;
++
++err_m2m:
++	v4l2_m2m_release(m2m->m2m_dev);
++err_v4l2:
++	v4l2_device_unregister(&m2m->v4l2_dev);
++	return ret;
++}
++
++void sun4i_frontend_m2m_exit(struct sun4i_frontend *frontend)
++{
++	struct sun4i_fe_m2m *m2m = frontend->m2m;
++
++	if (!m2m)
++		return;
++
++	video_unregister_device(&m2m->vfd);
++	v4l2_m2m_release(m2m->m2m_dev);
++	v4l2_device_unregister(&m2m->v4l2_dev);
++	frontend->m2m = NULL;
++}

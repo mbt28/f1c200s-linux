@@ -655,3 +655,8 @@ CONFIG_LRU_GEN_ENABLED=y
 # different block and binds to nothing here: off.
 CONFIG_VIDEO_SUNIV_DEINTERLACE=m
 # CONFIG_VIDEO_SUN8I_DEINTERLACE is not set
+# The display frontend's write-back as a V4L2 mem2mem scaler (patch 0049):
+# scale + YUV->RGB + untile in one pass, while no plane uses the frontend.
+# The cursor, palette/colour-key and writeback (0042-0044) and this added
+# ~5 KB to the zImage in all (4416560 -> 4421680, sun8i-di dropped).
+CONFIG_DRM_SUN4I_FRONTEND_M2M=y
