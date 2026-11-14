@@ -1,0 +1,617 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: backend: the hardware cursor as a cursor plane (suniv)
+
+The display backend has a hardware cursor that sun4i-drm never used: a
+pattern of 1, 2 or 4 bits per pixel, 32 or 64 pixels each way, indexing
+a 16-entry ARGB palette, drawn over the four layers (F1C200s User Manual
+5.3.5.1/31/32/55/56). Expose it as a DRM cursor plane, ARGB8888 only.
+
+Its RAMs are where the manual puts them on the F1C100s/F1C200s, so the
+plane is created only for a backend whose quirks name them, and suniv
+gets its own compatible (the A10's quirks plus those offsets). The 512
+byte pattern RAM gives 16 colours at 32x32, 4 at 32x64/64x32 and 2 at
+64x64. Each new framebuffer is reduced to a palette once (its most
+frequent colours, the rest mapped to the nearest), alpha included; a
+cursor partly off the left or top edge is drawn from a shifted pattern.
+The backend's layer check skips the cursor plane.
+---
+diff --git a/drivers/gpu/drm/sun4i/Makefile b/drivers/gpu/drm/sun4i/Makefile
+--- a/drivers/gpu/drm/sun4i/Makefile
++++ b/drivers/gpu/drm/sun4i/Makefile
+@@ -1,5 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
+-sun4i-backend-y			+= sun4i_backend.o sun4i_layer.o
++sun4i-backend-y			+= sun4i_backend.o sun4i_layer.o sun4i_cursor.o
+ sun4i-frontend-y		+= sun4i_frontend.o
+ 
+ sun4i-drm-y			+= sun4i_drv.o
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -37,6 +37,11 @@
+ 
+ 	/* alpha at the lowest z position is not always supported */
+ 	bool supports_lowest_plane_alpha;
++
++	/* where the hardware cursor's pattern and palette RAMs are, if known */
++	u32 hwc_pattern_off;
++	u32 hwc_pattern_size;
++	u32 hwc_palette_off;
+ };
+ 
+ static const u32 sunxi_rgb2yuv_coef[12] = {
+@@ -489,6 +494,10 @@
+ 		return 0;
+ 
+ 	drm_for_each_plane_mask(plane, drm, crtc_state->plane_mask) {
++		/* the hardware cursor is not one of the four layers */
++		if (plane->type == DRM_PLANE_TYPE_CURSOR)
++			continue;
++
+ 		struct drm_plane_state *plane_state =
+ 			drm_atomic_get_plane_state(state, plane);
+ 		if (IS_ERR(plane_state))
+@@ -929,6 +938,9 @@
+ 	}
+ 
+ 	backend->quirks = quirks;
++	backend->hwc_pattern_off = quirks->hwc_pattern_off;
++	backend->hwc_pattern_size = quirks->hwc_pattern_size;
++	backend->hwc_palette_off = quirks->hwc_palette_off;
+ 
+ 	return 0;
+ 
+@@ -998,8 +1010,20 @@
+ static const struct sun4i_backend_quirks sun9i_backend_quirks = {
+ };
+ 
++/* the A10's quirks, plus the hardware cursor, which is known here */
++static const struct sun4i_backend_quirks suniv_f1c100s_backend_quirks = {
++	.needs_output_muxing = true,
++	.hwc_pattern_off = SUNIV_BACKEND_HWCPATTERN_OFF,
++	.hwc_pattern_size = SUNIV_BACKEND_HWCPATTERN_SIZE,
++	.hwc_palette_off = SUNIV_BACKEND_HWCPALETTE_OFF,
++};
++
+ static const struct of_device_id sun4i_backend_of_table[] = {
+ 	{
++		.compatible = "allwinner,suniv-f1c100s-display-backend",
++		.data = &suniv_f1c100s_backend_quirks,
++	},
++	{
+ 		.compatible = "allwinner,sun4i-a10-display-backend",
+ 		.data = &sun4i_backend_quirks,
+ 	},
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.h b/drivers/gpu/drm/sun4i/sun4i_backend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.h
+@@ -103,7 +103,17 @@
+ #define SUN4I_BACKEND_REG_LOAD_FINISHED			BIT(1)
+ 
+ #define SUN4I_BACKEND_HWCCTL_REG		0x8d8
++#define SUN4I_BACKEND_HWCCTL_YCOOR_OFF(y)		(((y) & 0x1f) << 27)
++#define SUN4I_BACKEND_HWCCTL_YCOOR(y)			(((y) & 0x7ff) << 16)
++#define SUN4I_BACKEND_HWCCTL_XCOOR_OFF(x)		(((x) & 0x1f) << 11)
++#define SUN4I_BACKEND_HWCCTL_XCOOR(x)			((x) & 0x7ff)
++
+ #define SUN4I_BACKEND_HWCFBCTL_REG		0x8e0
++#define SUN4I_BACKEND_HWCFBCTL_YSIZE_64			(1 << 4)
++#define SUN4I_BACKEND_HWCFBCTL_XSIZE_64			(1 << 2)
++#define SUN4I_BACKEND_HWCFBCTL_FMT_1BPP			0
++#define SUN4I_BACKEND_HWCFBCTL_FMT_2BPP			1
++#define SUN4I_BACKEND_HWCFBCTL_FMT_4BPP			2
+ #define SUN4I_BACKEND_WBCTL_REG			0x8f0
+ #define SUN4I_BACKEND_WBADD_REG			0x8f4
+ #define SUN4I_BACKEND_WBLINEWIDTH_REG		0x8f8
+@@ -160,6 +170,17 @@
+ #define SUN4I_BACKEND_GAMMATAB_OFF		0x4400
+ #define SUN4I_BACKEND_HWCPATTERN_OFF		0x4800
+ #define SUN4I_BACKEND_HWCCOLORTAB_OFF		0x4c00
++
++/*
++ * suniv (F1C100s/F1C200s) has its on-chip RAMs elsewhere, and smaller
++ * (F1C200s User Manual 5.3.5.55-57): the 256-entry palette at 0x1000, the
++ * cursor pattern at 0x1400 (512 bytes) and the cursor's 16-entry ARGB
++ * palette at 0x1600.
++ */
++#define SUNIV_BACKEND_PALETTE_OFF		0x1000
++#define SUNIV_BACKEND_HWCPATTERN_OFF		0x1400
++#define SUNIV_BACKEND_HWCPATTERN_SIZE		512
++#define SUNIV_BACKEND_HWCPALETTE_OFF		0x1600
+ #define SUN4I_BACKEND_PIPE_OFF(p)		(0x5000 + (0x400 * (p)))
+ 
+ #define SUN4I_BACKEND_NUM_LAYERS		4
+@@ -184,6 +205,14 @@
+ 	bool			frontend_teardown;
+ 
+ 	const struct sun4i_backend_quirks	*quirks;
++
++	/*
++	 * The hardware cursor's RAMs (0 when the driver does not know where
++	 * this backend has them: then there is no cursor plane).
++	 */
++	u32			hwc_pattern_off;
++	u32			hwc_pattern_size;
++	u32			hwc_palette_off;
+ };
+ 
+ static inline struct sun4i_backend *
+diff --git a/drivers/gpu/drm/sun4i/sun4i_cursor.c b/drivers/gpu/drm/sun4i/sun4i_cursor.c
+--- a/drivers/gpu/drm/sun4i/sun4i_cursor.c
++++ b/drivers/gpu/drm/sun4i/sun4i_cursor.c
+@@ -0,0 +1,431 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * The display backend's hardware cursor, as a DRM cursor plane.
++ *
++ * The cursor is a pattern of 1, 2 or 4 bits per pixel, 32 or 64 pixels
++ * wide and high, whose values index a 16-entry ARGB palette. It is drawn
++ * over all four layers, and does not take one of them. The pattern RAM
++ * bounds the size and the depth: on the F1C100s/F1C200s (512 bytes) a
++ * 32x32 cursor gets 16 colours, 32x64 and 64x32 get 4, 64x64 gets 2.
++ *
++ * Userspace hands an ARGB8888 framebuffer of one of those sizes, with the
++ * premultiplied alpha DRM planes use by default. Each new framebuffer is
++ * turned into a palette once: index 0 is transparent, the others are its
++ * most frequent colours, and a pixel whose colour did not make it gets the
++ * nearest one. A cursor partly off the left or top edge is drawn from a
++ * pattern shifted in software, which is rewritten only when the shift
++ * changes.
++ */
++
++#include <linux/limits.h>
++#include <linux/log2.h>
++#include <linux/minmax.h>
++#include <linux/regmap.h>
++#include <linux/string.h>
++
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_fb_dma_helper.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_atomic_helper.h>
++#include <drm/drm_gem_dma_helper.h>
++#include <drm/drm_plane.h>
++
++#include "sun4i_backend.h"
++#include "sun4i_layer.h"
++#include "sunxi_engine.h"
++
++#define SUN4I_CURSOR_MAX	64
++#define SUN4I_CURSOR_COLORS	16
++/* distinct colours counted for the palette; the rest get the nearest */
++#define SUN4I_CURSOR_HASH	1024
++#define SUN4I_CURSOR_NONE	0xff
++
++struct sun4i_cursor {
++	struct drm_plane	plane;
++	struct sun4i_backend	*backend;
++
++	/* the current framebuffer, converted */
++	unsigned int		width;
++	unsigned int		height;
++	unsigned int		bpp;
++	u8			index[SUN4I_CURSOR_MAX * SUN4I_CURSOR_MAX];
++	u32			palette[SUN4I_CURSOR_COLORS];
++
++	/* what the pattern RAM holds: the picture shifted by this much */
++	bool			written;
++	int			shift_x;
++	int			shift_y;
++
++	/* colour counting, for the palette */
++	u32			color[SUN4I_CURSOR_HASH];
++	u16			count[SUN4I_CURSOR_HASH];
++	u8			slot[SUN4I_CURSOR_HASH];
++};
++
++static inline struct sun4i_cursor *plane_to_sun4i_cursor(struct drm_plane *plane)
++{
++	return container_of(plane, struct sun4i_cursor, plane);
++}
++
++/* bits per pixel that fit the pattern RAM for a width x height cursor */
++static unsigned int sun4i_cursor_bpp(struct sun4i_backend *backend,
++				     unsigned int width, unsigned int height)
++{
++	unsigned int bpp;
++
++	for (bpp = 4; bpp; bpp >>= 1)
++		if (width * height * bpp / 8 <= backend->hwc_pattern_size)
++			return bpp;
++
++	return 0;
++}
++
++static int sun4i_cursor_atomic_check(struct drm_plane *plane,
++				     struct drm_atomic_state *state)
++{
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
++									   plane);
++	struct sun4i_cursor *cursor = plane_to_sun4i_cursor(plane);
++	struct drm_framebuffer *fb = new_state->fb;
++	struct drm_crtc_state *crtc_state;
++	int ret;
++
++	if (!fb || !new_state->crtc)
++		return 0;
++
++	crtc_state = drm_atomic_get_crtc_state(state, new_state->crtc);
++	if (IS_ERR(crtc_state))
++		return PTR_ERR(crtc_state);
++
++	ret = drm_atomic_helper_check_plane_state(new_state, crtc_state,
++						  DRM_PLANE_NO_SCALING,
++						  DRM_PLANE_NO_SCALING,
++						  true, true);
++	if (ret)
++		return ret;
++
++	if ((fb->width != 32 && fb->width != 64) ||
++	    (fb->height != 32 && fb->height != 64)) {
++		DRM_DEBUG_DRIVER("Cursor %ux%u: only 32 or 64 wide and high\n",
++				 fb->width, fb->height);
++		return -EINVAL;
++	}
++
++	if (!sun4i_cursor_bpp(cursor->backend, fb->width, fb->height))
++		return -EINVAL;
++
++	/* the whole framebuffer, unscaled: the hardware cannot crop it */
++	if (new_state->src_x || new_state->src_y ||
++	    new_state->src_w != fb->width << 16 ||
++	    new_state->src_h != fb->height << 16) {
++		DRM_DEBUG_DRIVER("Cursor: the source must be the whole framebuffer\n");
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static unsigned int sun4i_cursor_hash(u32 color)
++{
++	return (color * 2654435761u) >> (32 - ilog2(SUN4I_CURSOR_HASH));
++}
++
++/* the slot holding color, a free slot for it, or -1 when the table is full */
++static int sun4i_cursor_find(struct sun4i_cursor *cursor, u32 color)
++{
++	unsigned int h = sun4i_cursor_hash(color);
++	unsigned int i;
++
++	for (i = 0; i < SUN4I_CURSOR_HASH; i++) {
++		unsigned int s = (h + i) & (SUN4I_CURSOR_HASH - 1);
++
++		if (!cursor->count[s] || cursor->color[s] == color)
++			return s;
++	}
++
++	return -1;
++}
++
++static unsigned int sun4i_cursor_distance(u32 a, u32 b)
++{
++	unsigned int d = 0;
++	int shift;
++
++	for (shift = 0; shift < 32; shift += 8) {
++		int c = (int)((a >> shift) & 0xff) - (int)((b >> shift) & 0xff);
++
++		d += c * c;
++	}
++
++	return d;
++}
++
++/* the palette entry nearest a (premultiplied) colour, never 0 */
++static u8 sun4i_cursor_nearest(const u32 *premul, unsigned int n, u32 color)
++{
++	unsigned int best = UINT_MAX, i;
++	u8 index = 1;
++
++	for (i = 1; i < n; i++) {
++		unsigned int d = sun4i_cursor_distance(premul[i], color);
++
++		if (d < best) {
++			best = d;
++			index = i;
++		}
++	}
++
++	return index;
++}
++
++/* premultiplied ARGB to the straight alpha the palette takes */
++static u32 sun4i_cursor_unpremultiply(u32 color)
++{
++	unsigned int a = color >> 24, r, g, b;
++
++	if (!a || a == 0xff)
++		return color;
++
++	r = min(0xffu, ((color >> 16) & 0xff) * 255 / a);
++	g = min(0xffu, ((color >> 8) & 0xff) * 255 / a);
++	b = min(0xffu, (color & 0xff) * 255 / a);
++
++	return (a << 24) | (r << 16) | (g << 8) | b;
++}
++
++static u32 sun4i_cursor_pixel(const u8 *row, unsigned int x)
++{
++	return le32_to_cpu(((const __le32 *)row)[x]);
++}
++
++static void sun4i_cursor_convert(struct sun4i_cursor *cursor,
++				 struct drm_framebuffer *fb)
++{
++	struct drm_gem_dma_object *gem = drm_fb_dma_get_gem_obj(fb, 0);
++	const u8 *pixels = (const u8 *)gem->vaddr + fb->offsets[0];
++	unsigned int width = fb->width, height = fb->height;
++	unsigned int colors, used = 1, x, y, i;
++	u32 premul[SUN4I_CURSOR_COLORS] = { 0 };
++
++	cursor->width = width;
++	cursor->height = height;
++	cursor->bpp = sun4i_cursor_bpp(cursor->backend, width, height);
++	colors = 1 << cursor->bpp;
++
++	memset(cursor->count, 0, sizeof(cursor->count));
++	memset(cursor->slot, SUN4I_CURSOR_NONE, sizeof(cursor->slot));
++
++	/* count the colours (index 0 is kept for transparent) */
++	for (y = 0; y < height; y++) {
++		const u8 *row = pixels + y * fb->pitches[0];
++
++		for (x = 0; x < width; x++) {
++			u32 color = sun4i_cursor_pixel(row, x);
++			int s;
++
++			if (!(color >> 24))
++				continue;
++
++			s = sun4i_cursor_find(cursor, color);
++			if (s < 0)
++				continue;
++
++			cursor->color[s] = color;
++			if (cursor->count[s] < U16_MAX)
++				cursor->count[s]++;
++		}
++	}
++
++	/* the most frequent colours get the palette */
++	while (used < colors) {
++		unsigned int best = 0;
++		int pick = -1;
++
++		for (i = 0; i < SUN4I_CURSOR_HASH; i++) {
++			if (cursor->count[i] > best &&
++			    cursor->slot[i] == SUN4I_CURSOR_NONE) {
++				best = cursor->count[i];
++				pick = i;
++			}
++		}
++		if (pick < 0)
++			break;
++
++		cursor->slot[pick] = used;
++		premul[used++] = cursor->color[pick];
++	}
++
++	/* the others, the nearest of those */
++	for (i = 0; i < SUN4I_CURSOR_HASH; i++)
++		if (cursor->count[i] && cursor->slot[i] == SUN4I_CURSOR_NONE)
++			cursor->slot[i] = sun4i_cursor_nearest(premul, used,
++							       cursor->color[i]);
++
++	for (y = 0; y < height; y++) {
++		const u8 *row = pixels + y * fb->pitches[0];
++		u8 *index = cursor->index + y * width;
++
++		for (x = 0; x < width; x++) {
++			u32 color = sun4i_cursor_pixel(row, x);
++			int s;
++
++			if (!(color >> 24)) {
++				index[x] = 0;
++				continue;
++			}
++
++			s = sun4i_cursor_find(cursor, color);
++			if (s >= 0 && cursor->count[s])
++				index[x] = cursor->slot[s];
++			else
++				index[x] = sun4i_cursor_nearest(premul, used, color);
++		}
++	}
++
++	cursor->palette[0] = 0;
++	for (i = 1; i < SUN4I_CURSOR_COLORS; i++)
++		cursor->palette[i] = i < used ?
++			sun4i_cursor_unpremultiply(premul[i]) : 0;
++
++	cursor->written = false;
++}
++
++/*
++ * Write the palette and the pattern, shifted left by shift_x and up by
++ * shift_y pixels. Pixels fill each 32-bit word from its least significant
++ * bits, rows one after the other.
++ */
++static void sun4i_cursor_write(struct sun4i_cursor *cursor,
++			       int shift_x, int shift_y)
++{
++	struct sun4i_backend *backend = cursor->backend;
++	struct regmap *regs = backend->engine.regs;
++	unsigned int per_word = 32 / cursor->bpp;
++	unsigned int x, y, i, n = 0;
++	u32 word = 0, addr = backend->hwc_pattern_off;
++
++	for (i = 0; i < SUN4I_CURSOR_COLORS; i++)
++		regmap_write(regs, backend->hwc_palette_off + 4 * i,
++			     cursor->palette[i]);
++
++	for (y = 0; y < cursor->height; y++) {
++		for (x = 0; x < cursor->width; x++) {
++			unsigned int sx = x + shift_x, sy = y + shift_y;
++			u8 index = 0;
++
++			if (sx < cursor->width && sy < cursor->height)
++				index = cursor->index[sy * cursor->width + sx];
++
++			word |= (u32)index << (n * cursor->bpp);
++			if (++n == per_word) {
++				regmap_write(regs, addr, word);
++				addr += 4;
++				word = 0;
++				n = 0;
++			}
++		}
++	}
++
++	cursor->written = true;
++	cursor->shift_x = shift_x;
++	cursor->shift_y = shift_y;
++}
++
++static void sun4i_cursor_atomic_disable(struct drm_plane *plane,
++					struct drm_atomic_state *state)
++{
++	struct sun4i_cursor *cursor = plane_to_sun4i_cursor(plane);
++
++	regmap_update_bits(cursor->backend->engine.regs,
++			   SUN4I_BACKEND_MODCTL_REG,
++			   SUN4I_BACKEND_MODCTL_HWC_EN, 0);
++}
++
++static void sun4i_cursor_atomic_update(struct drm_plane *plane,
++				       struct drm_atomic_state *state)
++{
++	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state,
++									   plane);
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
++									   plane);
++	struct sun4i_cursor *cursor = plane_to_sun4i_cursor(plane);
++	struct regmap *regs = cursor->backend->engine.regs;
++	int x = new_state->crtc_x, y = new_state->crtc_y;
++	int shift_x = x < 0 ? -x : 0, shift_y = y < 0 ? -y : 0;
++	u32 fbctl;
++
++	if (!new_state->visible || !new_state->fb) {
++		sun4i_cursor_atomic_disable(plane, state);
++		return;
++	}
++
++	if (new_state->fb != old_state->fb || !cursor->bpp)
++		sun4i_cursor_convert(cursor, new_state->fb);
++
++	if (!cursor->written || shift_x != cursor->shift_x ||
++	    shift_y != cursor->shift_y)
++		sun4i_cursor_write(cursor, shift_x, shift_y);
++
++	fbctl = cursor->bpp == 4 ? SUN4I_BACKEND_HWCFBCTL_FMT_4BPP :
++		cursor->bpp == 2 ? SUN4I_BACKEND_HWCFBCTL_FMT_2BPP :
++				   SUN4I_BACKEND_HWCFBCTL_FMT_1BPP;
++	if (cursor->width == 64)
++		fbctl |= SUN4I_BACKEND_HWCFBCTL_XSIZE_64;
++	if (cursor->height == 64)
++		fbctl |= SUN4I_BACKEND_HWCFBCTL_YSIZE_64;
++
++	regmap_write(regs, SUN4I_BACKEND_HWCFBCTL_REG, fbctl);
++	regmap_write(regs, SUN4I_BACKEND_HWCCTL_REG,
++		     SUN4I_BACKEND_HWCCTL_XCOOR(max(x, 0)) |
++		     SUN4I_BACKEND_HWCCTL_YCOOR(max(y, 0)));
++	regmap_update_bits(regs, SUN4I_BACKEND_MODCTL_REG,
++			   SUN4I_BACKEND_MODCTL_HWC_EN,
++			   SUN4I_BACKEND_MODCTL_HWC_EN);
++}
++
++static const struct drm_plane_helper_funcs sun4i_cursor_helper_funcs = {
++	.atomic_check	= sun4i_cursor_atomic_check,
++	.atomic_update	= sun4i_cursor_atomic_update,
++	.atomic_disable	= sun4i_cursor_atomic_disable,
++};
++
++static const struct drm_plane_funcs sun4i_cursor_funcs = {
++	.atomic_destroy_state	= drm_atomic_helper_plane_destroy_state,
++	.atomic_duplicate_state	= drm_atomic_helper_plane_duplicate_state,
++	.destroy		= drm_plane_cleanup,
++	.disable_plane		= drm_atomic_helper_disable_plane,
++	.reset			= drm_atomic_helper_plane_reset,
++	.update_plane		= drm_atomic_helper_update_plane,
++};
++
++static const uint32_t sun4i_cursor_formats[] = {
++	DRM_FORMAT_ARGB8888,
++};
++
++struct drm_plane *sun4i_cursor_init(struct drm_device *drm,
++				    struct sun4i_backend *backend)
++{
++	struct sun4i_cursor *cursor;
++	int ret;
++
++	cursor = devm_kzalloc(drm->dev, sizeof(*cursor), GFP_KERNEL);
++	if (!cursor)
++		return ERR_PTR(-ENOMEM);
++
++	cursor->backend = backend;
++
++	/* possible crtcs are set by drm_crtc_init_with_planes() */
++	ret = drm_universal_plane_init(drm, &cursor->plane, 0,
++				       &sun4i_cursor_funcs,
++				       sun4i_cursor_formats,
++				       ARRAY_SIZE(sun4i_cursor_formats),
++				       NULL, DRM_PLANE_TYPE_CURSOR, NULL);
++	if (ret)
++		return ERR_PTR(ret);
++
++	drm_plane_helper_add(&cursor->plane, &sun4i_cursor_helper_funcs);
++
++	return &cursor->plane;
++}
+diff --git a/drivers/gpu/drm/sun4i/sun4i_layer.c b/drivers/gpu/drm/sun4i/sun4i_layer.c
+--- a/drivers/gpu/drm/sun4i/sun4i_layer.c
++++ b/drivers/gpu/drm/sun4i/sun4i_layer.c
+@@ -253,8 +253,11 @@
+ 	struct sun4i_backend *backend = engine_to_sun4i_backend(engine);
+ 	int i;
+ 
+-	/* We need to have a sentinel at the need, hence the overallocation */
+-	planes = devm_kcalloc(drm->dev, SUN4I_BACKEND_NUM_LAYERS + 1,
++	/*
++	 * We need to have a sentinel at the need, hence the overallocation,
++	 * and room for the cursor plane.
++	 */
++	planes = devm_kcalloc(drm->dev, SUN4I_BACKEND_NUM_LAYERS + 2,
+ 			      sizeof(*planes), GFP_KERNEL);
+ 	if (!planes)
+ 		return ERR_PTR(-ENOMEM);
+@@ -273,5 +276,14 @@
+ 		planes[i] = &layer->plane;
+ 	}
+ 
++	if (backend->hwc_pattern_off) {
++		struct drm_plane *cursor = sun4i_cursor_init(drm, backend);
++
++		if (IS_ERR(cursor))
++			dev_warn(drm->dev, "Couldn't initialize the cursor plane\n");
++		else
++			planes[i] = cursor;
++	}
++
+ 	return planes;
+ }
+diff --git a/drivers/gpu/drm/sun4i/sun4i_layer.h b/drivers/gpu/drm/sun4i/sun4i_layer.h
+--- a/drivers/gpu/drm/sun4i/sun4i_layer.h
++++ b/drivers/gpu/drm/sun4i/sun4i_layer.h
+@@ -39,4 +39,8 @@
+ struct drm_plane **sun4i_layers_init(struct drm_device *drm,
+ 				     struct sunxi_engine *engine);
+ 
++struct sun4i_backend;
++struct drm_plane *sun4i_cursor_init(struct drm_device *drm,
++				    struct sun4i_backend *backend);
++
+ #endif /* _SUN4I_LAYER_H_ */
