@@ -1,0 +1,381 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: backend: write-back as a writeback connector (suniv)
+
+The backend can write the frame it composes -- all layers, the frontend
+plane and the cursor, blended -- to memory while it still drives the LCD
+(F1C200s User Manual 5.3.5.33-35: WBCTL 0x8f0, WBADD 0x8f4 and
+WBLINEWIDTH 0x8f8, the last two in bits). Expose it as a DRM writeback
+connector on the backend's CRTC: ARGB8888/XRGB8888 (the backend's
+"ARGB") and BGRA8888/BGRX8888, the size of the mode.
+
+A job is queued when its commit is applied (the registers are buffered,
+so the backend is told to load them again) and signalled from the vblank
+once the backend has started (WBCTL EN cleared) and finished (BUSY
+cleared) that frame; ERR fails it with -EIO. A new optional engine op
+creates the connector once the CRTC exists. Enabled for suniv only.
+---
+diff --git a/drivers/gpu/drm/sun4i/Makefile b/drivers/gpu/drm/sun4i/Makefile
+--- a/drivers/gpu/drm/sun4i/Makefile
++++ b/drivers/gpu/drm/sun4i/Makefile
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: GPL-2.0
+-sun4i-backend-y			+= sun4i_backend.o sun4i_layer.o sun4i_cursor.o
++sun4i-backend-y			+= sun4i_backend.o sun4i_layer.o sun4i_cursor.o \
++				   sun4i_writeback.o
+ sun4i-frontend-y		+= sun4i_frontend.o
+ 
+ sun4i-drm-y			+= sun4i_drv.o
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -50,6 +50,9 @@
+ 
+ 	/* the 4444 formats (codes 12 and 13) are reserved */
+ 	bool no_4444;
++
++	/* the output can be written back to memory, and that is tested */
++	bool has_writeback;
+ };
+ 
+ static const u32 sunxi_rgb2yuv_coef[12] = {
+@@ -769,6 +772,8 @@
+ 	struct sun4i_backend *backend = engine_to_sun4i_backend(engine);
+ 	struct sun4i_frontend *frontend = backend->frontend;
+ 
++	sun4i_writeback_vblank(backend);
++
+ 	if (!frontend)
+ 		return;
+ 
+@@ -916,6 +921,18 @@
+ 	return ERR_PTR(-EINVAL);
+ }
+ 
++static int sun4i_backend_writeback_init(struct sunxi_engine *engine,
++					struct drm_device *drm,
++					struct drm_crtc *crtc)
++{
++	struct sun4i_backend *backend = engine_to_sun4i_backend(engine);
++
++	if (!backend->has_writeback)
++		return 0;
++
++	return sun4i_writeback_init(backend, drm, crtc);
++}
++
+ static const struct sunxi_engine_ops sun4i_backend_engine_ops = {
+ 	.atomic_begin			= sun4i_backend_atomic_begin,
+ 	.atomic_check			= sun4i_backend_atomic_check,
+@@ -925,6 +942,7 @@
+ 	.disable_color_correction	= sun4i_backend_disable_color_correction,
+ 	.vblank_quirk			= sun4i_backend_vblank_quirk,
+ 	.mode_set			= sun4i_backend_mode_set,
++	.writeback_init			= sun4i_backend_writeback_init,
+ };
+ 
+ static const struct regmap_config sun4i_backend_regmap_config = {
+@@ -1087,6 +1105,7 @@
+ 	backend->hwc_palette_off = quirks->hwc_palette_off;
+ 	backend->palette_off = quirks->palette_off;
+ 	backend->no_4444 = quirks->no_4444;
++	backend->has_writeback = quirks->has_writeback;
+ 
+ 	return 0;
+ 
+@@ -1167,6 +1186,7 @@
+ 	.hwc_palette_off = SUNIV_BACKEND_HWCPALETTE_OFF,
+ 	.palette_off = SUNIV_BACKEND_PALETTE_OFF,
+ 	.no_4444 = true,
++	.has_writeback = true,
+ };
+ 
+ static const struct of_device_id sun4i_backend_of_table[] = {
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.h b/drivers/gpu/drm/sun4i/sun4i_backend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.h
+@@ -125,6 +125,11 @@
+ #define SUN4I_BACKEND_HWCFBCTL_FMT_2BPP			1
+ #define SUN4I_BACKEND_HWCFBCTL_FMT_4BPP			2
+ #define SUN4I_BACKEND_WBCTL_REG			0x8f0
++#define SUN4I_BACKEND_WBCTL_FMT_BGRA			BIT(12)
++#define SUN4I_BACKEND_WBCTL_ERR				BIT(9)
++#define SUN4I_BACKEND_WBCTL_BUSY			BIT(8)
++#define SUN4I_BACKEND_WBCTL_ONLY			BIT(1)
++#define SUN4I_BACKEND_WBCTL_EN				BIT(0)
+ #define SUN4I_BACKEND_WBADD_REG			0x8f4
+ #define SUN4I_BACKEND_WBLINEWIDTH_REG		0x8f8
+ #define SUN4I_BACKEND_SPREN_REG			0x900
+@@ -197,6 +202,9 @@
+ #define SUN4I_BACKEND_NUM_FRONTEND_LAYERS	1
+ #define SUN4I_BACKEND_NUM_YUV_PLANES		1
+ 
++struct drm_crtc;
++struct sun4i_writeback;
++
+ struct sun4i_backend {
+ 	struct sunxi_engine	engine;
+ 	struct sun4i_frontend	*frontend;
+@@ -238,6 +246,10 @@
+ 	/* plane properties: the colour key and the palette */
+ 	struct drm_property	*color_key_prop;
+ 	struct drm_property	*palette_prop;
++
++	/* the writeback connector, when the backend has one */
++	bool			has_writeback;
++	struct sun4i_writeback	*writeback;
+ };
+ 
+ static inline struct sun4i_backend *
+@@ -248,6 +260,11 @@
+ 
+ void sun4i_backend_layer_enable(struct sun4i_backend *backend,
+ 				int layer, bool enable);
++
++/* sun4i_writeback.c */
++int sun4i_writeback_init(struct sun4i_backend *backend,
++			 struct drm_device *drm, struct drm_crtc *crtc);
++void sun4i_writeback_vblank(struct sun4i_backend *backend);
+ bool sun4i_backend_format_is_supported(uint32_t fmt, uint64_t modifier);
+ bool sun4i_backend_format_is_palette(uint32_t fmt);
+ void sun4i_backend_update_layer_color_key(struct sun4i_backend *backend,
+diff --git a/drivers/gpu/drm/sun4i/sun4i_crtc.c b/drivers/gpu/drm/sun4i/sun4i_crtc.c
+--- a/drivers/gpu/drm/sun4i/sun4i_crtc.c
++++ b/drivers/gpu/drm/sun4i/sun4i_crtc.c
+@@ -239,6 +239,10 @@
+ 
+ 	drm_crtc_helper_add(&scrtc->crtc, &sun4i_crtc_helper_funcs);
+ 
++	if (engine->ops->writeback_init &&
++	    engine->ops->writeback_init(engine, drm, &scrtc->crtc))
++		dev_warn(drm->dev, "Couldn't add the writeback connector\n");
++
+ 	/* Set crtc.port to output port node of the tcon */
+ 	scrtc->crtc.port = of_graph_get_port_by_id(scrtc->tcon->dev->of_node,
+ 						   1);
+diff --git a/drivers/gpu/drm/sun4i/sun4i_writeback.c b/drivers/gpu/drm/sun4i/sun4i_writeback.c
+--- a/drivers/gpu/drm/sun4i/sun4i_writeback.c
++++ b/drivers/gpu/drm/sun4i/sun4i_writeback.c
+@@ -0,0 +1,202 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * The display backend's write-back, as a DRM writeback connector.
++ *
++ * The backend can write the frame it composes -- every layer, the frontend's
++ * plane and the hardware cursor, blended -- to memory, while it still goes
++ * to the LCD (F1C200s User Manual 5.3.5.33-35): WBCTL starts it at the next
++ * frame, WBADD and WBLINEWIDTH take the buffer's address and pitch, both in
++ * bits. A writeback job is queued when its commit is applied, and signalled
++ * from the vblank once the backend has started and then finished that
++ * frame.
++ */
++
++#include <linux/kernel.h>
++#include <linux/regmap.h>
++
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_connector.h>
++#include <drm/drm_edid.h>
++#include <drm/drm_fb_dma_helper.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_dma_helper.h>
++#include <drm/drm_probe_helper.h>
++#include <drm/drm_writeback.h>
++
++#include "sun4i_backend.h"
++#include "sunxi_engine.h"
++
++struct sun4i_writeback {
++	struct drm_writeback_connector	wb;
++	struct sun4i_backend		*backend;
++	/* a job is queued and the backend has not finished its frame */
++	bool				pending;
++};
++
++static inline struct sun4i_writeback *
++connector_to_sun4i_writeback(struct drm_connector *connector)
++{
++	return container_of(drm_connector_to_writeback(connector),
++			    struct sun4i_writeback, wb);
++}
++
++/* in memory, little endian: ARGB8888 is the backend's "ARGB", B G R A */
++static const u32 sun4i_writeback_formats[] = {
++	DRM_FORMAT_ARGB8888,
++	DRM_FORMAT_XRGB8888,
++	DRM_FORMAT_BGRA8888,
++	DRM_FORMAT_BGRX8888,
++};
++
++static int sun4i_writeback_get_modes(struct drm_connector *connector)
++{
++	struct drm_device *drm = connector->dev;
++
++	return drm_add_modes_noedid(connector, drm->mode_config.max_width,
++				    drm->mode_config.max_height);
++}
++
++static int sun4i_writeback_atomic_check(struct drm_connector *connector,
++					struct drm_atomic_state *state)
++{
++	struct drm_connector_state *conn_state =
++		drm_atomic_get_new_connector_state(state, connector);
++	struct drm_crtc_state *crtc_state;
++	struct drm_framebuffer *fb;
++	int ret;
++
++	if (!conn_state->writeback_job || !conn_state->writeback_job->fb)
++		return 0;
++
++	ret = drm_atomic_helper_check_wb_connector_state(connector, state);
++	if (ret)
++		return ret;
++
++	if (!conn_state->crtc)
++		return -EINVAL;
++
++	crtc_state = drm_atomic_get_new_crtc_state(state, conn_state->crtc);
++	if (!crtc_state || !crtc_state->active)
++		return -EINVAL;
++
++	/* the whole frame, as the backend composes it */
++	fb = conn_state->writeback_job->fb;
++	if (fb->width != crtc_state->mode.hdisplay ||
++	    fb->height != crtc_state->mode.vdisplay) {
++		DRM_DEBUG_DRIVER("Writeback %ux%u, mode %ux%u\n",
++				 fb->width, fb->height,
++				 crtc_state->mode.hdisplay,
++				 crtc_state->mode.vdisplay);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static void sun4i_writeback_atomic_commit(struct drm_connector *connector,
++					  struct drm_atomic_state *state)
++{
++	struct drm_connector_state *conn_state =
++		drm_atomic_get_new_connector_state(state, connector);
++	struct sun4i_writeback *writeback = connector_to_sun4i_writeback(connector);
++	struct regmap *regs = writeback->backend->engine.regs;
++	struct drm_writeback_job *job = conn_state->writeback_job;
++	struct drm_gem_dma_object *gem;
++	struct drm_framebuffer *fb;
++	dma_addr_t addr;
++	u32 ctl = SUN4I_BACKEND_WBCTL_EN;
++
++	if (!job || !job->fb)
++		return;
++
++	fb = job->fb;
++	gem = drm_fb_dma_get_gem_obj(fb, 0);
++	addr = gem->dma_addr + fb->offsets[0];
++
++	if (fb->format->format == DRM_FORMAT_BGRA8888 ||
++	    fb->format->format == DRM_FORMAT_BGRX8888)
++		ctl |= SUN4I_BACKEND_WBCTL_FMT_BGRA;
++
++	/* addresses and widths in bits, as the layers' */
++	regmap_write(regs, SUN4I_BACKEND_WBADD_REG, lower_32_bits(addr << 3));
++	regmap_write(regs, SUN4I_BACKEND_WBLINEWIDTH_REG, fb->pitches[0] * 8);
++
++	drm_writeback_queue_job(&writeback->wb, conn_state);
++	writeback->pending = true;
++
++	regmap_write(regs, SUN4I_BACKEND_WBCTL_REG, ctl);
++
++	/*
++	 * The backend loaded its buffered registers when the planes were
++	 * committed, before this; have it load these too.
++	 */
++	regmap_write(regs, SUN4I_BACKEND_REGBUFFCTL_REG,
++		     SUN4I_BACKEND_REGBUFFCTL_AUTOLOAD_DIS |
++		     SUN4I_BACKEND_REGBUFFCTL_LOADCTL);
++}
++
++/* from the vblank interrupt */
++void sun4i_writeback_vblank(struct sun4i_backend *backend)
++{
++	struct sun4i_writeback *writeback = backend->writeback;
++	u32 ctl;
++
++	if (!writeback || !writeback->pending)
++		return;
++
++	/* not started yet (EN still set), or still writing (BUSY) */
++	regmap_read(backend->engine.regs, SUN4I_BACKEND_WBCTL_REG, &ctl);
++	if (ctl & (SUN4I_BACKEND_WBCTL_EN | SUN4I_BACKEND_WBCTL_BUSY))
++		return;
++
++	writeback->pending = false;
++	drm_writeback_signal_completion(&writeback->wb,
++					ctl & SUN4I_BACKEND_WBCTL_ERR ? -EIO : 0);
++}
++
++static const struct drm_connector_helper_funcs sun4i_writeback_helper_funcs = {
++	.get_modes	= sun4i_writeback_get_modes,
++	.atomic_check	= sun4i_writeback_atomic_check,
++	.atomic_commit	= sun4i_writeback_atomic_commit,
++};
++
++static const struct drm_connector_funcs sun4i_writeback_connector_funcs = {
++	.reset			= drm_atomic_helper_connector_reset,
++	.fill_modes		= drm_helper_probe_single_connector_modes,
++	.destroy		= drm_connector_cleanup,
++	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
++	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
++};
++
++static const struct drm_encoder_helper_funcs sun4i_writeback_encoder_funcs = {
++};
++
++int sun4i_writeback_init(struct sun4i_backend *backend,
++			 struct drm_device *drm, struct drm_crtc *crtc)
++{
++	struct sun4i_writeback *writeback;
++	int ret;
++
++	writeback = devm_kzalloc(drm->dev, sizeof(*writeback), GFP_KERNEL);
++	if (!writeback)
++		return -ENOMEM;
++
++	writeback->backend = backend;
++	drm_connector_helper_add(&writeback->wb.base,
++				 &sun4i_writeback_helper_funcs);
++
++	ret = drm_writeback_connector_init(drm, &writeback->wb,
++					   &sun4i_writeback_connector_funcs,
++					   &sun4i_writeback_encoder_funcs,
++					   sun4i_writeback_formats,
++					   ARRAY_SIZE(sun4i_writeback_formats),
++					   drm_crtc_mask(crtc));
++	if (ret)
++		return ret;
++
++	backend->writeback = writeback;
++
++	return 0;
++}
+diff --git a/drivers/gpu/drm/sun4i/sunxi_engine.h b/drivers/gpu/drm/sun4i/sunxi_engine.h
+--- a/drivers/gpu/drm/sun4i/sunxi_engine.h
++++ b/drivers/gpu/drm/sun4i/sunxi_engine.h
+@@ -123,6 +123,17 @@
+ 	 */
+ 	void (*mode_set)(struct sunxi_engine *engine,
+ 			 const struct drm_display_mode *mode);
++
++	/**
++	 * @writeback_init:
++	 *
++	 * This callback adds a writeback connector for the engine's
++	 * output, once its CRTC exists.
++	 *
++	 * This function is optional.
++	 */
++	int (*writeback_init)(struct sunxi_engine *engine,
++			      struct drm_device *drm, struct drm_crtc *crtc);
+ };
+ 
+ /**
