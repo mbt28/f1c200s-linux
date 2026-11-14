@@ -1,0 +1,939 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: sunxi: suniv de-interlacer, a mem2mem driver
+
+The F1C100s/F1C200s have a de-interlacer at 0x01e70000 (IRQ 33; F1C200s
+User Manual 5.4) with no driver: interlaced NV12 in, linear or in 32x32
+tiles, and a progressive NV12 frame built on the top field out, using
+the frame before for motion detection, up to 720x576. sun8i-di is a
+different block.
+
+Add suniv-di, a V4L2 mem2mem device modelled on sun8i-di: one OUTPUT
+buffer (V4L2_FIELD_INTERLACED) gives one CAPTURE buffer of the same
+size; each OUTPUT buffer is kept as the next frame's previous frame. The
+motion-flag buffer is allocated at one byte per pixel (the manual gives
+no size). The module clock keeps its rate: one of its parents is
+pll-video, which the LCD uses.
+
+And the node in suniv-f1c100s.dtsi, with the CCU's existing clocks and
+reset.
+---
+diff --git a/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi b/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi
+--- a/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi
++++ b/arch/arm/boot/dts/allwinner/suniv-f1c100s.dtsi
+@@ -307,6 +307,17 @@
+ 			status = "disabled";
+ 		};
+ 
++		deinterlace: deinterlace@1e70000 {
++			compatible = "allwinner,suniv-f1c100s-deinterlace";
++			reg = <0x01e70000 0x1000>;
++			interrupts = <33>;
++			clocks = <&ccu CLK_BUS_DEINTERLACE>,
++				 <&ccu CLK_DEINTERLACE>,
++				 <&ccu CLK_DRAM_DEINTERLACE>;
++			clock-names = "bus", "mod", "ram";
++			resets = <&ccu RST_BUS_DEINTERLACE>;
++		};
++
+ 		uart0: serial@1c25000 {
+ 			compatible = "snps,dw-apb-uart";
+ 			reg = <0x01c25000 0x400>;
+diff --git a/drivers/media/platform/sunxi/Kconfig b/drivers/media/platform/sunxi/Kconfig
+--- a/drivers/media/platform/sunxi/Kconfig
++++ b/drivers/media/platform/sunxi/Kconfig
+@@ -9,3 +9,4 @@
+ source "drivers/media/platform/sunxi/sun8i-a83t-mipi-csi2/Kconfig"
+ source "drivers/media/platform/sunxi/sun8i-di/Kconfig"
+ source "drivers/media/platform/sunxi/sun8i-rotate/Kconfig"
++source "drivers/media/platform/sunxi/suniv-di/Kconfig"
+diff --git a/drivers/media/platform/sunxi/Makefile b/drivers/media/platform/sunxi/Makefile
+--- a/drivers/media/platform/sunxi/Makefile
++++ b/drivers/media/platform/sunxi/Makefile
+@@ -7,3 +7,4 @@
+ obj-y		+= sun8i-a83t-mipi-csi2/
+ obj-y		+= sun8i-di/
+ obj-y		+= sun8i-rotate/
++obj-y		+= suniv-di/
+diff --git a/drivers/media/platform/sunxi/suniv-di/Kconfig b/drivers/media/platform/sunxi/suniv-di/Kconfig
+--- a/drivers/media/platform/sunxi/suniv-di/Kconfig
++++ b/drivers/media/platform/sunxi/suniv-di/Kconfig
+@@ -0,0 +1,17 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config VIDEO_SUNIV_DEINTERLACE
++	tristate "Allwinner suniv (F1C100s/F1C200s) de-interlacer"
++	depends on V4L_MEM2MEM_DRIVERS
++	depends on VIDEO_DEV
++	depends on ARCH_SUNXI || COMPILE_TEST
++	depends on COMMON_CLK && RESET_CONTROLLER && OF
++	depends on PM
++	select VIDEOBUF2_DMA_CONTIG
++	select V4L2_MEM2MEM_DEV
++	help
++	  Support for the de-interlacer of the Allwinner F1C100s and
++	  F1C200s: interlaced NV12, linear or 32x32-tiled, in; progressive
++	  NV12 out, up to 720x576.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called suniv-di.
+diff --git a/drivers/media/platform/sunxi/suniv-di/Makefile b/drivers/media/platform/sunxi/suniv-di/Makefile
+--- a/drivers/media/platform/sunxi/suniv-di/Makefile
++++ b/drivers/media/platform/sunxi/suniv-di/Makefile
+@@ -0,0 +1 @@
++obj-$(CONFIG_VIDEO_SUNIV_DEINTERLACE) += suniv-di.o
+diff --git a/drivers/media/platform/sunxi/suniv-di/suniv-di.c b/drivers/media/platform/sunxi/suniv-di/suniv-di.c
+--- a/drivers/media/platform/sunxi/suniv-di/suniv-di.c
++++ b/drivers/media/platform/sunxi/suniv-di/suniv-di.c
+@@ -0,0 +1,853 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Allwinner suniv (F1C100s/F1C200s) de-interlacer, a V4L2 mem2mem device.
++ *
++ * The de-interlacer turns an interlaced NV12 frame -- both fields woven,
++ * linear or in 32x32 tiles -- into a progressive NV12 frame built on the
++ * top field, using the frame before it for motion detection, up to
++ * 720x576 (F1C200s User Manual 5.4). It is the composite camera's (TVD)
++ * and interlaced MPEG-2's way to a picture without combing.
++ *
++ * One OUTPUT buffer gives one CAPTURE buffer. The OUTPUT buffer is kept as
++ * the next frame's "previous frame" until that one is done, as sun8i-di
++ * does; the first frame is its own previous frame.
++ *
++ * Modelled on sun8i-di (Jernej Skrabec).
++ */
++
++#include <linux/clk.h>
++#include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/reset.h>
++
++#include <media/v4l2-device.h>
++#include <media/v4l2-ioctl.h>
++#include <media/v4l2-mem2mem.h>
++#include <media/videobuf2-dma-contig.h>
++
++#define SUNIV_DI_NAME			"suniv-di"
++
++#define SUNIV_DI_CTRL			0x00
++#define SUNIV_DI_CTRL_RESET			BIT(31)
++#define SUNIV_DI_CTRL_START			BIT(0)
++#define SUNIV_DI_INT_CTRL		0x04
++#define SUNIV_DI_INT_CTRL_FINISH_EN		BIT(0)
++#define SUNIV_DI_STATUS			0x08
++#define SUNIV_DI_STATUS_BUSY			BIT(8)
++#define SUNIV_DI_STATUS_FINISH			BIT(0)
++#define SUNIV_DI_SIZE			0x10
++#define SUNIV_DI_SIZE_WH(w, h)			((((h) - 1) << 16) | ((w) - 1))
++#define SUNIV_DI_FORMAT			0x14
++#define SUNIV_DI_FORMAT_TILED			BIT(0)
++#define SUNIV_DI_IN_LS0			0x20
++#define SUNIV_DI_IN_LS1			0x24
++#define SUNIV_DI_OUT_LS0		0x28
++#define SUNIV_DI_OUT_LS1		0x2c
++#define SUNIV_DI_FLAG_LS		0x30
++#define SUNIV_DI_CUR_ADDR0		0x40
++#define SUNIV_DI_CUR_ADDR1		0x44
++#define SUNIV_DI_PRE_ADDR0		0x50
++#define SUNIV_DI_PRE_ADDR1		0x54
++#define SUNIV_DI_OUT_ADDR0		0x60
++#define SUNIV_DI_OUT_ADDR1		0x64
++#define SUNIV_DI_FLAG_ADDR		0x70
++#define SUNIV_DI_PARA			0x80
++
++#define SUNIV_DI_MIN_WIDTH		32U
++#define SUNIV_DI_MIN_HEIGHT		32U
++#define SUNIV_DI_MAX_WIDTH		720U
++#define SUNIV_DI_MAX_HEIGHT		576U
++
++struct suniv_di_dev {
++	struct v4l2_device	v4l2_dev;
++	struct video_device	vfd;
++	struct device		*dev;
++	struct v4l2_m2m_dev	*m2m_dev;
++
++	/* Device file mutex */
++	struct mutex		dev_mutex;
++
++	void __iomem		*base;
++
++	struct clk		*bus_clk;
++	struct clk		*mod_clk;
++	struct clk		*ram_clk;
++
++	struct reset_control	*rstc;
++};
++
++struct suniv_di_ctx {
++	struct v4l2_fh		fh;
++	struct suniv_di_dev	*dev;
++
++	struct v4l2_pix_format	src_fmt;
++	struct v4l2_pix_format	dst_fmt;
++
++	/* the motion flags, one byte per pixel (the manual gives no size) */
++	void			*flag_buf;
++	dma_addr_t		flag_buf_dma;
++	size_t			flag_buf_size;
++
++	struct vb2_v4l2_buffer	*prev;
++	bool			aborting;
++};
++
++static const u32 suniv_di_src_formats[] = {
++	V4L2_PIX_FMT_NV12,
++	V4L2_PIX_FMT_NV12_32L32,
++};
++
++static const u32 suniv_di_dst_formats[] = {
++	V4L2_PIX_FMT_NV12,
++};
++
++static inline void suniv_di_write(struct suniv_di_dev *dev, u32 reg, u32 val)
++{
++	writel(val, dev->base + reg);
++}
++
++static inline u32 suniv_di_read(struct suniv_di_dev *dev, u32 reg)
++{
++	return readl(dev->base + reg);
++}
++
++static inline struct suniv_di_ctx *suniv_di_file2ctx(struct file *file)
++{
++	return container_of(file_to_v4l2_fh(file), struct suniv_di_ctx, fh);
++}
++
++/* the luma and chroma planes' sizes, in a single buffer */
++static unsigned int suniv_di_luma_size(const struct v4l2_pix_format *fmt)
++{
++	if (fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32)
++		return fmt->bytesperline * ALIGN(fmt->height, 32);
++
++	return fmt->bytesperline * fmt->height;
++}
++
++static void suniv_di_prepare_format(struct v4l2_pix_format *fmt)
++{
++	unsigned int width = clamp(fmt->width, SUNIV_DI_MIN_WIDTH,
++				   SUNIV_DI_MAX_WIDTH);
++	unsigned int height = clamp(fmt->height, SUNIV_DI_MIN_HEIGHT,
++				    SUNIV_DI_MAX_HEIGHT);
++
++	/* sizes in pairs of pixels and lines, strides in words */
++	fmt->width = ALIGN(width, 2);
++	fmt->height = ALIGN(height, 2);
++
++	if (fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32) {
++		fmt->bytesperline = ALIGN(fmt->width, 32);
++		fmt->sizeimage = suniv_di_luma_size(fmt) +
++				 fmt->bytesperline * ALIGN(fmt->height / 2, 32);
++	} else {
++		fmt->bytesperline = ALIGN(fmt->width, 4);
++		fmt->sizeimage = fmt->bytesperline * fmt->height * 3 / 2;
++	}
++}
++
++/*
++ * A tiled plane's stride: from the start of a tile's last line to the start
++ * of the first line of the tile below, in words.
++ */
++static u32 suniv_di_in_stride(const struct v4l2_pix_format *fmt)
++{
++	if (fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32)
++		return (fmt->bytesperline * 32 - 31 * 32) / 4;
++
++	return fmt->bytesperline / 4;
++}
++
++static void suniv_di_device_run(void *priv)
++{
++	struct suniv_di_ctx *ctx = priv;
++	struct suniv_di_dev *dev = ctx->dev;
++	struct vb2_v4l2_buffer *src, *dst, *prev;
++	dma_addr_t cur, pre, out;
++	u32 stride;
++
++	src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
++	dst = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
++	prev = ctx->prev ? ctx->prev : src;
++
++	v4l2_m2m_buf_copy_metadata(src, dst, true);
++	dst->field = V4L2_FIELD_NONE;
++
++	suniv_di_write(dev, SUNIV_DI_SIZE,
++		       SUNIV_DI_SIZE_WH(ctx->src_fmt.width, ctx->src_fmt.height));
++	suniv_di_write(dev, SUNIV_DI_FORMAT,
++		       ctx->src_fmt.pixelformat == V4L2_PIX_FMT_NV12_32L32 ?
++		       SUNIV_DI_FORMAT_TILED : 0);
++
++	stride = suniv_di_in_stride(&ctx->src_fmt);
++	suniv_di_write(dev, SUNIV_DI_IN_LS0, stride);
++	suniv_di_write(dev, SUNIV_DI_IN_LS1, stride);
++	suniv_di_write(dev, SUNIV_DI_OUT_LS0, ctx->dst_fmt.bytesperline / 4);
++	suniv_di_write(dev, SUNIV_DI_OUT_LS1, ctx->dst_fmt.bytesperline / 4);
++	suniv_di_write(dev, SUNIV_DI_FLAG_LS, ALIGN(ctx->src_fmt.width, 4) / 4);
++
++	cur = vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0);
++	pre = vb2_dma_contig_plane_dma_addr(&prev->vb2_buf, 0);
++	out = vb2_dma_contig_plane_dma_addr(&dst->vb2_buf, 0);
++
++	suniv_di_write(dev, SUNIV_DI_CUR_ADDR0, cur);
++	suniv_di_write(dev, SUNIV_DI_CUR_ADDR1,
++		       cur + suniv_di_luma_size(&ctx->src_fmt));
++	suniv_di_write(dev, SUNIV_DI_PRE_ADDR0, pre);
++	suniv_di_write(dev, SUNIV_DI_PRE_ADDR1,
++		       pre + suniv_di_luma_size(&ctx->src_fmt));
++	suniv_di_write(dev, SUNIV_DI_OUT_ADDR0, out);
++	suniv_di_write(dev, SUNIV_DI_OUT_ADDR1,
++		       out + suniv_di_luma_size(&ctx->dst_fmt));
++	suniv_di_write(dev, SUNIV_DI_FLAG_ADDR, ctx->flag_buf_dma);
++
++	suniv_di_write(dev, SUNIV_DI_STATUS, SUNIV_DI_STATUS_FINISH);
++	suniv_di_write(dev, SUNIV_DI_INT_CTRL, SUNIV_DI_INT_CTRL_FINISH_EN);
++	suniv_di_write(dev, SUNIV_DI_CTRL, SUNIV_DI_CTRL_START);
++}
++
++static int suniv_di_job_ready(void *priv)
++{
++	struct suniv_di_ctx *ctx = priv;
++
++	return v4l2_m2m_num_src_bufs_ready(ctx->fh.m2m_ctx) >= 1 &&
++	       v4l2_m2m_num_dst_bufs_ready(ctx->fh.m2m_ctx) >= 1;
++}
++
++static void suniv_di_job_abort(void *priv)
++{
++	struct suniv_di_ctx *ctx = priv;
++
++	/* the transaction is cancelled in the next interrupt */
++	ctx->aborting = true;
++}
++
++static irqreturn_t suniv_di_irq(int irq, void *data)
++{
++	struct suniv_di_dev *dev = data;
++	struct vb2_v4l2_buffer *src, *dst;
++	struct suniv_di_ctx *ctx;
++	u32 status;
++
++	status = suniv_di_read(dev, SUNIV_DI_STATUS);
++	if (!(status & SUNIV_DI_STATUS_FINISH))
++		return IRQ_NONE;
++
++	suniv_di_write(dev, SUNIV_DI_STATUS, SUNIV_DI_STATUS_FINISH);
++	suniv_di_write(dev, SUNIV_DI_INT_CTRL, 0);
++
++	ctx = v4l2_m2m_get_curr_priv(dev->m2m_dev);
++	if (!ctx) {
++		v4l2_err(&dev->v4l2_dev,
++			 "Instance released before the end of transaction\n");
++		return IRQ_HANDLED;
++	}
++
++	dst = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
++	v4l2_m2m_buf_done(dst, ctx->aborting ? VB2_BUF_STATE_ERROR :
++						VB2_BUF_STATE_DONE);
++
++	/* this frame is the next one's previous frame */
++	src = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);
++	if (ctx->prev)
++		v4l2_m2m_buf_done(ctx->prev, VB2_BUF_STATE_DONE);
++	ctx->prev = src;
++
++	v4l2_m2m_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx);
++
++	return IRQ_HANDLED;
++}
++
++static int suniv_di_querycap(struct file *file, void *priv,
++			     struct v4l2_capability *cap)
++{
++	strscpy(cap->driver, SUNIV_DI_NAME, sizeof(cap->driver));
++	strscpy(cap->card, SUNIV_DI_NAME, sizeof(cap->card));
++	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
++		 SUNIV_DI_NAME);
++
++	return 0;
++}
++
++static int suniv_di_enum_fmt_vid_out(struct file *file, void *priv,
++				     struct v4l2_fmtdesc *f)
++{
++	if (f->index >= ARRAY_SIZE(suniv_di_src_formats))
++		return -EINVAL;
++
++	f->pixelformat = suniv_di_src_formats[f->index];
++
++	return 0;
++}
++
++static int suniv_di_enum_fmt_vid_cap(struct file *file, void *priv,
++				     struct v4l2_fmtdesc *f)
++{
++	if (f->index >= ARRAY_SIZE(suniv_di_dst_formats))
++		return -EINVAL;
++
++	f->pixelformat = suniv_di_dst_formats[f->index];
++
++	return 0;
++}
++
++static int suniv_di_enum_framesizes(struct file *file, void *priv,
++				    struct v4l2_frmsizeenum *fsize)
++{
++	if (fsize->index != 0)
++		return -EINVAL;
++
++	if (fsize->pixel_format != V4L2_PIX_FMT_NV12 &&
++	    fsize->pixel_format != V4L2_PIX_FMT_NV12_32L32)
++		return -EINVAL;
++
++	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
++	fsize->stepwise.min_width = SUNIV_DI_MIN_WIDTH;
++	fsize->stepwise.min_height = SUNIV_DI_MIN_HEIGHT;
++	fsize->stepwise.max_width = SUNIV_DI_MAX_WIDTH;
++	fsize->stepwise.max_height = SUNIV_DI_MAX_HEIGHT;
++	fsize->stepwise.step_width = 2;
++	fsize->stepwise.step_height = 2;
++
++	return 0;
++}
++
++static int suniv_di_g_fmt_vid_out(struct file *file, void *priv,
++				  struct v4l2_format *f)
++{
++	f->fmt.pix = suniv_di_file2ctx(file)->src_fmt;
++
++	return 0;
++}
++
++static int suniv_di_g_fmt_vid_cap(struct file *file, void *priv,
++				  struct v4l2_format *f)
++{
++	f->fmt.pix = suniv_di_file2ctx(file)->dst_fmt;
++
++	return 0;
++}
++
++static int suniv_di_try_fmt_vid_out(struct file *file, void *priv,
++				    struct v4l2_format *f)
++{
++	struct v4l2_pix_format *pix = &f->fmt.pix;
++
++	if (pix->pixelformat != V4L2_PIX_FMT_NV12_32L32)
++		pix->pixelformat = V4L2_PIX_FMT_NV12;
++	if (pix->field != V4L2_FIELD_INTERLACED_TB)
++		pix->field = V4L2_FIELD_INTERLACED;
++
++	suniv_di_prepare_format(pix);
++
++	return 0;
++}
++
++static int suniv_di_try_fmt_vid_cap(struct file *file, void *priv,
++				    struct v4l2_format *f)
++{
++	struct suniv_di_ctx *ctx = suniv_di_file2ctx(file);
++	struct v4l2_pix_format *pix = &f->fmt.pix;
++
++	/* the same size as the OUTPUT: there is no scaler */
++	pix->pixelformat = V4L2_PIX_FMT_NV12;
++	pix->field = V4L2_FIELD_NONE;
++	pix->width = ctx->src_fmt.width;
++	pix->height = ctx->src_fmt.height;
++
++	suniv_di_prepare_format(pix);
++
++	return 0;
++}
++
++static int suniv_di_s_fmt_vid_out(struct file *file, void *priv,
++				  struct v4l2_format *f)
++{
++	struct suniv_di_ctx *ctx = suniv_di_file2ctx(file);
++	struct vb2_queue *vq;
++	int ret;
++
++	ret = suniv_di_try_fmt_vid_out(file, priv, f);
++	if (ret)
++		return ret;
++
++	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
++	if (vb2_is_busy(vq))
++		return -EBUSY;
++
++	ctx->src_fmt = f->fmt.pix;
++
++	/* the capture follows: same size, progressive */
++	ctx->dst_fmt.width = ctx->src_fmt.width;
++	ctx->dst_fmt.height = ctx->src_fmt.height;
++	ctx->dst_fmt.colorspace = f->fmt.pix.colorspace;
++	ctx->dst_fmt.xfer_func = f->fmt.pix.xfer_func;
++	ctx->dst_fmt.ycbcr_enc = f->fmt.pix.ycbcr_enc;
++	ctx->dst_fmt.quantization = f->fmt.pix.quantization;
++	suniv_di_prepare_format(&ctx->dst_fmt);
++
++	return 0;
++}
++
++static int suniv_di_s_fmt_vid_cap(struct file *file, void *priv,
++				  struct v4l2_format *f)
++{
++	struct suniv_di_ctx *ctx = suniv_di_file2ctx(file);
++	struct vb2_queue *vq;
++	int ret;
++
++	ret = suniv_di_try_fmt_vid_cap(file, priv, f);
++	if (ret)
++		return ret;
++
++	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
++	if (vb2_is_busy(vq))
++		return -EBUSY;
++
++	ctx->dst_fmt = f->fmt.pix;
++
++	return 0;
++}
++
++static const struct v4l2_ioctl_ops suniv_di_ioctl_ops = {
++	.vidioc_querycap		= suniv_di_querycap,
++	.vidioc_enum_framesizes		= suniv_di_enum_framesizes,
++
++	.vidioc_enum_fmt_vid_cap	= suniv_di_enum_fmt_vid_cap,
++	.vidioc_g_fmt_vid_cap		= suniv_di_g_fmt_vid_cap,
++	.vidioc_try_fmt_vid_cap		= suniv_di_try_fmt_vid_cap,
++	.vidioc_s_fmt_vid_cap		= suniv_di_s_fmt_vid_cap,
++
++	.vidioc_enum_fmt_vid_out	= suniv_di_enum_fmt_vid_out,
++	.vidioc_g_fmt_vid_out		= suniv_di_g_fmt_vid_out,
++	.vidioc_try_fmt_vid_out		= suniv_di_try_fmt_vid_out,
++	.vidioc_s_fmt_vid_out		= suniv_di_s_fmt_vid_out,
++
++	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
++	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
++	.vidioc_qbuf			= v4l2_m2m_ioctl_qbuf,
++	.vidioc_dqbuf			= v4l2_m2m_ioctl_dqbuf,
++	.vidioc_prepare_buf		= v4l2_m2m_ioctl_prepare_buf,
++	.vidioc_create_bufs		= v4l2_m2m_ioctl_create_bufs,
++	.vidioc_expbuf			= v4l2_m2m_ioctl_expbuf,
++
++	.vidioc_streamon		= v4l2_m2m_ioctl_streamon,
++	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
++};
++
++static int suniv_di_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
++				unsigned int *nplanes, unsigned int sizes[],
++				struct device *alloc_devs[])
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vq);
++	struct v4l2_pix_format *fmt = V4L2_TYPE_IS_OUTPUT(vq->type) ?
++				      &ctx->src_fmt : &ctx->dst_fmt;
++
++	if (*nplanes)
++		return sizes[0] < fmt->sizeimage ? -EINVAL : 0;
++
++	sizes[0] = fmt->sizeimage;
++	*nplanes = 1;
++
++	return 0;
++}
++
++static int suniv_di_buf_prepare(struct vb2_buffer *vb)
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
++	struct v4l2_pix_format *fmt = V4L2_TYPE_IS_OUTPUT(vb->vb2_queue->type) ?
++				      &ctx->src_fmt : &ctx->dst_fmt;
++
++	if (vb2_plane_size(vb, 0) < fmt->sizeimage)
++		return -EINVAL;
++
++	vb2_set_plane_payload(vb, 0, fmt->sizeimage);
++
++	return 0;
++}
++
++static void suniv_di_buf_queue(struct vb2_buffer *vb)
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
++
++	v4l2_m2m_buf_queue(ctx->fh.m2m_ctx, to_vb2_v4l2_buffer(vb));
++}
++
++static void suniv_di_queue_cleanup(struct vb2_queue *vq, u32 state)
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vq);
++	struct vb2_v4l2_buffer *vbuf;
++
++	for (;;) {
++		if (V4L2_TYPE_IS_OUTPUT(vq->type))
++			vbuf = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);
++		else
++			vbuf = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
++		if (!vbuf)
++			break;
++		v4l2_m2m_buf_done(vbuf, state);
++	}
++
++	if (V4L2_TYPE_IS_OUTPUT(vq->type) && ctx->prev) {
++		v4l2_m2m_buf_done(ctx->prev, state);
++		ctx->prev = NULL;
++	}
++}
++
++static int suniv_di_start_streaming(struct vb2_queue *vq, unsigned int count)
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vq);
++	struct device *dev = ctx->dev->dev;
++	int ret;
++
++	if (!V4L2_TYPE_IS_OUTPUT(vq->type))
++		return 0;
++
++	ret = pm_runtime_resume_and_get(dev);
++	if (ret < 0)
++		goto err_cleanup;
++
++	ctx->prev = NULL;
++	ctx->aborting = false;
++
++	ctx->flag_buf_size = ALIGN(ctx->src_fmt.width, 4) * ctx->src_fmt.height;
++	ctx->flag_buf = dma_alloc_coherent(dev, ctx->flag_buf_size,
++					   &ctx->flag_buf_dma, GFP_KERNEL);
++	if (!ctx->flag_buf) {
++		ret = -ENOMEM;
++		goto err_pm;
++	}
++
++	return 0;
++
++err_pm:
++	pm_runtime_put(dev);
++err_cleanup:
++	suniv_di_queue_cleanup(vq, VB2_BUF_STATE_QUEUED);
++
++	return ret;
++}
++
++static void suniv_di_stop_streaming(struct vb2_queue *vq)
++{
++	struct suniv_di_ctx *ctx = vb2_get_drv_priv(vq);
++
++	if (V4L2_TYPE_IS_OUTPUT(vq->type)) {
++		struct device *dev = ctx->dev->dev;
++
++		dma_free_coherent(dev, ctx->flag_buf_size, ctx->flag_buf,
++				  ctx->flag_buf_dma);
++		pm_runtime_put(dev);
++	}
++
++	suniv_di_queue_cleanup(vq, VB2_BUF_STATE_ERROR);
++}
++
++static const struct vb2_ops suniv_di_qops = {
++	.queue_setup		= suniv_di_queue_setup,
++	.buf_prepare		= suniv_di_buf_prepare,
++	.buf_queue		= suniv_di_buf_queue,
++	.start_streaming	= suniv_di_start_streaming,
++	.stop_streaming		= suniv_di_stop_streaming,
++};
++
++static int suniv_di_queue_init(void *priv, struct vb2_queue *src_vq,
++			       struct vb2_queue *dst_vq)
++{
++	struct suniv_di_ctx *ctx = priv;
++	int ret;
++
++	src_vq->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
++	src_vq->io_modes = VB2_MMAP | VB2_DMABUF;
++	src_vq->drv_priv = ctx;
++	src_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
++	src_vq->min_queued_buffers = 1;
++	src_vq->ops = &suniv_di_qops;
++	src_vq->mem_ops = &vb2_dma_contig_memops;
++	src_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
++	src_vq->lock = &ctx->dev->dev_mutex;
++	src_vq->dev = ctx->dev->dev;
++
++	ret = vb2_queue_init(src_vq);
++	if (ret)
++		return ret;
++
++	dst_vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++	dst_vq->io_modes = VB2_MMAP | VB2_DMABUF;
++	dst_vq->drv_priv = ctx;
++	dst_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
++	dst_vq->min_queued_buffers = 1;
++	dst_vq->ops = &suniv_di_qops;
++	dst_vq->mem_ops = &vb2_dma_contig_memops;
++	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
++	dst_vq->lock = &ctx->dev->dev_mutex;
++	dst_vq->dev = ctx->dev->dev;
++
++	return vb2_queue_init(dst_vq);
++}
++
++static int suniv_di_open(struct file *file)
++{
++	struct suniv_di_dev *dev = video_drvdata(file);
++	struct suniv_di_ctx *ctx;
++	int ret;
++
++	if (mutex_lock_interruptible(&dev->dev_mutex))
++		return -ERESTARTSYS;
++
++	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
++	if (!ctx) {
++		mutex_unlock(&dev->dev_mutex);
++		return -ENOMEM;
++	}
++
++	/* PAL from the composite input, by default */
++	ctx->src_fmt.pixelformat = V4L2_PIX_FMT_NV12;
++	ctx->src_fmt.field = V4L2_FIELD_INTERLACED;
++	ctx->src_fmt.width = 720;
++	ctx->src_fmt.height = 576;
++	suniv_di_prepare_format(&ctx->src_fmt);
++
++	ctx->dst_fmt = ctx->src_fmt;
++	ctx->dst_fmt.field = V4L2_FIELD_NONE;
++
++	v4l2_fh_init(&ctx->fh, video_devdata(file));
++	ctx->dev = dev;
++
++	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(dev->m2m_dev, ctx,
++					    &suniv_di_queue_init);
++	if (IS_ERR(ctx->fh.m2m_ctx)) {
++		ret = PTR_ERR(ctx->fh.m2m_ctx);
++		kfree(ctx);
++		mutex_unlock(&dev->dev_mutex);
++		return ret;
++	}
++
++	v4l2_fh_add(&ctx->fh, file);
++
++	mutex_unlock(&dev->dev_mutex);
++
++	return 0;
++}
++
++static int suniv_di_release(struct file *file)
++{
++	struct suniv_di_dev *dev = video_drvdata(file);
++	struct suniv_di_ctx *ctx = suniv_di_file2ctx(file);
++
++	mutex_lock(&dev->dev_mutex);
++
++	v4l2_fh_del(&ctx->fh, file);
++	v4l2_fh_exit(&ctx->fh);
++	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
++
++	kfree(ctx);
++
++	mutex_unlock(&dev->dev_mutex);
++
++	return 0;
++}
++
++static const struct v4l2_file_operations suniv_di_fops = {
++	.owner		= THIS_MODULE,
++	.open		= suniv_di_open,
++	.release	= suniv_di_release,
++	.poll		= v4l2_m2m_fop_poll,
++	.unlocked_ioctl	= video_ioctl2,
++	.mmap		= v4l2_m2m_fop_mmap,
++};
++
++static const struct video_device suniv_di_video_device = {
++	.name		= SUNIV_DI_NAME,
++	.vfl_dir	= VFL_DIR_M2M,
++	.fops		= &suniv_di_fops,
++	.ioctl_ops	= &suniv_di_ioctl_ops,
++	.minor		= -1,
++	.release	= video_device_release_empty,
++	.device_caps	= V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING,
++};
++
++static const struct v4l2_m2m_ops suniv_di_m2m_ops = {
++	.device_run	= suniv_di_device_run,
++	.job_ready	= suniv_di_job_ready,
++	.job_abort	= suniv_di_job_abort,
++};
++
++static int suniv_di_probe(struct platform_device *pdev)
++{
++	struct suniv_di_dev *dev;
++	struct video_device *vfd;
++	int irq, ret;
++
++	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
++	if (!dev)
++		return -ENOMEM;
++
++	dev->vfd = suniv_di_video_device;
++	dev->dev = &pdev->dev;
++
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0)
++		return irq;
++
++	ret = devm_request_irq(dev->dev, irq, suniv_di_irq, 0,
++			       dev_name(dev->dev), dev);
++	if (ret)
++		return dev_err_probe(dev->dev, ret, "Failed to request IRQ\n");
++
++	dev->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(dev->base))
++		return PTR_ERR(dev->base);
++
++	dev->bus_clk = devm_clk_get(dev->dev, "bus");
++	if (IS_ERR(dev->bus_clk))
++		return dev_err_probe(dev->dev, PTR_ERR(dev->bus_clk),
++				     "Failed to get bus clock\n");
++
++	dev->mod_clk = devm_clk_get(dev->dev, "mod");
++	if (IS_ERR(dev->mod_clk))
++		return dev_err_probe(dev->dev, PTR_ERR(dev->mod_clk),
++				     "Failed to get mod clock\n");
++
++	dev->ram_clk = devm_clk_get(dev->dev, "ram");
++	if (IS_ERR(dev->ram_clk))
++		return dev_err_probe(dev->dev, PTR_ERR(dev->ram_clk),
++				     "Failed to get ram clock\n");
++
++	dev->rstc = devm_reset_control_get(dev->dev, NULL);
++	if (IS_ERR(dev->rstc))
++		return dev_err_probe(dev->dev, PTR_ERR(dev->rstc),
++				     "Failed to get reset control\n");
++
++	mutex_init(&dev->dev_mutex);
++
++	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
++	if (ret)
++		return ret;
++
++	vfd = &dev->vfd;
++	vfd->lock = &dev->dev_mutex;
++	vfd->v4l2_dev = &dev->v4l2_dev;
++	snprintf(vfd->name, sizeof(vfd->name), "%s", suniv_di_video_device.name);
++	video_set_drvdata(vfd, dev);
++
++	dev->m2m_dev = v4l2_m2m_init(&suniv_di_m2m_ops);
++	if (IS_ERR(dev->m2m_dev)) {
++		ret = PTR_ERR(dev->m2m_dev);
++		goto err_v4l2;
++	}
++
++	ret = video_register_device(vfd, VFL_TYPE_VIDEO, -1);
++	if (ret)
++		goto err_m2m;
++
++	v4l2_info(&dev->v4l2_dev, "Device registered as /dev/video%d\n",
++		  vfd->num);
++
++	platform_set_drvdata(pdev, dev);
++	pm_runtime_enable(dev->dev);
++
++	return 0;
++
++err_m2m:
++	v4l2_m2m_release(dev->m2m_dev);
++err_v4l2:
++	v4l2_device_unregister(&dev->v4l2_dev);
++
++	return ret;
++}
++
++static void suniv_di_remove(struct platform_device *pdev)
++{
++	struct suniv_di_dev *dev = platform_get_drvdata(pdev);
++
++	video_unregister_device(&dev->vfd);
++	v4l2_m2m_release(dev->m2m_dev);
++	v4l2_device_unregister(&dev->v4l2_dev);
++
++	pm_runtime_force_suspend(&pdev->dev);
++}
++
++/*
++ * The module clock is left at whatever rate it has: its parents include
++ * pll-video, which the LCD controller depends on.
++ */
++static int suniv_di_runtime_resume(struct device *device)
++{
++	struct suniv_di_dev *dev = dev_get_drvdata(device);
++	int ret;
++
++	ret = reset_control_deassert(dev->rstc);
++	if (ret)
++		return ret;
++
++	ret = clk_prepare_enable(dev->bus_clk);
++	if (ret)
++		goto err_rst;
++
++	ret = clk_prepare_enable(dev->mod_clk);
++	if (ret)
++		goto err_bus;
++
++	ret = clk_prepare_enable(dev->ram_clk);
++	if (ret)
++		goto err_mod;
++
++	suniv_di_write(dev, SUNIV_DI_CTRL, SUNIV_DI_CTRL_RESET);
++	readl_poll_timeout(dev->base + SUNIV_DI_CTRL, ret,
++			   !(ret & SUNIV_DI_CTRL_RESET), 1, 1000);
++
++	return 0;
++
++err_mod:
++	clk_disable_unprepare(dev->mod_clk);
++err_bus:
++	clk_disable_unprepare(dev->bus_clk);
++err_rst:
++	reset_control_assert(dev->rstc);
++
++	return ret;
++}
++
++static int suniv_di_runtime_suspend(struct device *device)
++{
++	struct suniv_di_dev *dev = dev_get_drvdata(device);
++
++	clk_disable_unprepare(dev->ram_clk);
++	clk_disable_unprepare(dev->mod_clk);
++	clk_disable_unprepare(dev->bus_clk);
++	reset_control_assert(dev->rstc);
++
++	return 0;
++}
++
++static const struct of_device_id suniv_di_dt_match[] = {
++	{ .compatible = "allwinner,suniv-f1c100s-deinterlace" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, suniv_di_dt_match);
++
++static const struct dev_pm_ops suniv_di_pm_ops = {
++	.runtime_resume		= suniv_di_runtime_resume,
++	.runtime_suspend	= suniv_di_runtime_suspend,
++};
++
++static struct platform_driver suniv_di_driver = {
++	.probe		= suniv_di_probe,
++	.remove		= suniv_di_remove,
++	.driver		= {
++		.name		= SUNIV_DI_NAME,
++		.of_match_table	= suniv_di_dt_match,
++		.pm		= &suniv_di_pm_ops,
++	},
++};
++module_platform_driver(suniv_di_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Allwinner suniv (F1C100s/F1C200s) de-interlacer");

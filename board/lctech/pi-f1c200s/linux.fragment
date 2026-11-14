@@ -649,3 +649,9 @@ CONFIG_SYSVIPC=y
 CONFIG_LRU_GEN=y
 CONFIG_LRU_GEN_ENABLED=y
 # CONFIG_LRU_GEN_STATS is not set
+# The F1C200s de-interlacer (patch 0048): interlaced NV12 from the composite
+# camera (TVD) or interlaced MPEG-2, to progressive. A module (~17 KB),
+# loaded only when used. sunxi_defconfig's sun8i-di is for the H3's
+# different block and binds to nothing here: off.
+CONFIG_VIDEO_SUNIV_DEINTERLACE=m
+# CONFIG_VIDEO_SUN8I_DEINTERLACE is not set
