@@ -1,0 +1,41 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: jpeg: the standard Huffman tables when a frame has none
+
+Motion JPEG frames often carry no DHT segment (AVI MJPEG, many webcams)
+and mean the standard tables of ITU-T T.81 Annex K.3. The decoder
+refused them (a NULL table). Use the reference tables v4l2-jpeg already
+exports for any table the frame does not define.
+---
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+@@ -190,6 +190,29 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * Motion JPEG often leaves out the Huffman tables (AVI MJPEG, many
++	 * webcams) and means the standard ones (ITU-T T.81 Annex K.3), which
++	 * a decoder is expected to know. Tables are indexed class << 1 | id:
++	 * DC luma, DC chroma, AC luma, AC chroma.
++	 */
++	for (index = 0; index < ARRAY_SIZE(huffman_tables); index++) {
++		static const struct {
++			const u8 *table;
++			u32 length;
++		} standard[] = {
++			{ v4l2_jpeg_ref_table_luma_dc_ht, V4L2_JPEG_REF_HT_DC_LEN },
++			{ v4l2_jpeg_ref_table_chroma_dc_ht, V4L2_JPEG_REF_HT_DC_LEN },
++			{ v4l2_jpeg_ref_table_luma_ac_ht, V4L2_JPEG_REF_HT_AC_LEN },
++			{ v4l2_jpeg_ref_table_chroma_ac_ht, V4L2_JPEG_REF_HT_AC_LEN },
++		};
++
++		if (huffman_tables[index].start)
++			continue;
++		huffman_tables[index].start = (u8 *)standard[index].table;
++		huffman_tables[index].length = standard[index].length;
++	}
++
+ 	width = header.frame.width;
+ 	height = header.frame.height;
+ 	if (width > 2048 || height > 2048) {
