@@ -1,0 +1,120 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] avcodec: V4L2 Request API mpeg1 hwaccel (cedrus)
+
+MPEG-1 decodes through the MPEG-2 stateless controls on Allwinner's
+video engine, given two flags the f1c200s-linux kernel adds (not
+upstream): V4L2_MPEG2_SEQ_FLAG_MPEG1 and the full-pel picture flags.
+Set them for AV_CODEC_ID_MPEG1VIDEO when the headers define them, and
+register mpeg1_v4l2request on the mpeg1video decoder with the MPEG-2
+hwaccel's callbacks.
+---
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -3293,6 +3293,8 @@
+ mpeg2_dxva2_hwaccel_select="mpeg2video_decoder"
+ mpeg2_nvdec_hwaccel_deps="nvdec"
+ mpeg2_nvdec_hwaccel_select="mpeg2video_decoder"
++mpeg1_v4l2request_hwaccel_deps="v4l2_request mpeg2_v4l2_request"
++mpeg1_v4l2request_hwaccel_select="mpeg1video_decoder"
+ mpeg2_v4l2request_hwaccel_deps="v4l2_request mpeg2_v4l2_request"
+ mpeg2_v4l2request_hwaccel_select="mpeg2video_decoder"
+ mpeg2_vaapi_hwaccel_deps="vaapi"
+diff --git a/libavcodec/hwaccels.h b/libavcodec/hwaccels.h
+--- a/libavcodec/hwaccels.h
++++ b/libavcodec/hwaccels.h
+@@ -62,6 +62,7 @@
+ extern const struct FFHWAccel ff_mpeg2_d3d12va_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_dxva2_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_nvdec_hwaccel;
++extern const struct FFHWAccel ff_mpeg1_v4l2request_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_v4l2request_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_vdpau_hwaccel;
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1067,6 +1067,7 @@
+ OBJS-$(CONFIG_MPEG2_D3D12VA_HWACCEL)      += dxva2_mpeg2.o d3d12va_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_NVDEC_HWACCEL)        += nvdec_mpeg12.o
+ OBJS-$(CONFIG_MPEG2_QSV_HWACCEL)          += qsvdec.o
++OBJS-$(CONFIG_MPEG1_V4L2REQUEST_HWACCEL)  += v4l2_request_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_V4L2REQUEST_HWACCEL)  += v4l2_request_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_VAAPI_HWACCEL)        += vaapi_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_VDPAU_HWACCEL)        += vdpau_mpeg12.o
+diff --git a/libavcodec/mpeg12dec.c b/libavcodec/mpeg12dec.c
+--- a/libavcodec/mpeg12dec.c
++++ b/libavcodec/mpeg12dec.c
+@@ -794,6 +794,9 @@
+ #if CONFIG_MPEG1_VDPAU_HWACCEL
+     AV_PIX_FMT_VDPAU,
+ #endif
++#if CONFIG_MPEG1_V4L2REQUEST_HWACCEL
++    AV_PIX_FMT_DRM_PRIME,
++#endif
+     AV_PIX_FMT_YUV420P,
+     AV_PIX_FMT_NONE
+ };
+@@ -2661,6 +2664,9 @@
+ #if CONFIG_MPEG1_VIDEOTOOLBOX_HWACCEL
+                                HWACCEL_VIDEOTOOLBOX(mpeg1),
+ #endif
++#if CONFIG_MPEG1_V4L2REQUEST_HWACCEL
++                               HWACCEL_V4L2REQUEST(mpeg1),
++#endif
+                                NULL
+                            },
+ };
+diff --git a/libavcodec/v4l2_request_mpeg2.c b/libavcodec/v4l2_request_mpeg2.c
+--- a/libavcodec/v4l2_request_mpeg2.c
++++ b/libavcodec/v4l2_request_mpeg2.c
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "config.h"
++#include "config_components.h"
+ 
+ #include "hwaccel_internal.h"
+ #include "hwconfig.h"
+@@ -95,6 +96,17 @@
+     if (s->progressive_frame)
+         controls->picture.flags |= V4L2_MPEG2_PIC_FLAG_PROGRESSIVE;
+ 
++#ifdef V4L2_MPEG2_SEQ_FLAG_MPEG1
++    /* MPEG-1 (a kernel flag that is not upstream: f1c200s-linux cedrus) */
++    if (avctx->codec_id == AV_CODEC_ID_MPEG1VIDEO) {
++        controls->sequence.flags |= V4L2_MPEG2_SEQ_FLAG_MPEG1;
++        if (s->full_pel[0])
++            controls->picture.flags |= V4L2_MPEG2_PIC_FLAG_FULL_PEL_FORWARD;
++        if (s->full_pel[1])
++            controls->picture.flags |= V4L2_MPEG2_PIC_FLAG_FULL_PEL_BACKWARD;
++    }
++#endif
++
+     switch (s->pict_type) {
+     case AV_PICTURE_TYPE_B:
+         if (s->next_pic.ptr)
+@@ -182,3 +194,23 @@
+     .frame_params       = v4l2_request_mpeg2_frame_params,
+     .caps_internal      = HWACCEL_CAP_ASYNC_SAFE,
+ };
++
++#if CONFIG_MPEG1_V4L2REQUEST_HWACCEL
++/* MPEG-1 through the same controls; the kernel tells them apart by a flag */
++const FFHWAccel ff_mpeg1_v4l2request_hwaccel = {
++    .p.name             = "mpeg1_v4l2request",
++    .p.type             = AVMEDIA_TYPE_VIDEO,
++    .p.id               = AV_CODEC_ID_MPEG1VIDEO,
++    .p.pix_fmt          = AV_PIX_FMT_DRM_PRIME,
++    .start_frame        = v4l2_request_mpeg2_start_frame,
++    .decode_slice       = v4l2_request_mpeg2_decode_slice,
++    .end_frame          = v4l2_request_mpeg2_end_frame,
++    .flush              = ff_v4l2_request_flush,
++    .frame_priv_data_size = sizeof(V4L2RequestControlsMPEG2),
++    .init               = v4l2_request_mpeg2_init,
++    .uninit             = ff_v4l2_request_uninit,
++    .priv_data_size     = sizeof(V4L2RequestContext),
++    .frame_params       = v4l2_request_mpeg2_frame_params,
++    .caps_internal      = HWACCEL_CAP_ASYNC_SAFE,
++};
++#endif

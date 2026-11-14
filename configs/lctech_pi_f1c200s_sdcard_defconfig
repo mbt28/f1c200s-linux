@@ -116,10 +116,14 @@ BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_CARPLAY_PATH)/board/lc
 BR2_PACKAGE_FFMPEG=y
 # BR2_PACKAGE_FFMPEG_FFMPEG is not set
 BR2_PACKAGE_FFMPEG_ENCODERS=""
-BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc aac aac_fixed"
+# 2026-11-14: plus MPEG-1, MPEG-2 and MPEG-4 Part 2, which the video engine
+# decodes too (hwaccels below; the kernel's MPEG-1 and MPEG-4 support is
+# patches/linux-lctech/0046 and 0047). They share mpegvideo's code; their
+# pages are read only when such a stream plays.
+BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc aac aac_fixed mpeg1video mpeg2video mpeg4"
 BR2_PACKAGE_FFMPEG_MUXERS=""
 BR2_PACKAGE_FFMPEG_DEMUXERS=""
-BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc mpegvideo mpeg4video"
 BR2_PACKAGE_FFMPEG_BSFS=""
 BR2_PACKAGE_FFMPEG_PROTOCOLS=""
 BR2_PACKAGE_FFMPEG_FILTERS=""
@@ -214,8 +218,10 @@ BR2_PACKAGE_PSPLASH_FULL_SCREEN=y
 # BR2_PACKAGE_PSPLASH_STARTUP_MSG is not set
 # ffmpeg 8.0.3 (patches/buildroot/0001) with Kwiboo's v4l2-request series
 # (patches/ffmpeg/). Each of its hwaccels selects its decoder, so all of them
-# would add mpeg2, vp8, vp9 and av1 to libavcodec: only h264 and hevc.
-BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc --disable-hwaccels --enable-hwaccel=h264_v4l2request,hevc_v4l2request"
+# would add vp8, vp9 and av1 to libavcodec: only the ones the F1C200s's
+# engine decodes -- h264, hevc (none here, kept for other boards), mpeg1,
+# mpeg2 and mpeg4 (patches/ffmpeg/0014-0015 for mpeg1 and mpeg4).
+BR2_PACKAGE_FFMPEG_EXTRACONF="--enable-v4l2-request --enable-libudev --disable-avfilter --disable-avdevice --disable-swresample --disable-network --disable-doc --disable-hwaccels --enable-hwaccel=h264_v4l2request,hevc_v4l2request,mpeg1_v4l2request,mpeg2_v4l2request,mpeg4_v4l2request"
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_CARPLAY_PATH)/patches"
 
 # Pin the GNU mirror instead of ftpmirror.gnu.org's auto-selector, which can
