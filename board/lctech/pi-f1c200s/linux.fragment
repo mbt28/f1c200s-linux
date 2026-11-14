@@ -40,25 +40,18 @@ CONFIG_DRM_FBDEV_EMULATION=y
 # (from DRM fbdev emulation) while stopping the text console/cursor from
 # fighting the video. (cf. removing console=tty0 from the bootargs.)
 CONFIG_FB=y
-# Virtual terminals, but no text console on them: the kernel console is serial
-# (console=ttyS0) and the LCD belongs to the splash/video (fb0 comes from DRM
-# fbdev emulation, which needs no VT). VT is here only for the games (SD card
-# image): SDL 1.2's fbcon backend reads the keyboard through a VT (/dev/tty0,
-# raw mode via the kernel's keyboard handler -- that is how the BT keyboard
-# reaches a game), so without it the games have no keyboard. With no
-# FRAMEBUFFER_CONSOLE the VTs sit on the dummy console and never draw on the
-# LCD; VT_CONSOLE (printk to a VT) and CONSOLE_TRANSLATIONS are off as unused.
-# VT's prompt is `bool "Virtual terminal" if EXPERT`. EXPERT only unhides
-# prompts (config-diff audited: no built code changes), but it selects
-# DEBUG_KERNEL as a menu gate, so keep DEBUG_MISC off to make that gate inert.
+# No virtual terminals: the kernel console is serial (console=ttyS0), the LCD
+# belongs to the head unit (fb0 comes from DRM fbdev emulation, which needs no
+# VT), and LEHU reads keyboards through evdev. VT was here only for the games'
+# SDL 1.2 keyboard input, and they are gone. VT's prompt is
+# `bool "Virtual terminal" if EXPERT` with default y, so EXPERT stays on to
+# turn it off (EXPERT only unhides prompts, but it selects DEBUG_KERNEL as a
+# menu gate, so DEBUG_MISC stays off to keep that gate inert).
 # FRAMEBUFFER_CONSOLE must be explicitly off: the base defconfig sets it (and
 # it would paint a text cursor on the LCD).
 CONFIG_EXPERT=y
 # CONFIG_DEBUG_MISC is not set
-CONFIG_VT=y
-# CONFIG_VT_CONSOLE is not set
-# CONFIG_VT_HW_CONSOLE_BINDING is not set
-# CONFIG_CONSOLE_TRANSLATIONS is not set
+# CONFIG_VT is not set
 # CONFIG_FRAMEBUFFER_CONSOLE is not set
 # Backlight on PE6, muxed to PWM1 (pwm-backlight, patch 0031): dimmable
 # 0..8 via /sys/class/backlight/backlight/brightness. Without this the

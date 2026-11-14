@@ -1,4 +1,4 @@
-# f1c is the board's user and needs root without a prompt: LIVI asks for it with
+# f1c is the board's user and needs root without a prompt: LEHU asks for it with
 # `sudo -n`, and with root's password locked this is the way to root. post-build.sh
 # sets this file to 0440, which sudo requires.
 f1c ALL=(ALL:ALL) NOPASSWD: ALL

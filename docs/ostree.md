@@ -51,7 +51,7 @@ boots, but no board takes it as an update.
 
 ## Changing files on the board
 
-`cp` over `/usr/bin/lehu` no longer works, and neither does `vi /usr/bin/game`.
+`cp` over `/usr/bin/lehu` no longer works, and neither does `vi` on a script in `/usr/bin`.
 
     sudo ostree admin unlock            # a writable /usr until the next reboot
     sudo ostree admin unlock --hotfix   # kept across reboots, until the next update

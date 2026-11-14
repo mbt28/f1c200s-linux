@@ -76,7 +76,7 @@ configs/…_defconfig        the board defconfig
 board/lctech/pi-f1c200s/   linux/uboot fragments · genimage · post-build · flash-nand.sh
 patches/linux-lctech/      LCD+GT911 touch · VE/codec clocks · USB-OTG host · cedrus suniv fixes · audio codec
 patches/ffmpeg/            v4l2-request hwaccel
-package/                   livi · esp-hosted-ng · libimobiledevice stack
+package/                   esp-hosted-ng · OSTree · test tools
 rootfs-overlay/            init scripts (cedrus · usb-gadget · wifi/ap · audio · splash) · f1c's .profile (LEHU)
 docs/                      display · audio · hardware-fixes · cedrus-status · …
 ```

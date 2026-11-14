@@ -28,7 +28,7 @@ SSH=(ssh "${OPTS[@]}" "$BOARD")
 SCP=(scp "${OPTS[@]}" -q)
 # etc/*-enabled, lehu-off and swap-disable are the on/off switches of `net`, `wifi`
 # and the like: without network-enabled the new system would start no SSH server.
-KEEP="home/f1c/.lehu home/f1c/.config home/f1c/.local home/f1c/.ssh home/f1c/memsnap.sh root/lehu root/.prboom root/.ssh var/lib/bluetooth var/lib/bluealsa var/lib/lehu var/lib/lockdown var/lib/seedrng var/lbreakout2.hscr var/ltris.hscr etc/dropbear etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_rsa_key.pub etc/ssh/ssh_host_ecdsa_key etc/ssh/ssh_host_ecdsa_key.pub etc/hostapd.conf etc/wpa_supplicant.conf etc/network-enabled etc/wifi-enabled etc/lehu-off etc/swap-disable"
+KEEP="home/f1c/.lehu home/f1c/.config home/f1c/.local home/f1c/.ssh home/f1c/memsnap.sh root/lehu root/.ssh var/lib/bluetooth var/lib/bluealsa var/lib/lehu var/lib/lockdown var/lib/seedrng var/lbreakout2.hscr var/ltris.hscr etc/dropbear etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_rsa_key.pub etc/ssh/ssh_host_ecdsa_key etc/ssh/ssh_host_ecdsa_key.pub etc/hostapd.conf etc/wpa_supplicant.conf etc/network-enabled etc/wifi-enabled etc/lehu-off etc/swap-disable"
 P2_SECTORS=1048576
 
 [ -f "$IMAGE" ] && [ -f "$IMAGES/f1c-boot.scr" ] && [ -f "$IMAGES/f1c-settings.dtb" ] \

@@ -1,10 +1,5 @@
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/libudev-zero/Config.in"
-# LIVI (CarPlay / Android Auto head unit), Slint UI on DRM; selects what it needs.
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/livi/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/esp-hosted-ng/Config.in"
-# Free Doom IWADs for prboom (SD card image only, see external.mk).
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/freedoom/Config.in"
-source "$BR2_EXTERNAL_CARPLAY_PATH/package/game-launcher/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/cp-mux-probe/Config.in"
 source "$BR2_EXTERNAL_CARPLAY_PATH/package/musb-collision-test/Config.in"
 # Whole-system updates: OSTree, and the root filesystem as an OSTree system.

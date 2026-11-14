@@ -23,10 +23,9 @@ BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 # their sole access is the serial console. Dropbear also runs with -s (see
 # rootfs-overlay/etc/default/dropbear) so it refuses password auth outright.
 BR2_TARGET_GENERIC_ROOT_PASSWD="*"
-# /dev is devtmpfs + eudev. LIVI expects udev: nusb (its USB hotplug for phones,
-# dongles and wired CarPlay) only hears udevd's netlink group, and libgudev /
-# GStreamer's v4l2codecs need a udev provider. eudev also supplies libudev for
-# ffmpeg's v4l2-request (it replaced libudev-zero). Cost: udevd is resident
+# /dev is devtmpfs + eudev: LEHU's udev rules give the phones' USB devices to
+# plugdev, and eudev supplies libudev for ffmpeg's v4l2-request (it replaced
+# libudev-zero). Cost: udevd is resident
 # (~1 MiB RSS). The kernel uevent helper S46usb0-up uses keeps working beside
 # it: S10udevd clears /proc/sys/kernel/hotplug at boot and S46 sets it later.
 BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
@@ -34,7 +33,7 @@ BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
 BR2_TARGET_TZ_INFO=y
 BR2_TARGET_TZ_ZONELIST="europe"
 BR2_TARGET_LOCALTIME="Europe/Budapest"
-# The f1c user: auto-login on the serial console, passwordless sudo (LIVI runs
+# The f1c user: auto-login on the serial console, passwordless sudo (LEHU runs
 # as a user and reaches root through `sudo -n`). See board/.../users.table and
 # rootfs-overlay/etc/sudoers.d/f1c.
 BR2_ROOTFS_DEVICE_TABLE="system/device_table.txt $(BR2_EXTERNAL_CARPLAY_PATH)/board/lctech/pi-f1c200s/permissions.table"
@@ -184,22 +183,6 @@ BR2_PACKAGE_LIBV4L_UTILS=y
 # AP (or the USB-hub DM9601 ethernet), no reflashing. Key auth via overlay
 # authorized_keys; password auth refused (-s) and root's password is locked.
 BR2_PACKAGE_DROPBEAR=y
-# LIVI (package/livi) in /opt/livi, beside LEHU: /opt/livi/start.sh swaps
-# them. It selects what it needs -- sudo, GStreamer (gst-host: audio, and handing
-# the phone's video to the UI), ffmpeg, OpenSSL, and fontconfig with DejaVu Sans
-# and Mono (the UI embeds only a Roboto subset; glyphs it lacks and the
-# monospace rows come from the system) -- and depends on udev (above).
-BR2_PACKAGE_LIVI=y
-# Selecting DejaVu turns every family on; LIVI uses Sans and Mono only (~2.5 MiB
-# of flash saved).
-# BR2_PACKAGE_DEJAVU_SERIF is not set
-# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
-# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
-# gst1-plugins-good is there only for its v4l2 plugin (gst-host lists cameras
-# with GStreamer's device monitor); these default plugins are not used.
-# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_AVI is not set
-# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_ISOMP4 is not set
-# BR2_PACKAGE_GST1_PLUGINS_GOOD_PLUGIN_WAVPARSE is not set
 # OpenSSH is enabled ONLY for /usr/libexec/sftp-server, which is the exact path
 # dropbear already exec's for SFTP -- today `scp` fails with
 # "sh: line 0: /usr/libexec/sftp-server: not found" and only `scp -O` (legacy
@@ -283,26 +266,6 @@ BR2_PACKAGE_BLUEZ_ALSA=y
 # tiny on-target test path. The head unit plays through alsa-lib directly.
 BR2_PACKAGE_TINYALSA=y
 BR2_PACKAGE_TINYALSA_TOOLS=y
-# --- Games, SD card image only -----------------------------------------------
-# Software-rendered classics that suit the ARM926 (no FPU, no GPU: integer
-# engines). SDL 1.2 draws straight to /dev/fb0 (fbcon backend) and reads the
-# keyboard through a virtual terminal (CONFIG_VT, linux.fragment); SDL2 has no
-# backend here (its KMSDRM driver needs EGL/OpenGL). The head unit owns the
-# display: the `game` launcher stops LEHU for a game and starts it again. All of
-# this, the SDL 1.2 libraries included, is stripped from rootfs.squashfs -- the
-# NAND image, which has to fit the 128 MiB SPI NAND -- by a squashfs pre-gen
-# hook in external.mk, so only the SD card's ext4 rootfs carries it.
-BR2_PACKAGE_SDL=y
-BR2_PACKAGE_SDL_FBCON=y
-# Doom engine + Freedoom (BSD-licensed IWADs, external package)
-BR2_PACKAGE_PRBOOM=y
-BR2_PACKAGE_FREEDOOM=y
-BR2_PACKAGE_OPENTYRIAN=y
-BR2_PACKAGE_OPENTYRIAN_DATA=y
-BR2_PACKAGE_LBREAKOUT2=y
-BR2_PACKAGE_LTRIS=y
-# `game NAME` launcher + vtreset (external package)
-BR2_PACKAGE_GAME_LAUNCHER=y
 # SoftAP userspace (wireless Android Auto needs the head unit to be the AP,
 # and the wireless dev loop rides the same AP): hostapd drives the NG driver's
 # cfg80211 AP mode (compiled in with CONFIG_AP_SUPPORT); dnsmasq hands out the

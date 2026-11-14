@@ -1,9 +1,0 @@
-config BR2_PACKAGE_FREEDOOM
-	bool "freedoom"
-	depends on BR2_PACKAGE_PRBOOM
-	help
-	  Freedoom: free (BSD-licensed) Doom IWADs. Installs Phase 1
-	  (freedoom1.wad, plays like Doom) and Phase 2 (freedoom2.wad,
-	  plays like Doom II) to /usr/share/games/doom.
-
-	  https://freedoom.github.io
