@@ -1,0 +1,569 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: backend: palette layers and the colour key (suniv)
+
+Two backend features sun4i-drm never used (F1C200s User Manual 5.3.5):
+
+- Palette layers: a layer in palette mode (ATTCTL0 bits 23:22 = 01)
+  takes 1, 2, 4 or 8 bits per pixel as indexes into a 256-entry ARGB
+  palette RAM. Offer DRM_FORMAT_C1/C2/C4/C8 where the RAM is known
+  (suniv: 0x1000), with the pixel order DRM uses (ATTCTL1 PS = 01 for
+  1/2/4 bpp), and a PALETTE plane property: a blob of up to 256 ARGB8888
+  words. One RAM serves all layers, so two palette layers must carry the
+  same palette.
+- The colour key (CK_MAX 0x880, CK_MIN 0x884, CK_CFG 0x888, ATTCTL0 bits
+  19:18): a COLOR_KEY plane property, bit 63 on, bit 62 match outside the
+  range, bits 23:0 and 55:32 the lowest and highest RGB888 colour. One
+  key for all layers, so one keyed layer at a time.
+
+Also drop ARGB4444 and RGBA4444 on suniv: its manual has formats 12 and
+13 reserved.
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -14,6 +14,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/platform_device.h>
+ #include <linux/reset.h>
++#include <linux/string.h>
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
+@@ -24,6 +25,7 @@
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_probe_helper.h>
++#include <drm/drm_property.h>
+ 
+ #include "sun4i_backend.h"
+ #include "sun4i_drv.h"
+@@ -42,6 +44,12 @@
+ 	u32 hwc_pattern_off;
+ 	u32 hwc_pattern_size;
+ 	u32 hwc_palette_off;
++
++	/* where the layers' palette RAM is, if known */
++	u32 palette_off;
++
++	/* the 4444 formats (codes 12 and 13) are reserved */
++	bool no_4444;
+ };
+ 
+ static const u32 sunxi_rgb2yuv_coef[12] = {
+@@ -137,6 +145,22 @@
+ 		*mode = SUN4I_BACKEND_LAY_FBFMT_RGB565;
+ 		break;
+ 
++	case DRM_FORMAT_C1:
++		*mode = SUN4I_BACKEND_LAY_FBFMT_1BPP;
++		break;
++
++	case DRM_FORMAT_C2:
++		*mode = SUN4I_BACKEND_LAY_FBFMT_2BPP;
++		break;
++
++	case DRM_FORMAT_C4:
++		*mode = SUN4I_BACKEND_LAY_FBFMT_4BPP;
++		break;
++
++	case DRM_FORMAT_C8:
++		*mode = SUN4I_BACKEND_LAY_FBFMT_8BPP;
++		break;
++
+ 	default:
+ 		return -EINVAL;
+ 	}
+@@ -159,8 +183,22 @@
+ 	DRM_FORMAT_YVYU,
+ };
+ 
++bool sun4i_backend_format_is_palette(uint32_t fmt)
++{
++	return fmt == DRM_FORMAT_C1 || fmt == DRM_FORMAT_C2 ||
++	       fmt == DRM_FORMAT_C4 || fmt == DRM_FORMAT_C8;
++}
++
++/*
++ * The palette formats are not in the list above: the planes offer them
++ * only on a backend whose palette RAM is known (sun4i_layer.c), and they
++ * never go through the frontend.
++ */
+ bool sun4i_backend_format_is_supported(uint32_t fmt, uint64_t modifier)
+ {
++	if (sun4i_backend_format_is_palette(fmt))
++		return modifier == DRM_FORMAT_MOD_LINEAR;
++
+ 	unsigned int i;
+ 
+ 	if (modifier != DRM_FORMAT_MOD_LINEAR)
+@@ -263,9 +301,10 @@
+ 	u32 val;
+ 	int ret;
+ 
+-	/* Clear the YUV mode */
++	/* Clear the YUV and palette modes */
+ 	regmap_update_bits(backend->engine.regs, SUN4I_BACKEND_ATTCTL_REG0(layer),
+-			   SUN4I_BACKEND_ATTCTL_REG0_LAY_YUVEN, 0);
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_YUVEN |
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_MASK, 0);
+ 
+ 	val = SUN4I_BACKEND_ATTCTL_REG0_LAY_GLBALPHA(state->alpha >> 8);
+ 	if (state->alpha != DRM_BLEND_ALPHA_OPAQUE)
+@@ -285,9 +324,29 @@
+ 		return ret;
+ 	}
+ 
++	/*
++	 * Palette layers: the frame buffer holds indexes into the palette
++	 * RAM, packed as DRM packs C1/C2/C4 (first pixel in the high bits of
++	 * each byte).
++	 */
++	if (sun4i_backend_format_is_palette(fb->format->format)) {
++		if (fb->format->format != DRM_FORMAT_C8)
++			val |= SUN4I_BACKEND_LAY_FBPS_MSB_FIRST_IN_BYTE;
++		regmap_update_bits(backend->engine.regs,
++				   SUN4I_BACKEND_ATTCTL_REG0(layer),
++				   SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_MASK,
++				   SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_PALETTE);
++		sun4i_backend_update_layer_palette(backend, plane);
++	} else {
++		regmap_update_bits(backend->engine.regs,
++				   SUN4I_BACKEND_ATTCTL_REG0(layer),
++				   SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_MASK, 0);
++	}
++
+ 	regmap_update_bits(backend->engine.regs,
+ 			   SUN4I_BACKEND_ATTCTL_REG1(layer),
+-			   SUN4I_BACKEND_ATTCTL_REG1_LAY_FBFMT, val);
++			   SUN4I_BACKEND_ATTCTL_REG1_LAY_FBFMT |
++			   SUN4I_BACKEND_ATTCTL_REG1_LAY_FBPS, val);
+ 
+ 	return 0;
+ }
+@@ -306,7 +365,8 @@
+ 
+ 	regmap_update_bits(backend->engine.regs,
+ 			   SUN4I_BACKEND_ATTCTL_REG0(layer),
+-			   SUN4I_BACKEND_ATTCTL_REG0_LAY_VDOEN,
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_VDOEN |
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_MASK,
+ 			   SUN4I_BACKEND_ATTCTL_REG0_LAY_VDOEN);
+ 
+ 	regmap_update_bits(backend->engine.regs,
+@@ -388,6 +448,64 @@
+ 	return 0;
+ }
+ 
++/*
++ * The colour key: the range and its rule are the backend's, one for all
++ * the layers; a layer takes part when its COLOR_KEY property is on. What a
++ * match does is the hardware's: "the layer color key match another
++ * channel pixel data in Alpha Blender1" (F1C200s User Manual 5.3.5.23),
++ * between the two pipes.
++ */
++void sun4i_backend_update_layer_color_key(struct sun4i_backend *backend,
++					  int layer, struct drm_plane *plane)
++{
++	struct sun4i_layer_state *s_state = state_to_sun4i_layer_state(plane->state);
++	u64 key = s_state->color_key;
++
++	if (!(key & SUN4I_COLOR_KEY_ENABLE)) {
++		regmap_update_bits(backend->engine.regs,
++				   SUN4I_BACKEND_ATTCTL_REG0(layer),
++				   SUN4I_BACKEND_ATTCTL_REG0_LAY_CKMOD_MASK, 0);
++		return;
++	}
++
++	regmap_write(backend->engine.regs, SUN4I_BACKEND_CKMIN_REG,
++		     SUN4I_COLOR_KEY_MIN(key));
++	regmap_write(backend->engine.regs, SUN4I_BACKEND_CKMAX_REG,
++		     SUN4I_COLOR_KEY_MAX(key));
++	regmap_write(backend->engine.regs, SUN4I_BACKEND_CKCFG_REG,
++		     key & SUN4I_COLOR_KEY_OUTSIDE ?
++		     SUN4I_BACKEND_CKCFG_OUTSIDE : SUN4I_BACKEND_CKCFG_INSIDE);
++	regmap_update_bits(backend->engine.regs,
++			   SUN4I_BACKEND_ATTCTL_REG0(layer),
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_CKMOD_MASK,
++			   SUN4I_BACKEND_ATTCTL_REG0_LAY_CKMOD_ON);
++}
++
++/*
++ * Load the plane's palette into the palette RAM, unless it holds it
++ * already. The RAM is not double-buffered: a new palette shows at once.
++ */
++void sun4i_backend_update_layer_palette(struct sun4i_backend *backend,
++					struct drm_plane *plane)
++{
++	struct sun4i_layer_state *s_state = state_to_sun4i_layer_state(plane->state);
++	struct drm_property_blob *blob = s_state->palette;
++	const u32 *entries;
++	unsigned int i, n;
++
++	if (!blob || !backend->palette_off || blob == backend->palette)
++		return;
++
++	entries = blob->data;
++	n = blob->length / sizeof(u32);
++	for (i = 0; i < SUN4I_BACKEND_PALETTE_SIZE; i++)
++		regmap_write(backend->engine.regs, backend->palette_off + 4 * i,
++			     i < n ? entries[i] : 0);
++
++	drm_property_blob_put(backend->palette);
++	backend->palette = drm_property_blob_get(blob);
++}
++
+ void sun4i_backend_cleanup_layer(struct sun4i_backend *backend,
+ 				 int layer)
+ {
+@@ -485,6 +603,8 @@
+ 	unsigned int num_frontend_planes = 0;
+ 	unsigned int num_alpha_planes_max = 1;
+ 	unsigned int num_yuv_planes = 0;
++	unsigned int num_color_keys = 0;
++	struct drm_property_blob *palette = NULL;
+ 	unsigned int current_pipe = 0;
+ 	unsigned int i;
+ 
+@@ -511,6 +631,25 @@
+ 						      &layer_state->uses_frontend))
+ 			return -EINVAL;
+ 
++		/* one colour key, and one palette, for all the layers */
++		if (layer_state->color_key & SUN4I_COLOR_KEY_ENABLE)
++			num_color_keys++;
++
++		if (sun4i_backend_format_is_palette(fb->format->format)) {
++			struct drm_property_blob *p = layer_state->palette;
++
++			if (!p) {
++				DRM_DEBUG_DRIVER("Palette format without a PALETTE\n");
++				return -EINVAL;
++			}
++			if (palette && (palette->length != p->length ||
++					memcmp(palette->data, p->data, p->length))) {
++				DRM_DEBUG_DRIVER("Two different palettes, rejecting\n");
++				return -EINVAL;
++			}
++			palette = p;
++		}
++
+ 		if (layer_state->uses_frontend) {
+ 			DRM_DEBUG_DRIVER("Using the frontend for plane %d\n",
+ 					 plane->index);
+@@ -613,6 +752,11 @@
+ 		return -EINVAL;
+ 	}
+ 
++	if (num_color_keys > 1) {
++		DRM_DEBUG_DRIVER("More than one colour-keyed plane, rejecting\n");
++		return -EINVAL;
++	}
++
+ 	DRM_DEBUG_DRIVER("State valid with %u planes, %u alpha, %u video, %u YUV\n",
+ 			 num_planes, num_alpha_planes, num_frontend_planes,
+ 			 num_yuv_planes);
+@@ -941,6 +1085,8 @@
+ 	backend->hwc_pattern_off = quirks->hwc_pattern_off;
+ 	backend->hwc_pattern_size = quirks->hwc_pattern_size;
+ 	backend->hwc_palette_off = quirks->hwc_palette_off;
++	backend->palette_off = quirks->palette_off;
++	backend->no_4444 = quirks->no_4444;
+ 
+ 	return 0;
+ 
+@@ -961,6 +1107,9 @@
+ {
+ 	struct sun4i_backend *backend = dev_get_drvdata(dev);
+ 
++	drm_property_blob_put(backend->palette);
++	backend->palette = NULL;
++
+ 	list_del(&backend->engine.list);
+ 
+ 	if (of_device_is_compatible(dev->of_node,
+@@ -1016,6 +1165,8 @@
+ 	.hwc_pattern_off = SUNIV_BACKEND_HWCPATTERN_OFF,
+ 	.hwc_pattern_size = SUNIV_BACKEND_HWCPATTERN_SIZE,
+ 	.hwc_palette_off = SUNIV_BACKEND_HWCPALETTE_OFF,
++	.palette_off = SUNIV_BACKEND_PALETTE_OFF,
++	.no_4444 = true,
+ };
+ 
+ static const struct of_device_id sun4i_backend_of_table[] = {
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.h b/drivers/gpu/drm/sun4i/sun4i_backend.h
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.h
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.h
+@@ -63,9 +63,16 @@
+ #define SUN4I_BACKEND_CKMAX_REG			0x880
+ #define SUN4I_BACKEND_CKMIN_REG			0x884
+ #define SUN4I_BACKEND_CKCFG_REG			0x888
++/* per colour channel: 10 matches inside [min, max], 11 outside */
++#define SUN4I_BACKEND_CKCFG_INSIDE			0x2a
++#define SUN4I_BACKEND_CKCFG_OUTSIDE			0x3f
+ #define SUN4I_BACKEND_ATTCTL_REG0(l)		(0x890 + (0x4 * (l)))
+ #define SUN4I_BACKEND_ATTCTL_REG0_LAY_GLBALPHA_MASK	GENMASK(31, 24)
+ #define SUN4I_BACKEND_ATTCTL_REG0_LAY_GLBALPHA(x)		((x) << 24)
++#define SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_MASK	GENMASK(23, 22)
++#define SUN4I_BACKEND_ATTCTL_REG0_LAY_WORKMOD_PALETTE	(1 << 22)
++#define SUN4I_BACKEND_ATTCTL_REG0_LAY_CKMOD_MASK	GENMASK(19, 18)
++#define SUN4I_BACKEND_ATTCTL_REG0_LAY_CKMOD_ON		(1 << 18)
+ #define SUN4I_BACKEND_ATTCTL_REG0_LAY_PIPESEL_MASK	BIT(15)
+ #define SUN4I_BACKEND_ATTCTL_REG0_LAY_PIPESEL(x)		((x) << 15)
+ #define SUN4I_BACKEND_ATTCTL_REG0_LAY_PRISEL_MASK	GENMASK(11, 10)
+@@ -78,6 +85,9 @@
+ #define SUN4I_BACKEND_ATTCTL_REG1_LAY_HSCAFCT		GENMASK(15, 14)
+ #define SUN4I_BACKEND_ATTCTL_REG1_LAY_WSCAFCT		GENMASK(13, 12)
+ #define SUN4I_BACKEND_ATTCTL_REG1_LAY_FBFMT		GENMASK(11, 8)
++#define SUN4I_BACKEND_ATTCTL_REG1_LAY_FBPS		GENMASK(1, 0)
++/* 1, 2 and 4 bpp: the first pixel in the high bits of each byte */
++#define SUN4I_BACKEND_LAY_FBPS_MSB_FIRST_IN_BYTE		1
+ #define SUN4I_BACKEND_LAY_FBFMT_1BPP				(0 << 8)
+ #define SUN4I_BACKEND_LAY_FBFMT_2BPP				(1 << 8)
+ #define SUN4I_BACKEND_LAY_FBFMT_4BPP				(2 << 8)
+@@ -213,6 +223,21 @@
+ 	u32			hwc_pattern_off;
+ 	u32			hwc_pattern_size;
+ 	u32			hwc_palette_off;
++
++	/*
++	 * The 256-entry ARGB palette for the C1/C2/C4/C8 layers (0 when not
++	 * known: then there are no palette formats), and the palette it now
++	 * holds. One palette RAM serves all the layers.
++	 */
++	u32			palette_off;
++	struct drm_property_blob	*palette;
++
++	/* the 4444 formats are reserved here (suniv) */
++	bool			no_4444;
++
++	/* plane properties: the colour key and the palette */
++	struct drm_property	*color_key_prop;
++	struct drm_property	*palette_prop;
+ };
+ 
+ static inline struct sun4i_backend *
+@@ -224,6 +249,24 @@
+ void sun4i_backend_layer_enable(struct sun4i_backend *backend,
+ 				int layer, bool enable);
+ bool sun4i_backend_format_is_supported(uint32_t fmt, uint64_t modifier);
++bool sun4i_backend_format_is_palette(uint32_t fmt);
++void sun4i_backend_update_layer_color_key(struct sun4i_backend *backend,
++					  int layer, struct drm_plane *plane);
++void sun4i_backend_update_layer_palette(struct sun4i_backend *backend,
++					struct drm_plane *plane);
++
++/*
++ * COLOR_KEY plane property: bit 63 turns it on, bit 62 makes it match the
++ * colours OUTSIDE the range; bits 23:0 are the lowest RGB888 colour of the
++ * range and bits 55:32 the highest. One layer at a time can have it.
++ */
++#define SUN4I_COLOR_KEY_ENABLE			BIT_ULL(63)
++#define SUN4I_COLOR_KEY_OUTSIDE			BIT_ULL(62)
++#define SUN4I_COLOR_KEY_MIN(k)			((u32)(k) & 0xffffff)
++#define SUN4I_COLOR_KEY_MAX(k)			((u32)((k) >> 32) & 0xffffff)
++
++/* a palette has 1 to 256 ARGB8888 entries (u32 each) */
++#define SUN4I_BACKEND_PALETTE_SIZE		256
+ int sun4i_backend_update_layer_coord(struct sun4i_backend *backend,
+ 				     int layer, struct drm_plane *plane);
+ int sun4i_backend_update_layer_formats(struct sun4i_backend *backend,
+diff --git a/drivers/gpu/drm/sun4i/sun4i_layer.c b/drivers/gpu/drm/sun4i/sun4i_layer.c
+--- a/drivers/gpu/drm/sun4i/sun4i_layer.c
++++ b/drivers/gpu/drm/sun4i/sun4i_layer.c
+@@ -10,6 +10,7 @@
+ #include <drm/drm_atomic_helper.h>
+ #include <drm/drm_blend.h>
+ #include <drm/drm_gem_atomic_helper.h>
++#include <drm/drm_property.h>
+ 
+ #include "sun4i_backend.h"
+ #include "sun4i_frontend.h"
+@@ -23,6 +24,7 @@
+ 	if (plane->state) {
+ 		state = state_to_sun4i_layer_state(plane->state);
+ 
++		drm_property_blob_put(state->palette);
+ 		__drm_atomic_helper_plane_destroy_state(&state->state);
+ 
+ 		kfree(state);
+@@ -46,6 +48,10 @@
+ 
+ 	__drm_atomic_helper_plane_duplicate_state(plane, &copy->state);
+ 	copy->uses_frontend = orig->uses_frontend;
++	copy->color_key = orig->color_key;
++	copy->palette = orig->palette;
++	if (copy->palette)
++		drm_property_blob_get(copy->palette);
+ 
+ 	return &copy->state;
+ }
+@@ -55,6 +61,7 @@
+ {
+ 	struct sun4i_layer_state *s_state = state_to_sun4i_layer_state(state);
+ 
++	drm_property_blob_put(s_state->palette);
+ 	__drm_atomic_helper_plane_destroy_state(state);
+ 
+ 	kfree(s_state);
+@@ -108,14 +115,74 @@
+ 
+ 	sun4i_backend_update_layer_coord(backend, layer->id, plane);
+ 	sun4i_backend_update_layer_zpos(backend, layer->id, plane);
++	sun4i_backend_update_layer_color_key(backend, layer->id, plane);
+ 	sun4i_backend_layer_enable(backend, layer->id, true);
+ }
+ 
++static int sun4i_layer_atomic_set_property(struct drm_plane *plane,
++					   struct drm_plane_state *state,
++					   struct drm_property *property,
++					   uint64_t val)
++{
++	struct sun4i_layer_state *s_state = state_to_sun4i_layer_state(state);
++	struct sun4i_layer *layer = plane_to_sun4i_layer(plane);
++	struct sun4i_backend *backend = layer->backend;
++	bool replaced;
++	int ret;
++
++	if (property == backend->color_key_prop) {
++		s_state->color_key = val;
++		return 0;
++	}
++
++	if (property == backend->palette_prop) {
++		ret = drm_property_replace_blob_from_id(plane->dev,
++							&s_state->palette,
++							val, -1, sizeof(u32),
++							&replaced);
++		if (ret)
++			return ret;
++		if (s_state->palette &&
++		    s_state->palette->length > SUN4I_BACKEND_PALETTE_SIZE * sizeof(u32))
++			return -EINVAL;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++static int sun4i_layer_atomic_get_property(struct drm_plane *plane,
++					   const struct drm_plane_state *state,
++					   struct drm_property *property,
++					   uint64_t *val)
++{
++	const struct sun4i_layer_state *s_state =
++		container_of(state, struct sun4i_layer_state, state);
++	struct sun4i_layer *layer = plane_to_sun4i_layer(plane);
++	struct sun4i_backend *backend = layer->backend;
++
++	if (property == backend->color_key_prop) {
++		*val = s_state->color_key;
++		return 0;
++	}
++
++	if (property == backend->palette_prop) {
++		*val = s_state->palette ? s_state->palette->base.id : 0;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
+ static bool sun4i_layer_format_mod_supported(struct drm_plane *plane,
+ 					     uint32_t format, uint64_t modifier)
+ {
+ 	struct sun4i_layer *layer = plane_to_sun4i_layer(plane);
+ 
++	if (sun4i_backend_format_is_palette(format) &&
++	    !layer->backend->palette_off)
++		return false;
++
+ 	if (IS_ERR_OR_NULL(layer->backend->frontend))
+ 		return sun4i_backend_format_is_supported(format, modifier);
+ 
+@@ -136,6 +203,8 @@
+ 	.reset			= sun4i_backend_layer_reset,
+ 	.update_plane		= drm_atomic_helper_update_plane,
+ 	.format_mod_supported	= sun4i_layer_format_mod_supported,
++	.atomic_set_property	= sun4i_layer_atomic_set_property,
++	.atomic_get_property	= sun4i_layer_atomic_get_property,
+ };
+ 
+ static const uint32_t sun4i_layer_formats[] = {
+@@ -211,6 +280,37 @@
+ 		modifiers = NULL;
+ 	}
+ 
++	/*
++	 * This backend's own list: without the 4444 formats where they are
++	 * reserved, with the palette formats where the palette RAM is known.
++	 */
++	if (backend->no_4444 || backend->palette_off) {
++		static const uint32_t palette_formats[] = {
++			DRM_FORMAT_C1, DRM_FORMAT_C2, DRM_FORMAT_C4, DRM_FORMAT_C8,
++		};
++		uint32_t *list;
++		unsigned int i, n = 0;
++
++		list = devm_kcalloc(drm->dev, formats_len + ARRAY_SIZE(palette_formats),
++				    sizeof(*list), GFP_KERNEL);
++		if (!list)
++			return ERR_PTR(-ENOMEM);
++
++		for (i = 0; i < formats_len; i++) {
++			if (backend->no_4444 &&
++			    (formats[i] == DRM_FORMAT_ARGB4444 ||
++			     formats[i] == DRM_FORMAT_RGBA4444))
++				continue;
++			list[n++] = formats[i];
++		}
++		if (backend->palette_off)
++			for (i = 0; i < ARRAY_SIZE(palette_formats); i++)
++				list[n++] = palette_formats[i];
++
++		formats = list;
++		formats_len = n;
++	}
++
+ 	/* possible crtcs are set later */
+ 	ret = drm_universal_plane_init(drm, &layer->plane, 0,
+ 				       &sun4i_backend_layer_funcs,
+@@ -243,6 +343,25 @@
+ 	if (ret)
+ 		dev_warn(drm->dev, "Couldn't add the color properties\n");
+ 
++	/* the colour key, and the palette of the C1/C2/C4/C8 formats */
++	if (!backend->color_key_prop)
++		backend->color_key_prop = drm_property_create_range(drm, 0,
++								    "COLOR_KEY",
++								    0, U64_MAX);
++	if (backend->color_key_prop)
++		drm_object_attach_property(&layer->plane.base,
++					   backend->color_key_prop, 0);
++
++	if (backend->palette_off) {
++		if (!backend->palette_prop)
++			backend->palette_prop = drm_property_create(drm,
++								    DRM_MODE_PROP_BLOB,
++								    "PALETTE", 0);
++		if (backend->palette_prop)
++			drm_object_attach_property(&layer->plane.base,
++						   backend->palette_prop, 0);
++	}
++
+ 	return layer;
+ }
+ 
+diff --git a/drivers/gpu/drm/sun4i/sun4i_layer.h b/drivers/gpu/drm/sun4i/sun4i_layer.h
+--- a/drivers/gpu/drm/sun4i/sun4i_layer.h
++++ b/drivers/gpu/drm/sun4i/sun4i_layer.h
+@@ -22,6 +22,10 @@
+ 	struct drm_plane_state	state;
+ 	unsigned int		pipe;
+ 	bool			uses_frontend;
++
++	/* the COLOR_KEY and PALETTE properties (sun4i_backend.h) */
++	u64			color_key;
++	struct drm_property_blob *palette;
+ };
+ 
+ static inline struct sun4i_layer *
