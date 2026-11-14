@@ -1,0 +1,84 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: MPEG-1 through the MPEG-2 controls
+
+The video engine's MPEG engine decodes MPEG-1 as well as MPEG-2: the
+trigger names the standard (1 or 2 in bits 27:24) and MPEG-1 pictures
+are whole frames with frame prediction, plus full-pel motion vectors
+(libvdpau-sunxi mpeg12.c programs it so). The stateless MPEG-2 controls
+cannot say MPEG-1, so add, not upstream:
+
+- V4L2_MPEG2_SEQ_FLAG_MPEG1 (0x80) in the sequence flags;
+- V4L2_MPEG2_PIC_FLAG_FULL_PEL_FORWARD/BACKWARD (0x8000/0x4000) in the
+  picture flags.
+
+High bits, clear of the ones upstream may take next. A stream without
+them decodes as before.
+---
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
+@@ -101,8 +101,18 @@
+ 	reg |= VE_DEC_MPEG_MP12HDR_Q_SCALE_TYPE(pic->flags & V4L2_MPEG2_PIC_FLAG_Q_SCALE_TYPE);
+ 	reg |= VE_DEC_MPEG_MP12HDR_INTRA_VLC_FORMAT(pic->flags & V4L2_MPEG2_PIC_FLAG_INTRA_VLC);
+ 	reg |= VE_DEC_MPEG_MP12HDR_ALTERNATE_SCAN(pic->flags & V4L2_MPEG2_PIC_FLAG_ALT_SCAN);
+-	reg |= VE_DEC_MPEG_MP12HDR_FULL_PEL_FORWARD_VECTOR(0);
+-	reg |= VE_DEC_MPEG_MP12HDR_FULL_PEL_BACKWARD_VECTOR(0);
++	reg |= VE_DEC_MPEG_MP12HDR_FULL_PEL_FORWARD_VECTOR(!!(pic->flags & V4L2_MPEG2_PIC_FLAG_FULL_PEL_FORWARD));
++	reg |= VE_DEC_MPEG_MP12HDR_FULL_PEL_BACKWARD_VECTOR(!!(pic->flags & V4L2_MPEG2_PIC_FLAG_FULL_PEL_BACKWARD));
++
++	/*
++	 * MPEG-1 has no picture coding extension: whole frames, frame
++	 * prediction and DCT, as libvdpau-sunxi programs it (0x3c0).
++	 */
++	if (seq->flags & V4L2_MPEG2_SEQ_FLAG_MPEG1) {
++		reg |= VE_DEC_MPEG_MP12HDR_INTRA_PICTURE_STRUCTURE(V4L2_MPEG2_PIC_FRAME);
++		reg |= VE_DEC_MPEG_MP12HDR_TOP_FIELD_FIRST(1);
++		reg |= VE_DEC_MPEG_MP12HDR_FRAME_PRED_FRAME_DCT(1);
++	}
+ 
+ 	cedrus_write(dev, VE_DEC_MPEG_MP12HDR, reg);
+ 
+@@ -179,12 +189,15 @@
+ 
+ static void cedrus_mpeg2_trigger(struct cedrus_ctx *ctx)
+ {
++	const struct v4l2_ctrl_mpeg2_sequence *seq =
++		cedrus_find_control_data(ctx, V4L2_CID_STATELESS_MPEG2_SEQUENCE);
+ 	struct cedrus_dev *dev = ctx->dev;
+ 	u32 reg;
+ 
+ 	/* Trigger MPEG engine. */
+-	reg = VE_DEC_MPEG_TRIGGER_HW_MPEG_VLD | VE_DEC_MPEG_TRIGGER_MPEG2 |
+-	      VE_DEC_MPEG_TRIGGER_MB_BOUNDARY;
++	reg = VE_DEC_MPEG_TRIGGER_HW_MPEG_VLD | VE_DEC_MPEG_TRIGGER_MB_BOUNDARY;
++	reg |= seq && seq->flags & V4L2_MPEG2_SEQ_FLAG_MPEG1 ?
++	       VE_DEC_MPEG_TRIGGER_MPEG1 : VE_DEC_MPEG_TRIGGER_MPEG2;
+ 
+ 	cedrus_write(dev, VE_DEC_MPEG_TRIGGER, reg);
+ }
+diff --git a/include/uapi/linux/v4l2-controls.h b/include/uapi/linux/v4l2-controls.h
+--- a/include/uapi/linux/v4l2-controls.h
++++ b/include/uapi/linux/v4l2-controls.h
+@@ -1982,6 +1982,12 @@
+ /* Stateless MPEG-2 controls */
+ 
+ #define V4L2_MPEG2_SEQ_FLAG_PROGRESSIVE	0x01
++/*
++ * Not upstream (f1c200s-linux): the stream is MPEG-1 (ISO/IEC 11172-2), with
++ * no sequence or picture coding extension; the picture flags then carry
++ * MPEG-1's full_pel_{forward,backward}_vector.
++ */
++#define V4L2_MPEG2_SEQ_FLAG_MPEG1		0x80
+ 
+ #define V4L2_CID_STATELESS_MPEG2_SEQUENCE (V4L2_CID_CODEC_STATELESS_BASE+220)
+ /**
+@@ -2030,6 +2036,9 @@
+ #define V4L2_MPEG2_PIC_FLAG_ALT_SCAN			0x0020
+ #define V4L2_MPEG2_PIC_FLAG_REPEAT_FIRST		0x0040
+ #define V4L2_MPEG2_PIC_FLAG_PROGRESSIVE			0x0080
++/* Not upstream (f1c200s-linux): MPEG-1 only, see V4L2_MPEG2_SEQ_FLAG_MPEG1. */
++#define V4L2_MPEG2_PIC_FLAG_FULL_PEL_FORWARD		0x8000
++#define V4L2_MPEG2_PIC_FLAG_FULL_PEL_BACKWARD		0x4000
+ 
+ #define V4L2_CID_STATELESS_MPEG2_PICTURE (V4L2_CID_CODEC_STATELESS_BASE+221)
+ /**
