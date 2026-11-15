@@ -1,0 +1,218 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: JPEG 4:2:2/4:4:4 as NV16_32L32, and scale-down
+
+On the VEs with tiled output only (A10 generation, suniv F1C100s/F1C200s)
+the JPEG decoder ignores JPEG_FORCE_420: 4:4:4 comes out as 4:2:2 and
+4:2:2 as it is, on the normal and on the rotate/scale output alike (seen
+on the F1C200s with a guarded buffer: luma 52 dB and chroma 52 dB against
+a 4:2:2 decode). Written into an NV12 buffer that chroma runs past its
+end; without a guard that crashed the kernel.
+
+- A tiled 4:2:2 CAPTURE format, V4L2_PIX_FMT_NV16_32L32 ('ST16': 32x32
+  tiles, the chroma plane as high as the luma), offered while the OUTPUT
+  is JPEG. 4:2:2 and 4:4:4 JPEGs decode into it only, 4:2:0 ones into
+  NV12_32L32 only, as before: the default is unchanged.
+- Scale-down by 1/2, 1/4 or 1/8 on the way out (SD_ROT ratio bits and the
+  rotate/scale output, as Allwinner's libawmjpeg sets them): asked for
+  with a CAPTURE size that much smaller than the OUTPUT one, which
+  try_fmt rounds to the exact scaled size. The tiles keep their layout,
+  at the scaled width.
+- A JPEG that does not fit the CAPTURE buffer, scaled or not, is refused
+  (the job ends with both buffers in error) instead of being written past
+  its end.
+
+On the board, against PIL's decode of the same JPEGs: 4:2:2 and 4:4:4 to
+NV16 52.5/53/52 dB (Y/Cb/Cr), 4:2:0 at 1/2, 1/4 and 1/8 52.5-52.6 dB
+luma, 4:2:2 at 1/2 to NV16 52.6 dB; 4:2:0 at full size into NV12_32L32
+unchanged (70/69 dB against ffmpeg, as before); mismatches refused.
+---
+diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
+--- a/drivers/media/v4l2-core/v4l2-ioctl.c
++++ b/drivers/media/v4l2-core/v4l2-ioctl.c
+@@ -1372,6 +1372,7 @@
+ 	case V4L2_PIX_FMT_NV12_4L4:	descr = "Y/UV 4:2:0 (4x4 Linear)"; break;
+ 	case V4L2_PIX_FMT_NV12_16L16:	descr = "Y/UV 4:2:0 (16x16 Linear)"; break;
+ 	case V4L2_PIX_FMT_NV12_32L32:   descr = "Y/UV 4:2:0 (32x32 Linear)"; break;
++	case V4L2_PIX_FMT_NV16_32L32:   descr = "Y/UV 4:2:2 (32x32 Linear)"; break;
+ 	case V4L2_PIX_FMT_NV15_4L4:	descr = "10-bit Y/UV 4:2:0 (4x4 Linear)"; break;
+ 	case V4L2_PIX_FMT_P010_4L4:	descr = "10-bit Y/UV 4:2:0 (4x4 Linear)"; break;
+ 	case V4L2_PIX_FMT_NV12M:	descr = "Y/UV 4:2:0 (N-C)"; break;
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+@@ -181,6 +181,7 @@
+ 	int ret, index;
+ 	u8 hmax, vmax;
+ 	u16 width, height;
++	unsigned int scale;
+ 
+ 	size = vb2_get_plane_payload(src_buf, 0);
+ 	ret = v4l2_jpeg_parse_header(vb2_plane_vaddr(src_buf, 0), size, &header);
+@@ -264,16 +265,37 @@
+ 
+ 	/*
+ 	 * The VEs with tiled output only (the A10 generation, suniv) do not
+-	 * downsample to 4:2:0: they turn 4:4:4 into 4:2:2 and leave 4:2:2 as
+-	 * it is, whose chroma is twice what the NV12 CAPTURE buffer holds, and
+-	 * the engine writes on past its end (seen on the F1C200s: 32 KiB past
+-	 * a 256x256 picture). Take only 4:2:0 there.
++	 * downsample to 4:2:0, whatever JPEG_FORCE_420 says: they turn 4:4:4
++	 * into 4:2:2 and leave 4:2:2 as it is, whose chroma is twice what an
++	 * NV12 CAPTURE buffer holds; the engine then writes past its end (seen
++	 * on the F1C200s: a kernel crash). So 4:2:0 goes to NV12_32L32 only,
++	 * and 4:2:2 and 4:4:4 to NV16_32L32 only.
+ 	 */
+-	if (subsampling != VE_DEC_MPEG_TRIGGER_CHROMA_FMT_420 &&
+-	    !cedrus_is_capable(ctx, CEDRUS_CAPABILITY_UNTILED)) {
+-		v4l2_err(&dev->v4l2_dev,
+-			 "only 4:2:0 JPEGs on this VE (subsampling %06x)\n",
+-			 index);
++	if (!cedrus_is_capable(ctx, CEDRUS_CAPABILITY_UNTILED)) {
++		bool nv16 = ctx->dst_fmt.pixelformat == V4L2_PIX_FMT_NV16_32L32;
++		bool c422 = subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_422 ||
++			    subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_444;
++
++		if (nv16 ? !c422 : subsampling != VE_DEC_MPEG_TRIGGER_CHROMA_FMT_420) {
++			v4l2_err(&dev->v4l2_dev,
++				 "subsampling %06x does not fit %p4cc\n",
++				 index, &ctx->dst_fmt.pixelformat);
++			return -EINVAL;
++		}
++	}
++
++	/*
++	 * Scale down by 1/2, 1/4 or 1/8 (the rotate/scale output) when the
++	 * CAPTURE format is that much smaller; the picture, scaled, must fit
++	 * it either way, or the engine writes past the buffer.
++	 */
++	for (scale = 0; scale <= 3; scale++)
++		if (DIV_ROUND_UP(width, 1 << scale) <= ctx->dst_fmt.width &&
++		    DIV_ROUND_UP(height, 1 << scale) <= ctx->dst_fmt.height)
++			break;
++	if (scale > 3) {
++		v4l2_err(&dev->v4l2_dev, "JPEG %ux%u does not fit %ux%u\n",
++			 width, height, ctx->dst_fmt.width, ctx->dst_fmt.height);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -332,8 +354,8 @@
+ 	cedrus_write(dev, VE_DEC_MPEG_ROT_LUMA, dst_luma_addr);
+ 	cedrus_write(dev, VE_DEC_MPEG_ROT_CHROMA, dst_chroma_addr);
+ 
+-	/* Disable rotation and scaling. */
+-	cedrus_write(dev, VE_DEC_MPEG_SD_ROT_DBLK_CTL, 0);
++	/* No rotation; scaling as chosen above (h ratio bits 9:8, v 11:10). */
++	cedrus_write(dev, VE_DEC_MPEG_SD_ROT_DBLK_CTL, (scale | scale << 2) << 8);
+ 
+ 	/* Source offset and length in bits. */
+ 
+@@ -359,10 +381,15 @@
+ 	/* Enable appropriate interrupts and components. */
+ 
+ 	reg = VE_DEC_MPEG_CTRL_IRQ_MASK;
+-	if (subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_422 ||
+-	    subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_422T ||
+-	    subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_444)
++	if (cedrus_is_capable(ctx, CEDRUS_CAPABILITY_UNTILED) &&
++	    (subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_422 ||
++	     subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_422T ||
++	     subsampling == VE_DEC_MPEG_TRIGGER_CHROMA_FMT_444))
+ 		reg |= VE_DEC_MPEG_CTRL_JPEG_FORCE_420;
++	/* the scaled picture comes out of the rotate/scale stage */
++	if (scale)
++		reg |= VE_DEC_MPEG_CTRL_ROTATE_SCALE_OUT_EN |
++		       VE_DEC_MPEG_CTRL_MC_NO_WRITEBACK;
+ 
+ 	cedrus_write(dev, VE_DEC_MPEG_CTRL, reg);
+ 
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_video.c b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+@@ -75,6 +75,12 @@
+ 		.directions	= CEDRUS_DECODE_DST,
+ 	},
+ 	{
++		/* JPEG only: 4:2:2 and 4:4:4 pictures, as 4:2:2 */
++		.pixelformat	= V4L2_PIX_FMT_NV16_32L32,
++		.directions	= CEDRUS_DECODE_DST,
++		.capabilities	= CEDRUS_CAPABILITY_JPEG_DEC,
++	},
++	{
+ 		.pixelformat	= V4L2_PIX_FMT_NV21,
+ 		.directions	= CEDRUS_DECODE_DST,
+ 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
+@@ -161,6 +167,14 @@
+ 
+ 		break;
+ 
++	case V4L2_PIX_FMT_NV16_32L32:
++		/* As NV12_32L32, with a chroma plane as high as the luma's. */
++		bytesperline = ALIGN(width, 32);
++		height = ALIGN(height, 32);
++		sizeimage = 2 * bytesperline * height;
++
++		break;
++
+ 	case V4L2_PIX_FMT_NV12:
+ 	case V4L2_PIX_FMT_NV21:
+ 	case V4L2_PIX_FMT_YUV420:
+@@ -214,6 +228,10 @@
+ 		if (!(cedrus_formats[i].directions & direction))
+ 			continue;
+ 
++		if (cedrus_formats[i].pixelformat == V4L2_PIX_FMT_NV16_32L32 &&
++		    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_JPEG)
++			continue;
++
+ 		if (index == f->index)
+ 			break;
+ 
+@@ -270,9 +288,35 @@
+ 	if (!fmt)
+ 		return -EINVAL;
+ 
++	/* NV16_32L32 is the JPEG decoder's only */
++	if (fmt->pixelformat == V4L2_PIX_FMT_NV16_32L32 &&
++	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_JPEG)
++		fmt = cedrus_find_format(ctx, V4L2_PIX_FMT_NV12_32L32,
++					 CEDRUS_DECODE_DST);
++	if (!fmt)
++		return -EINVAL;
++
+ 	pix_fmt->pixelformat = fmt->pixelformat;
+-	pix_fmt->width = ctx->src_fmt.width;
+-	pix_fmt->height = ctx->src_fmt.height;
++
++	/*
++	 * The JPEG decoder scales down by 1/2, 1/4 or 1/8 on the way out: a
++	 * smaller CAPTURE size asks for the smallest scale that still holds
++	 * it. Everything else decodes at the OUTPUT size.
++	 */
++	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_JPEG &&
++	    pix_fmt->width && pix_fmt->height) {
++		unsigned int n = 0;
++
++		while (n < 3 &&
++		       DIV_ROUND_UP(ctx->src_fmt.width, 2 << n) >= pix_fmt->width &&
++		       DIV_ROUND_UP(ctx->src_fmt.height, 2 << n) >= pix_fmt->height)
++			n++;
++		pix_fmt->width = DIV_ROUND_UP(ctx->src_fmt.width, 1 << n);
++		pix_fmt->height = DIV_ROUND_UP(ctx->src_fmt.height, 1 << n);
++	} else {
++		pix_fmt->width = ctx->src_fmt.width;
++		pix_fmt->height = ctx->src_fmt.height;
++	}
+ 	cedrus_prepare_format(pix_fmt);
+ 
+ 	if (ctx->current_codec->extra_cap_size)
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -687,6 +687,7 @@
+ #define V4L2_PIX_FMT_NV12_4L4 v4l2_fourcc('V', 'T', '1', '2')   /* 12  Y/CbCr 4:2:0  4x4 tiles */
+ #define V4L2_PIX_FMT_NV12_16L16 v4l2_fourcc('H', 'M', '1', '2') /* 12  Y/CbCr 4:2:0 16x16 tiles */
+ #define V4L2_PIX_FMT_NV12_32L32 v4l2_fourcc('S', 'T', '1', '2') /* 12  Y/CbCr 4:2:0 32x32 tiles */
++#define V4L2_PIX_FMT_NV16_32L32 v4l2_fourcc('S', 'T', '1', '6') /* 16  Y/CbCr 4:2:2 32x32 tiles */
+ #define V4L2_PIX_FMT_NV15_4L4 v4l2_fourcc('V', 'T', '1', '5') /* 15 Y/CbCr 4:2:0 10-bit 4x4 tiles */
+ #define V4L2_PIX_FMT_P010_4L4 v4l2_fourcc('T', '0', '1', '0') /* 12  Y/CbCr 4:2:0 10-bit 4x4 macroblocks */
+ #define V4L2_PIX_FMT_NV12_8L128       v4l2_fourcc('A', 'T', '1', '2') /* Y/CbCr 4:2:0 8x128 tiles */
