@@ -1,0 +1,396 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: rotation by 90, 180 and 270 degrees (suniv)
+
+The display engine of the suniv F1C100s/F1C200s cannot rotate, but the
+MPEG engine of its video engine (VE 0x1663) can: it rotates a tiled 4:2:0
+picture from its reconstruction buffer into its rotate/scale-down output.
+That is how Allwinner rotates there (RotateHw1663 in libcedarc's
+libvideoengine): JPEG_SIZE in macroblocks, REC_LUMA/CHROMA the source,
+ROT_LUMA/CHROMA the destination, SD_ROT bits 1:0 the rotation, CTRL
+ROTATE_SCALE_OUT_EN plus the rotate interrupt, and trigger 0x0500000c;
+the job ends with status bit 3.
+
+A new pseudo-codec on the existing device, without requests:
+- OUTPUT V4L2_PIX_FMT_NV12_32L32: the picture to rotate. Its format keeps
+  the picture's own height; the buffer is 32-line aligned as for CAPTURE.
+- V4L2_CID_ROTATE (0, 90, 180, 270): clockwise, as on the board. Set it
+  before the formats: the CAPTURE format follows it (width and height
+  swapped for 90 and 270).
+- CAPTURE NV12_32L32: the rotated frame. A size that is no multiple of 16
+  is rotated padded to whole macroblocks, so the picture can land off the
+  origin; VIDIOC_G_SELECTION (COMPOSE) says where. It is at the origin
+  for sizes in whole macroblocks. Every other codec reports its whole
+  CAPTURE frame.
+- A job whose CAPTURE format cannot hold the rotated frame is refused.
+
+On the F1C200s (guarded: CAPTURE buffers of twice the size, nothing
+written past the frame), against numpy rotations: 640x272, 624x272 and
+632x264, at 0, 90, 180 and 270 degrees, all pixel-exact (luma and
+chroma), the selection offsets as predicted; about 2.3 ms per 640x272
+picture. MPEG-2, MPEG-4, H.263, Sorenson and JPEG decoding unchanged.
+
+Not done: rotating during JPEG decoding (SD_ROT on the JPEG job). On this
+engine it took 42 ms instead of 2.9 ms for 640x272 and wrote 2.5 KB past
+a 90-degree frame; decoding and then rotating takes 5.3 ms.
+---
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus.c b/drivers/staging/media/sunxi/cedrus/cedrus.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
+@@ -255,6 +255,15 @@
+ 		},
+ 		.capabilities	= CEDRUS_CAPABILITY_H265_DEC,
+ 	},
++	{
++		/* the rotate pseudo-codec: clockwise, in degrees */
++		.cfg = {
++			.id = V4L2_CID_ROTATE,
++			.max = 270,
++			.step = 90,
++		},
++		.capabilities	= CEDRUS_CAPABILITY_ROTATE,
++	},
+ };
+ 
+ #define CEDRUS_CONTROLS_COUNT	ARRAY_SIZE(cedrus_controls)
+@@ -668,6 +677,7 @@
+ static const struct cedrus_variant suniv_f1c100s_cedrus_variant = {
+ 	.capabilities	= CEDRUS_CAPABILITY_MPEG2_DEC |
+ 			  CEDRUS_CAPABILITY_MPEG4_DEC |
++			  CEDRUS_CAPABILITY_ROTATE |
+ 			  CEDRUS_CAPABILITY_JPEG_DEC |
+ 			  CEDRUS_CAPABILITY_H264_DEC,
+ 	.quirks		= CEDRUS_QUIRK_EXTERNAL_PRED_BUFFERS |
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus.h b/drivers/staging/media/sunxi/cedrus/cedrus.h
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.h
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.h
+@@ -36,6 +36,7 @@
+ #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
+ #define CEDRUS_CAPABILITY_JPEG_DEC	BIT(6)
+ #define CEDRUS_CAPABILITY_MPEG4_DEC	BIT(7)
++#define CEDRUS_CAPABILITY_ROTATE	BIT(8)
+ 
+ /*
+  * Quirks describe where a VE revision deviates from what the driver
+@@ -260,6 +261,10 @@
+ extern struct cedrus_dec_ops cedrus_dec_ops_vp8;
+ extern struct cedrus_dec_ops cedrus_dec_ops_jpeg;
+ extern struct cedrus_dec_ops cedrus_dec_ops_mpeg4;
++extern struct cedrus_dec_ops cedrus_dec_ops_rotate;
++
++void cedrus_rotate_frame(struct cedrus_ctx *ctx, u32 *width, u32 *height);
++void cedrus_rotate_picture(struct cedrus_ctx *ctx, struct v4l2_rect *r);
+ 
+ static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
+ {
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -73,6 +73,7 @@
+ 	case V4L2_PIX_FMT_MPEG2_SLICE:
+ 	case V4L2_PIX_FMT_MPEG4_VOP:
+ 	case V4L2_PIX_FMT_JPEG:
++	case V4L2_PIX_FMT_NV12_32L32:	/* rotation, on the MPEG engine */
+ 		reg |= VE_MODE_DEC_MPEG;
+ 		break;
+ 
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus_rotate.c b/drivers/staging/media/sunxi/cedrus/cedrus_rotate.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_rotate.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_rotate.c
+@@ -0,0 +1,174 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Cedrus VPU driver: picture rotation by 90, 180 or 270 degrees.
++ *
++ * Not upstream (f1c200s-linux). The MPEG engine of the suniv VE (0x1663)
++ * rotates a decoded picture, 4:2:0 in 32x32 tiles, from its reconstruction
++ * buffer into its rotate/scale-down output, which is how Allwinner rotates
++ * on that engine (RotateHw1663 in libcedarc's libvideoengine, read with
++ * Ghidra). The display engine of those SoCs cannot rotate at all.
++ *
++ * The OUTPUT queue takes NV12_32L32 pictures, the CAPTURE queue gives them
++ * rotated clockwise by V4L2_CID_ROTATE degrees. No request is needed.
++ *
++ * The OUTPUT format keeps the picture's own height (the buffer is laid out
++ * 32-line aligned all the same), as the engine rotates exactly the
++ * macroblocks it is told of: given 640x288 for a 640x272 picture, its 90
++ * and 180 degree rotations came out 16 pixels off (measured, pixel-exact
++ * otherwise). A size that is no multiple of 16 is rotated padded to whole
++ * macroblocks, so the picture can still land off the frame's origin: the
++ * CAPTURE format holds the whole rotated frame, and the COMPOSE selection
++ * says where the picture is in it. Set the rotation before the formats.
++ */
++
++#include <media/videobuf2-dma-contig.h>
++
++#include "cedrus.h"
++#include "cedrus_hw.h"
++#include "cedrus_regs.h"
++
++/* the trigger's decode format for the rotate start */
++#define CEDRUS_ROTATE_TRIGGER_FORMAT	(0x05 << 24)
++
++static enum cedrus_irq_status cedrus_rotate_irq_status(struct cedrus_ctx *ctx)
++{
++	u32 reg = cedrus_read(ctx->dev, VE_DEC_MPEG_STATUS);
++
++	if (!(reg & (VE_DEC_MPEG_STATUS_ROTATE_SUCCESS |
++		     VE_DEC_MPEG_STATUS_ERROR | VE_DEC_MPEG_STATUS_SUCCESS)))
++		return CEDRUS_IRQ_NONE;
++
++	if (reg & VE_DEC_MPEG_STATUS_ERROR)
++		return CEDRUS_IRQ_ERROR;
++
++	return CEDRUS_IRQ_OK;
++}
++
++static void cedrus_rotate_irq_clear(struct cedrus_ctx *ctx)
++{
++	/* the rotate's own done bit (3) as well, as Allwinner clears it */
++	cedrus_write(ctx->dev, VE_DEC_MPEG_STATUS, 0xf);
++}
++
++static void cedrus_rotate_irq_disable(struct cedrus_ctx *ctx)
++{
++	struct cedrus_dev *dev = ctx->dev;
++	u32 reg = cedrus_read(dev, VE_DEC_MPEG_CTRL);
++
++	reg &= ~(VE_DEC_MPEG_CTRL_IRQ_MASK | VE_DEC_MPEG_CTRL_ROTATE_IRQ_EN);
++	cedrus_write(dev, VE_DEC_MPEG_CTRL, reg);
++}
++
++/* V4L2_CID_ROTATE in degrees -> the SD_ROT rotation code (clockwise) */
++static unsigned int cedrus_rotate_code(struct cedrus_ctx *ctx)
++{
++	const s32 *deg = cedrus_find_control_data(ctx, V4L2_CID_ROTATE);
++
++	return deg ? (*deg / 90) & 3 : 0;
++}
++
++/* the picture as the engine rotates it, padded, and where the picture is */
++static void cedrus_rotate_rects(struct cedrus_ctx *ctx, struct v4l2_rect *frame,
++				struct v4l2_rect *pic)
++{
++	unsigned int w = ctx->src_fmt.width, h = ctx->src_fmt.height;
++	unsigned int pw = ALIGN(w, 16), ph = ALIGN(h, 16);
++
++	switch (cedrus_rotate_code(ctx)) {
++	case 1:
++		*frame = (struct v4l2_rect){ 0, 0, ph, pw };
++		*pic = (struct v4l2_rect){ ph - h, 0, h, w };
++		break;
++	case 2:
++		*frame = (struct v4l2_rect){ 0, 0, pw, ph };
++		*pic = (struct v4l2_rect){ pw - w, ph - h, w, h };
++		break;
++	case 3:
++		*frame = (struct v4l2_rect){ 0, 0, ph, pw };
++		*pic = (struct v4l2_rect){ 0, pw - w, h, w };
++		break;
++	default:
++		*frame = (struct v4l2_rect){ 0, 0, w, h };
++		*pic = *frame;
++	}
++}
++
++/* the CAPTURE format's size: the whole rotated frame */
++void cedrus_rotate_frame(struct cedrus_ctx *ctx, u32 *width, u32 *height)
++{
++	struct v4l2_rect frame, pic;
++
++	cedrus_rotate_rects(ctx, &frame, &pic);
++	*width = frame.width;
++	*height = frame.height;
++}
++
++/* the COMPOSE selection: where the picture is in the CAPTURE frame */
++void cedrus_rotate_picture(struct cedrus_ctx *ctx, struct v4l2_rect *r)
++{
++	struct v4l2_rect frame;
++
++	cedrus_rotate_rects(ctx, &frame, r);
++}
++
++static int cedrus_rotate_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
++{
++	struct cedrus_dev *dev = ctx->dev;
++	unsigned int code = cedrus_rotate_code(ctx);
++	unsigned int mbw = DIV_ROUND_UP(ctx->src_fmt.width, 16);
++	unsigned int mbh = DIV_ROUND_UP(ctx->src_fmt.height, 16);
++	struct v4l2_rect frame, pic;
++	dma_addr_t src;
++
++	/* the CAPTURE format must hold the whole rotated frame */
++	cedrus_rotate_rects(ctx, &frame, &pic);
++	if (ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12_32L32 ||
++	    ctx->dst_fmt.width < frame.width ||
++	    ctx->dst_fmt.height < frame.height) {
++		v4l2_err(&dev->v4l2_dev,
++			 "rotate: %ux%u by %u degrees does not fit %ux%u\n",
++			 ctx->src_fmt.width, ctx->src_fmt.height, code * 90,
++			 ctx->dst_fmt.width, ctx->dst_fmt.height);
++		return -EINVAL;
++	}
++
++	cedrus_engine_enable(ctx);
++
++	cedrus_write(dev, VE_DEC_MPEG_JPEG_SIZE, (mbw - 1) | (mbh - 1) << 16);
++
++	/* from the reconstruction buffer ... */
++	src = vb2_dma_contig_plane_dma_addr(&run->src->vb2_buf, 0);
++	cedrus_write(dev, VE_DEC_MPEG_REC_LUMA, src);
++	cedrus_write(dev, VE_DEC_MPEG_REC_CHROMA,
++		     src + ctx->src_fmt.bytesperline * ALIGN(ctx->src_fmt.height, 32));
++
++	/* ... to the rotate/scale-down output */
++	cedrus_write(dev, VE_DEC_MPEG_ROT_LUMA,
++		     cedrus_dst_buf_addr(ctx, &run->dst->vb2_buf, 0));
++	cedrus_write(dev, VE_DEC_MPEG_ROT_CHROMA,
++		     cedrus_dst_buf_addr(ctx, &run->dst->vb2_buf, 1));
++	cedrus_write(dev, VE_DEC_MPEG_SD_ROT_DBLK_CTL, code);
++
++	cedrus_write(dev, VE_DEC_MPEG_CTRL,
++		     VE_DEC_MPEG_CTRL_ROTATE_SCALE_OUT_EN |
++		     VE_DEC_MPEG_CTRL_ROTATE_IRQ_EN |
++		     VE_DEC_MPEG_CTRL_ERROR_IRQ_EN |
++		     VE_DEC_MPEG_CTRL_FINISH_IRQ_EN);
++	cedrus_write(dev, VE_DEC_MPEG_STATUS, 0xf);
++
++	return 0;
++}
++
++static void cedrus_rotate_trigger(struct cedrus_ctx *ctx)
++{
++	cedrus_write(ctx->dev, VE_DEC_MPEG_TRIGGER,
++		     CEDRUS_ROTATE_TRIGGER_FORMAT | VE_DEC_MPEG_TRIGGER_HW_ROTATE);
++}
++
++struct cedrus_dec_ops cedrus_dec_ops_rotate = {
++	.irq_clear	= cedrus_rotate_irq_clear,
++	.irq_disable	= cedrus_rotate_irq_disable,
++	.irq_status	= cedrus_rotate_irq_status,
++	.setup		= cedrus_rotate_setup,
++	.trigger	= cedrus_rotate_trigger,
++};
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus_video.c b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+@@ -75,6 +75,12 @@
+ 		.directions	= CEDRUS_DECODE_DST,
+ 	},
+ 	{
++		/* the rotate pseudo-codec's input */
++		.pixelformat	= V4L2_PIX_FMT_NV12_32L32,
++		.directions	= CEDRUS_DECODE_SRC,
++		.capabilities	= CEDRUS_CAPABILITY_ROTATE,
++	},
++	{
+ 		/* JPEG only: 4:2:2 and 4:4:4 pictures, as 4:2:2 */
+ 		.pixelformat	= V4L2_PIX_FMT_NV16_32L32,
+ 		.directions	= CEDRUS_DECODE_DST,
+@@ -317,6 +323,10 @@
+ 		pix_fmt->width = ctx->src_fmt.width;
+ 		pix_fmt->height = ctx->src_fmt.height;
+ 	}
++
++	/* rotated: the whole frame the engine writes (cedrus_rotate.c) */
++	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_NV12_32L32)
++		cedrus_rotate_frame(ctx, &pix_fmt->width, &pix_fmt->height);
+ 	cedrus_prepare_format(pix_fmt);
+ 
+ 	if (ctx->current_codec->extra_cap_size)
+@@ -338,13 +348,20 @@
+ 	struct cedrus_format *fmt =
+ 		cedrus_find_format(ctx, pix_fmt->pixelformat,
+ 				   CEDRUS_DECODE_SRC);
++	u32 height;
+ 
+ 	if (!fmt)
+ 		return -EINVAL;
+ 
+ 	pix_fmt->pixelformat = fmt->pixelformat;
++	height = pix_fmt->height;
+ 	cedrus_prepare_format(pix_fmt);
+ 
++	/* the rotate source: the picture's own height, the buffer as tiled */
++	if (pix_fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32)
++		pix_fmt->height = clamp(height, CEDRUS_MIN_HEIGHT,
++					CEDRUS_MAX_HEIGHT);
++
+ 	return 0;
+ }
+ 
+@@ -425,6 +442,9 @@
+ 	case V4L2_PIX_FMT_MPEG4_VOP:
+ 		ctx->current_codec = &cedrus_dec_ops_mpeg4;
+ 		break;
++	case V4L2_PIX_FMT_NV12_32L32:
++		ctx->current_codec = &cedrus_dec_ops_rotate;
++		break;
+ 	}
+ 
+ 	/* Propagate format information to capture. */
+@@ -483,12 +503,45 @@
+ 	 */
+ 	if (V4L2_TYPE_IS_OUTPUT(buf->type) &&
+ 	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_JPEG &&
++	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_NV12_32L32 &&
+ 	    !(buf->flags & V4L2_BUF_FLAG_REQUEST_FD))
+ 		return -EBADR;
+ 
+ 	return v4l2_m2m_ioctl_qbuf(file, priv, buf);
+ }
+ 
++/*
++ * Where the picture is in the CAPTURE buffer: at its origin, except for a
++ * rotated one (cedrus_rotate.c).
++ */
++static int cedrus_g_selection(struct file *file, void *priv,
++			      struct v4l2_selection *s)
++{
++	struct cedrus_ctx *ctx = cedrus_file2ctx(file);
++
++	if (s->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
++		return -EINVAL;
++
++	switch (s->target) {
++	case V4L2_SEL_TGT_COMPOSE:
++	case V4L2_SEL_TGT_COMPOSE_DEFAULT:
++		if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_NV12_32L32) {
++			cedrus_rotate_picture(ctx, &s->r);
++			return 0;
++		}
++		fallthrough;
++	case V4L2_SEL_TGT_COMPOSE_BOUNDS:
++	case V4L2_SEL_TGT_COMPOSE_PADDED:
++		s->r.left = 0;
++		s->r.top = 0;
++		s->r.width = ctx->dst_fmt.width;
++		s->r.height = ctx->dst_fmt.height;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
+ const struct v4l2_ioctl_ops cedrus_ioctl_ops = {
+ 	.vidioc_querycap		= cedrus_querycap,
+ 
+@@ -502,6 +555,8 @@
+ 	.vidioc_try_fmt_vid_out		= cedrus_try_fmt_vid_out,
+ 	.vidioc_s_fmt_vid_out		= cedrus_s_fmt_vid_out,
+ 
++	.vidioc_g_selection		= cedrus_g_selection,
++
+ 	.vidioc_reqbufs			= v4l2_m2m_ioctl_reqbufs,
+ 	.vidioc_querybuf		= v4l2_m2m_ioctl_querybuf,
+ 	.vidioc_qbuf			= cedrus_qbuf,
+diff -ruN a/drivers/staging/media/sunxi/cedrus/Makefile b/drivers/staging/media/sunxi/cedrus/Makefile
+--- a/drivers/staging/media/sunxi/cedrus/Makefile
++++ b/drivers/staging/media/sunxi/cedrus/Makefile
+@@ -3,4 +3,5 @@
+ 
+ sunxi-cedrus-y = cedrus.o cedrus_video.o cedrus_hw.o cedrus_dec.o \
+ 		 cedrus_mpeg2.o cedrus_h264.o cedrus_h265.o \
+-		 cedrus_vp8.o cedrus_jpeg.o cedrus_mpeg4.o
++		 cedrus_vp8.o cedrus_jpeg.o cedrus_mpeg4.o \
++		 cedrus_rotate.o
