@@ -1,0 +1,82 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: cursor: an immutable zpos above the layers
+
+With the cursor plane of 0042 on the CRTC, the kernel oopsed in
+sun4i_backend_atomic_check() (NULL dereference): the zpos normalization
+counts every plane, the cursor (zpos 0, no property) sorted between the
+layers, and the backend, which skips the cursor, indexed its layer array
+by normalized zpos and met the hole. drm_plane_register_all() had warned
+too ("Mixing planes with and without zpos property is invalid").
+
+Give the cursor an immutable zpos of SUN4I_BACKEND_NUM_LAYERS, above the
+layers', so it always sorts last; and make the backend's check close
+any gap in its layer array and refuse a zpos past it, so a gap can never
+be dereferenced.
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -609,7 +609,7 @@
+ 	unsigned int num_color_keys = 0;
+ 	struct drm_property_blob *palette = NULL;
+ 	unsigned int current_pipe = 0;
+-	unsigned int i;
++	unsigned int i, j;
+ 
+ 	DRM_DEBUG_DRIVER("Starting checking our planes\n");
+ 
+@@ -673,6 +673,8 @@
+ 				 plane_state->normalized_zpos);
+ 
+ 		/* Sort our planes by Zpos */
++		if (plane_state->normalized_zpos >= SUN4I_BACKEND_NUM_LAYERS)
++			return -EINVAL;
+ 		plane_states[plane_state->normalized_zpos] = plane_state;
+ 
+ 		num_planes++;
+@@ -724,6 +726,19 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * Close any gap the zpos normalization left between the layers:
++	 * it counts every plane on the CRTC, and the cursor is not one of
++	 * the layers (its zpos is above them, so there should be none).
++	 */
++	for (i = 0, j = 0; i < SUN4I_BACKEND_NUM_LAYERS; i++)
++		if (plane_states[i])
++			plane_states[j++] = plane_states[i];
++	for (; j < SUN4I_BACKEND_NUM_LAYERS; j++)
++		plane_states[j] = NULL;
++	if (!num_planes)
++		return 0;
++
+ 	/* We can't have an alpha plane at the lowest position */
+ 	if (!backend->quirks->supports_lowest_plane_alpha &&
+ 	    (plane_states[0]->alpha != DRM_BLEND_ALPHA_OPAQUE))
+diff --git a/drivers/gpu/drm/sun4i/sun4i_cursor.c b/drivers/gpu/drm/sun4i/sun4i_cursor.c
+--- a/drivers/gpu/drm/sun4i/sun4i_cursor.c
++++ b/drivers/gpu/drm/sun4i/sun4i_cursor.c
+@@ -25,6 +25,7 @@
+ 
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
++#include <drm/drm_blend.h>
+ #include <drm/drm_fb_dma_helper.h>
+ #include <drm/drm_fourcc.h>
+ #include <drm/drm_framebuffer.h>
+@@ -427,5 +428,14 @@
+ 
+ 	drm_plane_helper_add(&cursor->plane, &sun4i_cursor_helper_funcs);
+ 
++	/*
++	 * The cursor is drawn over every layer: an immutable zpos above
++	 * theirs (0 to SUN4I_BACKEND_NUM_LAYERS - 1) keeps it last when the
++	 * zpos are normalized, so the layers stay 0..n-1 for the backend's
++	 * check. (Planes with and without zpos may not be mixed either.)
++	 */
++	drm_plane_create_zpos_immutable_property(&cursor->plane,
++						 SUN4I_BACKEND_NUM_LAYERS);
++
+ 	return &cursor->plane;
+ }

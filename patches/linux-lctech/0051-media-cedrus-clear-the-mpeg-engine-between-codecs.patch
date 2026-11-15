@@ -1,0 +1,95 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: clear the MPEG engine between MPEG-1/2, MPEG-4 and JPEG
+
+The MPEG engine decodes MPEG-1/2, MPEG-4 and JPEG and keeps what a job
+wrote in its registers. On the F1C200s a JPEG decoded after a single
+MPEG-2 picture came out with flat luma and wrong chroma (PSNR Y 3 dB,
+against 72 dB from a fresh boot), and stayed so until a reboot: map tiles
+broke as soon as any MPEG video had played.
+
+Before each of those codecs sets its registers, put the ones the others
+use back to their power-on value, zero (cedrus_mpeg_engine_clear()).
+---
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -81,6 +81,35 @@
+ 	return 0;
+ }
+ 
++/*
++ * The MPEG engine runs MPEG-1/2, MPEG-4 and JPEG, and keeps whatever a job
++ * set in its registers until the next one changes it. A JPEG decoded after
++ * an MPEG-2 picture comes out with flat luma (seen on the F1C200s: PSNR 3
++ * dB instead of 72), so each of those codecs first puts the registers the
++ * others use back to their power-on value, zero, before setting its own.
++ */
++void cedrus_mpeg_engine_clear(struct cedrus_dev *dev)
++{
++	static const u32 regs[] = {
++		VE_DEC_MPEG_MP12HDR, VE_DEC_MPEG_VOPHDR,
++		VE_DEC_MPEG_PICCODEDSIZE, VE_DEC_MPEG_PICBOUNDSIZE,
++		VE_DEC_MPEG_MBADDR, VE_DEC_MPEG_TRBTRD_FIELD,
++		VE_DEC_MPEG_TRBTRD_FRAME, VE_DEC_MPEG_MBH_ADDR,
++		VE_DEC_MPEG_DCAC_ADDR, VE_DEC_MPEG_NCF_ADDR,
++		VE_DEC_MPEG_REC_LUMA, VE_DEC_MPEG_REC_CHROMA,
++		VE_DEC_MPEG_FWD_REF_LUMA_ADDR, VE_DEC_MPEG_FWD_REF_CHROMA_ADDR,
++		VE_DEC_MPEG_BWD_REF_LUMA_ADDR, VE_DEC_MPEG_BWD_REF_CHROMA_ADDR,
++		VE_DEC_MPEG_QP_INPUT, VE_DEC_MPEG_JPEG_SIZE,
++		VE_DEC_MPEG_JPEG_RES_INT, VE_DEC_MPEG_ERROR,
++		VE_DEC_MPEG_CRTMBADDR, VE_DEC_MPEG_ROT_LUMA,
++		VE_DEC_MPEG_ROT_CHROMA, VE_DEC_MPEG_SD_ROT_DBLK_CTL,
++	};
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(regs); i++)
++		cedrus_write(dev, regs[i], 0);
++}
++
+ void cedrus_engine_disable(struct cedrus_dev *dev)
+ {
+ 	cedrus_write(dev, VE_MODE, VE_MODE_DISABLED);
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_hw.h b/drivers/staging/media/sunxi/cedrus/cedrus_hw.h
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.h
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.h
+@@ -18,6 +18,7 @@
+ 
+ int cedrus_engine_enable(struct cedrus_ctx *ctx);
+ void cedrus_engine_disable(struct cedrus_dev *dev);
++void cedrus_mpeg_engine_clear(struct cedrus_dev *dev);
+ 
+ void cedrus_dst_format_set(struct cedrus_dev *dev,
+ 			   struct v4l2_pix_format *fmt);
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_jpeg.c
+@@ -281,6 +281,7 @@
+ 
+ 	/* Activate MPEG engine and select JPEG subengine. */
+ 	cedrus_engine_enable(ctx);
++	cedrus_mpeg_engine_clear(dev);
+ 
+ 	reg = VE_DEC_MPEG_TRIGGER_JPEG | subsampling;
+ 	cedrus_write(dev, VE_DEC_MPEG_TRIGGER, reg);
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg2.c
+@@ -67,6 +67,7 @@
+ 
+ 	/* Activate MPEG engine. */
+ 	cedrus_engine_enable(ctx);
++	cedrus_mpeg_engine_clear(dev);
+ 
+ 	/* Set intra quantisation matrix. */
+ 	matrix = quantisation->intra_quantiser_matrix;
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
+@@ -91,6 +91,7 @@
+ 		return -EINVAL;
+ 
+ 	cedrus_engine_enable(ctx);
++	cedrus_mpeg_engine_clear(dev);
+ 
+ 	/* MPEG quantisation: its matrices, as MPEG-2 loads them */
+ 	if (vop->flags & V4L2_MPEG4_VOP_FLAG_QUANT_TYPE) {
