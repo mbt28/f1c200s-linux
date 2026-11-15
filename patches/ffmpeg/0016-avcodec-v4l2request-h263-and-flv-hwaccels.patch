@@ -1,0 +1,229 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] avcodec: V4L2 Request API h263 and flv hwaccels (cedrus)
+
+H.263 baseline is MPEG-4's short video header, and Sorenson Spark (FLV1)
+is H.263 with its own picture header and, in format 1, its own escape
+codes. Both go through the MPEG-4 VOP control of the f1c200s-linux cedrus
+kernel, with the control's short_header field saying which (H.263, or
+Sorenson format 1); the headers are parsed here, as for MPEG-4.
+
+The flv decoder gets a hardware config list, h263_get_format() lets
+FLV1 ask for one, and FLV1, whose size is in its picture header, sets up
+its pictures after the first header, as H.263 does. Baseline only:
+PB-frames and the H.263+ annexes stay in
+software.
+---
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -3298,6 +3298,10 @@
+ mpeg2_v4l2request_hwaccel_deps="v4l2_request mpeg2_v4l2_request"
+ mpeg4_v4l2request_hwaccel_deps="v4l2_request mpeg4_v4l2_request"
+ mpeg4_v4l2request_hwaccel_select="mpeg4_decoder"
++h263_v4l2request_hwaccel_deps="v4l2_request mpeg4_v4l2_request"
++h263_v4l2request_hwaccel_select="h263_decoder"
++flv_v4l2request_hwaccel_deps="v4l2_request mpeg4_v4l2_request"
++flv_v4l2request_hwaccel_select="flv_decoder"
+ mpeg2_v4l2request_hwaccel_select="mpeg2video_decoder"
+ mpeg2_vaapi_hwaccel_deps="vaapi"
+ mpeg2_vaapi_hwaccel_select="mpeg2video_decoder"
+diff --git a/libavcodec/flvdec.c b/libavcodec/flvdec.c
+--- a/libavcodec/flvdec.c
++++ b/libavcodec/flvdec.c
+@@ -18,9 +18,12 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+ 
++#include "config_components.h"
++
+ #include "libavutil/imgutils.h"
+ 
+ #include "codec_internal.h"
++#include "hwconfig.h"
+ #include "flvdec.h"
+ #include "h263dec.h"
+ #include "mpegvideo.h"
+@@ -107,6 +110,13 @@
+     return 0;
+ }
+ 
++static const AVCodecHWConfigInternal *const flv_hw_config_list[] = {
++#if CONFIG_FLV_V4L2REQUEST_HWACCEL
++    HWACCEL_V4L2REQUEST(flv),
++#endif
++    NULL
++};
++
+ const FFCodec ff_flv_decoder = {
+     .p.name         = "flv",
+     CODEC_LONG_NAME("FLV / Sorenson Spark / Sorenson H.263 (Flash Video)"),
+@@ -120,4 +130,5 @@
+     .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP |
+                       FF_CODEC_CAP_SKIP_FRAME_FILL_PARAM,
+     .p.max_lowres   = 3,
++    .hw_configs     = flv_hw_config_list,
+ };
+diff --git a/libavcodec/h263dec.c b/libavcodec/h263dec.c
+--- a/libavcodec/h263dec.c
++++ b/libavcodec/h263dec.c
+@@ -59,7 +59,7 @@
+ #if CONFIG_MPEG4_VDPAU_HWACCEL
+     AV_PIX_FMT_VDPAU,
+ #endif
+-#if CONFIG_MPEG4_V4L2REQUEST_HWACCEL
++#if CONFIG_MPEG4_V4L2REQUEST_HWACCEL || CONFIG_H263_V4L2REQUEST_HWACCEL || CONFIG_FLV_V4L2REQUEST_HWACCEL
+     AV_PIX_FMT_DRM_PRIME,
+ #endif
+ #if CONFIG_H263_VIDEOTOOLBOX_HWACCEL || CONFIG_MPEG4_VIDEOTOOLBOX_HWACCEL
+@@ -85,7 +85,8 @@
+ 
+     if (avctx->codec_id == AV_CODEC_ID_H263  ||
+         avctx->codec_id == AV_CODEC_ID_H263P ||
+-        avctx->codec_id == AV_CODEC_ID_MPEG4)
++        avctx->codec_id == AV_CODEC_ID_MPEG4 ||
++        (CONFIG_FLV_V4L2REQUEST_HWACCEL && avctx->codec_id == AV_CODEC_ID_FLV1))
+         return avctx->pix_fmt = ff_get_format(avctx, h263_hwaccel_pixfmt_list_420);
+ 
+     return AV_PIX_FMT_YUV420P;
+@@ -169,10 +170,12 @@
+         if (avctx->extradata_size == 56 && avctx->extradata[0] == 1)
+             h->ehc_mode = 1;
+ 
+-    /* for H.263, we allocate the images after having read the header */
++    /* for H.263, we allocate the images after having read the header;
++     * so for FLV1, whose size is in its picture header too */
+     if (avctx->codec->id != AV_CODEC_ID_H263 &&
+         avctx->codec->id != AV_CODEC_ID_H263P &&
+-        avctx->codec->id != AV_CODEC_ID_MPEG4) {
++        avctx->codec->id != AV_CODEC_ID_MPEG4 &&
++        avctx->codec->id != AV_CODEC_ID_FLV1) {
+         avctx->pix_fmt = h263_get_format(avctx);
+         if ((ret = ff_mpv_common_init(s)) < 0)
+             return ret;
+@@ -662,6 +665,9 @@
+ #if CONFIG_H263_VIDEOTOOLBOX_HWACCEL
+     HWACCEL_VIDEOTOOLBOX(h263),
+ #endif
++#if CONFIG_H263_V4L2REQUEST_HWACCEL
++    HWACCEL_V4L2REQUEST(h263),
++#endif
+     NULL
+ };
+ 
+diff --git a/libavcodec/hwaccels.h b/libavcodec/hwaccels.h
+--- a/libavcodec/hwaccels.h
++++ b/libavcodec/hwaccels.h
+@@ -65,6 +65,8 @@
+ extern const struct FFHWAccel ff_mpeg1_v4l2request_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_v4l2request_hwaccel;
+ extern const struct FFHWAccel ff_mpeg4_v4l2request_hwaccel;
++extern const struct FFHWAccel ff_h263_v4l2request_hwaccel;
++extern const struct FFHWAccel ff_flv_v4l2request_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_vaapi_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_vdpau_hwaccel;
+ extern const struct FFHWAccel ff_mpeg2_videotoolbox_hwaccel;
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1070,6 +1070,8 @@
+ OBJS-$(CONFIG_MPEG1_V4L2REQUEST_HWACCEL)  += v4l2_request_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_V4L2REQUEST_HWACCEL)  += v4l2_request_mpeg2.o
+ OBJS-$(CONFIG_MPEG4_V4L2REQUEST_HWACCEL)  += v4l2_request_mpeg4.o
++OBJS-$(CONFIG_H263_V4L2REQUEST_HWACCEL)   += v4l2_request_mpeg4.o
++OBJS-$(CONFIG_FLV_V4L2REQUEST_HWACCEL)    += v4l2_request_mpeg4.o
+ OBJS-$(CONFIG_MPEG2_VAAPI_HWACCEL)        += vaapi_mpeg2.o
+ OBJS-$(CONFIG_MPEG2_VDPAU_HWACCEL)        += vdpau_mpeg12.o
+ OBJS-$(CONFIG_MPEG2_VIDEOTOOLBOX_HWACCEL) += videotoolbox.o
+diff --git a/libavcodec/v4l2_request_mpeg4.c b/libavcodec/v4l2_request_mpeg4.c
+--- a/libavcodec/v4l2_request_mpeg4.c
++++ b/libavcodec/v4l2_request_mpeg4.c
+@@ -119,6 +119,47 @@
+     return 0;
+ }
+ 
++/*
++ * H.263 (and Sorenson Spark, which is H.263 with its own picture header and,
++ * in format 1, its own escape codes) is MPEG-4's short video header: the
++ * same macroblock layer, decoded by the same engine. Only the H.263
++ * decoder's context is valid here, not Mpeg4DecContext.
++ */
++static int v4l2_request_h263_start_frame(AVCodecContext *avctx,
++                                         av_unused const AVBufferRef *buf_ref,
++                                         av_unused const uint8_t *buffer,
++                                         av_unused uint32_t size)
++{
++    H263DecContext *const h = avctx->priv_data;
++    MPVContext *const s = &h->c;
++    V4L2RequestControlsMPEG4 *controls = s->cur_pic.ptr->hwaccel_picture_private;
++    struct v4l2_ctrl_mpeg4_vop *vop = &controls->vop;
++    int ret;
++
++    /* baseline only: no PB-frames, no H.263+ annexes */
++    if (s->pict_type != AV_PICTURE_TYPE_I && s->pict_type != AV_PICTURE_TYPE_P)
++        return AVERROR_PATCHWELCOME;
++
++    ret = ff_v4l2_request_start_frame(avctx, &controls->pic, s->cur_pic.ptr->f);
++    if (ret)
++        return ret;
++
++    *vop = (struct v4l2_ctrl_mpeg4_vop) {
++        .vop_coding_type   = s->pict_type - AV_PICTURE_TYPE_I,
++        .vop_fcode_forward = 1,
++        .short_header      = avctx->codec_id == AV_CODEC_ID_FLV1 && h->flv ?
++                             V4L2_MPEG4_SHORT_HEADER_SORENSON :
++                             V4L2_MPEG4_SHORT_HEADER_H263,
++    };
++    if (s->no_rounding)
++        vop->flags |= V4L2_MPEG4_VOP_FLAG_ROUNDING_TYPE;
++    if (s->pict_type == AV_PICTURE_TYPE_P && s->last_pic.ptr)
++        vop->forward_ref_ts =
++            ff_v4l2_request_get_capture_timestamp(s->last_pic.ptr->f);
++
++    return 0;
++}
++
+ static int v4l2_request_mpeg4_decode_slice(AVCodecContext *avctx,
+                                            const uint8_t *buffer, uint32_t size)
+ {
+@@ -178,3 +219,41 @@
+     .frame_params       = v4l2_request_mpeg4_frame_params,
+     .caps_internal      = HWACCEL_CAP_ASYNC_SAFE,
+ };
++
++#if CONFIG_H263_V4L2REQUEST_HWACCEL
++const FFHWAccel ff_h263_v4l2request_hwaccel = {
++    .p.name             = "h263_v4l2request",
++    .p.type             = AVMEDIA_TYPE_VIDEO,
++    .p.id               = AV_CODEC_ID_H263,
++    .p.pix_fmt          = AV_PIX_FMT_DRM_PRIME,
++    .start_frame        = v4l2_request_h263_start_frame,
++    .decode_slice       = v4l2_request_mpeg4_decode_slice,
++    .end_frame          = v4l2_request_mpeg4_end_frame,
++    .flush              = ff_v4l2_request_flush,
++    .frame_priv_data_size = sizeof(V4L2RequestControlsMPEG4),
++    .init               = v4l2_request_mpeg4_init,
++    .uninit             = ff_v4l2_request_uninit,
++    .priv_data_size     = sizeof(V4L2RequestContext),
++    .frame_params       = v4l2_request_mpeg4_frame_params,
++    .caps_internal      = HWACCEL_CAP_ASYNC_SAFE,
++};
++#endif
++
++#if CONFIG_FLV_V4L2REQUEST_HWACCEL
++const FFHWAccel ff_flv_v4l2request_hwaccel = {
++    .p.name             = "flv_v4l2request",
++    .p.type             = AVMEDIA_TYPE_VIDEO,
++    .p.id               = AV_CODEC_ID_FLV1,
++    .p.pix_fmt          = AV_PIX_FMT_DRM_PRIME,
++    .start_frame        = v4l2_request_h263_start_frame,
++    .decode_slice       = v4l2_request_mpeg4_decode_slice,
++    .end_frame          = v4l2_request_mpeg4_end_frame,
++    .flush              = ff_v4l2_request_flush,
++    .frame_priv_data_size = sizeof(V4L2RequestControlsMPEG4),
++    .init               = v4l2_request_mpeg4_init,
++    .uninit             = ff_v4l2_request_uninit,
++    .priv_data_size     = sizeof(V4L2RequestContext),
++    .frame_params       = v4l2_request_mpeg4_frame_params,
++    .caps_internal      = HWACCEL_CAP_ASYNC_SAFE,
++};
++#endif

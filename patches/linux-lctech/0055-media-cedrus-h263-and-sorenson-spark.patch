@@ -1,0 +1,297 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: cedrus: H.263 and Sorenson Spark through the MPEG-4 path
+
+The F1C200s manual (2.5, Video Engine) lists "MPEG4 SP/ASP GMC and H.263
+including Sorenson Spark" decoding but documents no VE registers. The
+layouts come from the DWARF debug info of Allwinner's libawmpeg4h263.so
+and libawmpeg4base.so (mp4regMVOPHR, mp4regVETRIGGER, ...), the sequence
+from that library's code (Ghidra): VOP header bit 31 short_video_header,
+bit 11 sorenson_h263_version, and the picture decoded one GOB per
+trigger (Mp4H263GetGobHdr_3gp, Mp4H263SetPacketInfo, Mp4H263SetVbvInfo).
+After each GOB the VLD offset register holds the engine's bit position; a
+GOB header there (GBSC, GN, GFID, GQUANT) gives the next GOB its quantiser,
+start macroblock and a macroblock boundary (prediction reset).
+
+- uAPI: short_header in struct v4l2_ctrl_mpeg4_vop (one of the reserved
+  bytes; the size does not change): H.263 (also Sorenson format 0) or
+  Sorenson format 1. User space parses the picture header, as for MPEG-4.
+- cedrus: an irq_continue codec op lets a job span several triggers; the
+  MPEG-4 codec uses it for H.263 GOBs. Baseline only (I and P pictures).
+- The watchdog forgets the last codec, so the job after a timeout pulses
+  the engine's own reset (0051): the CCU reset does not reset it, and a
+  hung engine otherwise stayed hung while the codec did not change.
+
+On the board (352x288, PSNR Y/UV against ffmpeg's software decode over
+10 frames): H.263 80/83 -> 63/66 dB, H.263 with GOB headers bit-identical
+to the same stream without them, Sorenson Spark format 1 70/70 -> 63/64.
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus.h b/drivers/staging/media/sunxi/cedrus/cedrus.h
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.h
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.h
+@@ -178,6 +178,15 @@
+ 			size_t		dcac_buf_size;
+ 			void		*ncf_buf;
+ 			dma_addr_t	ncf_buf_dma;
++			/* H.263 / Sorenson: decoded one GOB per trigger */
++			u8		short_header;
++			const u8	*src;
++			unsigned int	src_size;
++			u32		vld_addr;
++			u32		vld_end;
++			unsigned int	gob_mbs;
++			unsigned int	mba;
++			unsigned int	total_mbs;
+ 		} mpeg4;
+ 	} codec;
+ };
+@@ -196,6 +205,8 @@
+ 	void (*stop)(struct cedrus_ctx *ctx);
+ 	void (*buf_cleanup)(struct cedrus_ctx *ctx, struct vb2_buffer *vb);
+ 	void (*trigger)(struct cedrus_ctx *ctx);
++	/* after a successful interrupt: true if the job goes on (re-triggered) */
++	bool (*irq_continue)(struct cedrus_ctx *ctx);
+ 	unsigned int (*extra_cap_size)(struct cedrus_ctx *ctx,
+ 				       struct v4l2_pix_format *pix_fmt);
+ };
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -182,6 +182,14 @@
+ 	if (status == CEDRUS_IRQ_NONE)
+ 		return IRQ_NONE;
+ 
++	/* a job decoded in several segments (H.263 GOBs) */
++	if (status == CEDRUS_IRQ_OK && ctx->current_codec->irq_continue &&
++	    ctx->current_codec->irq_continue(ctx)) {
++		schedule_delayed_work(&dev->watchdog_work,
++				      msecs_to_jiffies(2000));
++		return IRQ_HANDLED;
++	}
++
+ 	ctx->current_codec->irq_disable(ctx);
+ 	ctx->current_codec->irq_clear(ctx);
+ 
+@@ -210,6 +218,11 @@
+ 
+ 	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
+ 	reset_control_reset(dev->rstc);
++	/*
++	 * The CCU reset leaves the suniv engine as it is; forgetting the
++	 * codec makes the next job pulse the engine's own reset.
++	 */
++	dev->last_codec = NULL;
+ 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
+ 					 VB2_BUF_STATE_ERROR);
+ }
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
+@@ -10,8 +10,16 @@
+  * other stateless codecs.
+  *
+  * As libvdpau-sunxi, this decodes VOPs without resync markers only (the
+- * VOL's resync_marker_disable set), and neither H.263's short video header
+- * nor Sorenson Spark: how the engine takes those is not known.
++ * VOL's resync_marker_disable set).
++ *
++ * H.263 (MPEG-4's short video header) and Sorenson Spark go through the same
++ * engine, as Allwinner's libawmpeg4h263 drives it (its register layouts
++ * come from that library's debug info, the sequence from its code): VOP
++ * header bit 31 short_video_header, bit 11 for Sorenson format 1's escapes,
++ * and the picture decoded one GOB per trigger. After each GOB the VLD offset
++ * register holds the engine's bit position; a GOB header there (GBSC, GN,
++ * GFID, GQUANT) gives the next GOB a new quantiser and a macroblock
++ * boundary, which resets the prediction, and its start position.
+  */
+ 
+ #include <linux/dma-mapping.h>
+@@ -24,6 +32,9 @@
+ 
+ #define CEDRUS_MPEG4_NCF_BUF_SIZE	SZ_4K
+ 
++#define VE_DEC_MPEG_VOPHDR_SORENSON		BIT(11)
++#define VE_DEC_MPEG_VOPHDR_SHORT_VIDEO_HEADER	BIT(31)
++
+ static enum cedrus_irq_status cedrus_mpeg4_irq_status(struct cedrus_ctx *ctx)
+ {
+ 	struct cedrus_dev *dev = ctx->dev;
+@@ -76,7 +87,14 @@
+ 	unsigned int i;
+ 	u32 reg;
+ 
+-	if (!(vop->flags & V4L2_MPEG4_VOP_FLAG_RESYNC_MARKER_DISABLE)) {
++	if (vop->short_header > V4L2_MPEG4_SHORT_HEADER_SORENSON ||
++	    (vop->short_header && vop->vop_coding_type > V4L2_MPEG4_VOP_TYPE_P)) {
++		v4l2_err(&dev->v4l2_dev, "H.263: baseline I and P pictures only\n");
++		return -EINVAL;
++	}
++
++	if (!vop->short_header &&
++	    !(vop->flags & V4L2_MPEG4_VOP_FLAG_RESYNC_MARKER_DISABLE)) {
+ 		v4l2_err(&dev->v4l2_dev,
+ 			 "MPEG-4 VOPs with resync markers are not supported\n");
+ 		return -EINVAL;
+@@ -133,6 +151,10 @@
+ 		reg |= VE_DEC_MPEG_VOPHDR_FCODE_FORWARD(vop->vop_fcode_forward);
+ 	if (b_vop)
+ 		reg |= VE_DEC_MPEG_VOPHDR_FCODE_BACKWARD(vop->vop_fcode_backward);
++	if (vop->short_header)
++		reg |= VE_DEC_MPEG_VOPHDR_SHORT_VIDEO_HEADER;
++	if (vop->short_header == V4L2_MPEG4_SHORT_HEADER_SORENSON)
++		reg |= VE_DEC_MPEG_VOPHDR_SORENSON;
+ 	cedrus_write(dev, VE_DEC_MPEG_VOPHDR, reg);
+ 
+ 	/* Sizes: in macroblocks (plus the width rounded up to even), and pixels. */
+@@ -187,11 +209,122 @@
+ 	cedrus_write(dev, VE_DEC_MPEG_VLD_ADDR, reg);
+ 	cedrus_write(dev, VE_DEC_MPEG_VLD_END_ADDR, src_buf_addr + size);
+ 
++	/*
++	 * H.263: a GOB is one macroblock row up to CIF, two for 4CIF and
++	 * four for 16CIF. Sorenson Spark has no GOB headers, so its rows just
++	 * run on from one trigger to the next.
++	 */
++	ctx->codec.mpeg4.short_header = vop->short_header;
++	if (vop->short_header) {
++		ctx->codec.mpeg4.src = vb2_plane_vaddr(&run->src->vb2_buf, 0);
++		if (!ctx->codec.mpeg4.src)
++			return -EINVAL;
++		ctx->codec.mpeg4.src_size = size;
++		ctx->codec.mpeg4.vld_addr = reg;
++		ctx->codec.mpeg4.vld_end = src_buf_addr + size;
++		ctx->codec.mpeg4.gob_mbs = width * (height <= 25 ? 1 :
++						    height <= 50 ? 2 : 4);
++		ctx->codec.mpeg4.mba = 0;
++		ctx->codec.mpeg4.total_mbs = width * height;
++	}
++
+ 	return 0;
+ }
+ 
++static unsigned int cedrus_h263_bits(const u8 *p, unsigned int pos,
++				     unsigned int n)
++{
++	unsigned int v = 0;
++
++	while (n--) {
++		v = (v << 1) | ((p[pos >> 3] >> (7 - (pos & 7))) & 1);
++		pos++;
++	}
++
++	return v;
++}
++
++/*
++ * A GOB header at *pos, or after the stuffing up to the next byte: if so,
++ * *pos moves past it and *gquant is its quantiser.
++ */
++static bool cedrus_h263_gob_header(const u8 *p, unsigned int size,
++				   unsigned int *pos, unsigned int *gquant)
++{
++	unsigned int at = *pos;
++
++	if (at + 29 > size * 8)
++		return false;
++	if (cedrus_h263_bits(p, at, 17) != 1) {
++		at = ALIGN(at, 8);
++		if (at + 29 > size * 8 || cedrus_h263_bits(p, at, 17) != 1)
++			return false;
++	}
++	at += 17 + 5 + 2;			/* GBSC, GN, GFID */
++	*gquant = cedrus_h263_bits(p, at, 5);
++	*pos = at + 5;
++
++	return *gquant != 0;
++}
++
++static void cedrus_h263_trigger_gob(struct cedrus_ctx *ctx, bool boundary)
++{
++	unsigned int n = min(ctx->codec.mpeg4.gob_mbs,
++			     ctx->codec.mpeg4.total_mbs - ctx->codec.mpeg4.mba);
++	u32 reg = VE_DEC_MPEG_TRIGGER_MPEG4 | (n << 8) |
++		  VE_DEC_MPEG_TRIGGER_HW_MB;
++
++	if (boundary)
++		reg |= VE_DEC_MPEG_TRIGGER_MB_BOUNDARY;
++	cedrus_write(ctx->dev, VE_DEC_MPEG_TRIGGER, reg);
++}
++
++static bool cedrus_mpeg4_irq_continue(struct cedrus_ctx *ctx)
++{
++	struct cedrus_dev *dev = ctx->dev;
++	unsigned int width = cedrus_mpeg4_mbs(ctx->src_fmt.width);
++	unsigned int pos, gquant;
++	bool boundary;
++
++	if (!ctx->codec.mpeg4.short_header)
++		return false;
++
++	ctx->codec.mpeg4.mba += ctx->codec.mpeg4.gob_mbs;
++	if (ctx->codec.mpeg4.mba >= ctx->codec.mpeg4.total_mbs)
++		return false;
++
++	/* where the engine stopped, and a GOB header there */
++	pos = cedrus_read(dev, VE_DEC_MPEG_VLD_OFFSET);
++	boundary = cedrus_h263_gob_header(ctx->codec.mpeg4.src,
++					  ctx->codec.mpeg4.src_size,
++					  &pos, &gquant);
++	if (boundary) {
++		cedrus_write(dev, VE_DEC_MPEG_QP_INPUT, gquant);
++		cedrus_write(dev, VE_DEC_MPEG_MBADDR,
++			     ((ctx->codec.mpeg4.mba % width) << 8) |
++			     (ctx->codec.mpeg4.mba / width));
++	}
++
++	cedrus_write(dev, VE_DEC_MPEG_STATUS, 0xffffffff);
++	cedrus_write(dev, VE_DEC_MPEG_CRTMBADDR, 0);
++	cedrus_write(dev, VE_DEC_MPEG_ERROR, 0);
++	cedrus_write(dev, VE_DEC_MPEG_VLD_OFFSET, pos);
++	cedrus_write(dev, VE_DEC_MPEG_VLD_LEN,
++		     ctx->codec.mpeg4.src_size * 8 - pos);
++	cedrus_write(dev, VE_DEC_MPEG_VLD_ADDR, ctx->codec.mpeg4.vld_addr);
++	cedrus_write(dev, VE_DEC_MPEG_VLD_END_ADDR, ctx->codec.mpeg4.vld_end);
++	cedrus_h263_trigger_gob(ctx, boundary);
++
++	return true;
++}
++
+ static void cedrus_mpeg4_trigger(struct cedrus_ctx *ctx)
+ {
++	if (ctx->codec.mpeg4.short_header) {
++		cedrus_h263_trigger_gob(ctx, true);
++		return;
++	}
++
+ 	unsigned int mbs = cedrus_mpeg4_mbs(ctx->src_fmt.width) *
+ 			   cedrus_mpeg4_mbs(ctx->src_fmt.height);
+ 
+@@ -270,4 +403,5 @@
+ 	.start		= cedrus_mpeg4_start,
+ 	.stop		= cedrus_mpeg4_stop,
+ 	.trigger	= cedrus_mpeg4_trigger,
++	.irq_continue	= cedrus_mpeg4_irq_continue,
+ };
+diff --git a/include/uapi/linux/v4l2-controls.h b/include/uapi/linux/v4l2-controls.h
+--- a/include/uapi/linux/v4l2-controls.h
++++ b/include/uapi/linux/v4l2-controls.h
+@@ -2096,6 +2096,11 @@
+ #define V4L2_MPEG4_VOP_FLAG_TOP_FIELD_FIRST		0x20
+ #define V4L2_MPEG4_VOP_FLAG_ALTERNATE_VERTICAL_SCAN	0x40
+ 
++/* short_header: the VOP is an H.263 picture (MPEG-4 short video header) */
++#define V4L2_MPEG4_SHORT_HEADER_NONE			0
++#define V4L2_MPEG4_SHORT_HEADER_H263			1	/* also Sorenson Spark format 0 */
++#define V4L2_MPEG4_SHORT_HEADER_SORENSON		2	/* Sorenson Spark format 1: 7/11-bit escapes */
++
+ /**
+  * struct v4l2_ctrl_mpeg4_vop - one MPEG-4 Part 2 VOP
+  *
+@@ -2127,7 +2132,8 @@
+ 	__u8	intra_dc_vlc_thr;
+ 	__u8	vop_fcode_forward;
+ 	__u8	vop_fcode_backward;
+-	__u8	reserved[2];
++	__u8	short_header;
++	__u8	reserved;
+ 	__u8	intra_quant_matrix[64];
+ 	__u8	non_intra_quant_matrix[64];
+ };
