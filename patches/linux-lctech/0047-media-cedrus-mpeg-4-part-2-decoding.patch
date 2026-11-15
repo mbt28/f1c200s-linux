@@ -146,7 +146,7 @@ diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/me
 diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,273 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Cedrus VPU driver: MPEG-4 Part 2 (Simple and Advanced Simple Profile).
@@ -292,8 +292,14 @@ diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_mpeg4.c b/drivers/staging
 +
 +	cedrus_write(dev, VE_DEC_MPEG_MBADDR, 0);
 +
-+	/* Interrupts and the engine's controls, as libvdpau-sunxi sets them. */
-+	reg = 0x80084118 | VE_DEC_MPEG_CTRL_MC_NO_WRITEBACK;
++	/*
++	 * Interrupts and the engine's controls as libvdpau-sunxi sets them,
++	 * plus bit 30: keep the DC/AC prediction of the row above in the DCAC
++	 * buffer. Without it the suniv engine (0x1663) loses the DC of every
++	 * macroblock row after the first (no internal store for it, as for
++	 * H.264's intra prediction): the picture came out near black.
++	 */
++	reg = 0x80084118 | BIT(30) | VE_DEC_MPEG_CTRL_MC_NO_WRITEBACK;
 +	if (vop->vop_coding_type == V4L2_MPEG4_VOP_TYPE_P)
 +		reg |= BIT(12);
 +	cedrus_write(dev, VE_DEC_MPEG_CTRL, reg);

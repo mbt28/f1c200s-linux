@@ -1,0 +1,60 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] drm/sun4i: backend: colour-keyed layers start the second pipe
+
+The backend's colour key (0043) acts in alpha blender 1, which mixes the
+two pipes: "the layer color key match another channel pixel data in
+Alpha Blender1" (F1C200s manual, layer attribute bits 19:18). The atomic
+check moved a layer to pipe 1 only when it had alpha, so with opaque
+layers everything sat in pipe 0 and a COLOR_KEY property did nothing (seen
+on the board through the writeback connector: keyed magenta stayed).
+
+Start the second pipe at a keyed layer, or above the lowest layer when
+that one is keyed, and refuse a mix of alpha and keys that would need a
+third pipe. Also set the lowest layer's pipe to 0 explicitly.
+
+What a key does, as seen on the board through the writeback connector: a
+keyed layer wins wherever the layer in the other pipe has the key colour.
+COLOR_KEY on the lower plane makes the key-coloured pixels of the planes
+above see-through to it (the classic video-under-UI hole); on the top
+plane it changes nothing.
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_backend.c b/drivers/gpu/drm/sun4i/sun4i_backend.c
+--- a/drivers/gpu/drm/sun4i/sun4i_backend.c
++++ b/drivers/gpu/drm/sun4i/sun4i_backend.c
+@@ -744,18 +744,35 @@
+ 	    (plane_states[0]->alpha != DRM_BLEND_ALPHA_OPAQUE))
+ 		return -EINVAL;
+ 
++	state_to_sun4i_layer_state(plane_states[0])->pipe = 0;
+ 	for (i = 1; i < num_planes; i++) {
+ 		struct drm_plane_state *p_state = plane_states[i];
+ 		struct drm_framebuffer *fb = p_state->fb;
+ 		struct sun4i_layer_state *s_state = state_to_sun4i_layer_state(p_state);
++		bool keyed = s_state->color_key & SUN4I_COLOR_KEY_ENABLE;
++		bool lowest_keyed = i == 1 &&
++			(state_to_sun4i_layer_state(plane_states[0])->color_key &
++			 SUN4I_COLOR_KEY_ENABLE);
+ 
+ 		/*
+ 		 * The only alpha position is the lowest plane of the
+ 		 * second pipe.
++		 *
++		 * The colour key, too, works only between the two pipes
++		 * (in alpha blender 1: "the layer color key match another
++		 * channel pixel data"), so a keyed layer starts the second
++		 * pipe, or, when the lowest layer is keyed, the layer above
++		 * it does.
+ 		 */
+-		if (fb->format->has_alpha || (p_state->alpha != DRM_BLEND_ALPHA_OPAQUE))
++		if (fb->format->has_alpha || (p_state->alpha != DRM_BLEND_ALPHA_OPAQUE) ||
++		    keyed || lowest_keyed)
+ 			current_pipe++;
+ 
++		if (current_pipe > 1) {
++			DRM_DEBUG_DRIVER("Alpha and colour key need more than two pipes\n");
++			return -EINVAL;
++		}
++
+ 		s_state->pipe = current_pipe;
+ 	}
+ 
