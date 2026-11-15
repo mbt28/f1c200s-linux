@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Sun, 15 Nov 2026 00:00:00 +0000
+Subject: [PATCH] sunxi: suniv: take the DRAM clock from CONFIG_DRAM_CLK
+
+dram_suniv.c hardcodes 156 MHz and ignores CONFIG_DRAM_CLK, which the
+suniv board defconfigs set (to the same 156), so the clock cannot be
+changed from the configuration. Use the option, as the other DRAM
+drivers do. The PLL_DDR steps make it a multiple of 12 MHz here; the
+fixed cycle timings of this driver (tRFC 13 cycles >= 70 ns) hold up to
+180 MHz.
+
+No change at the default.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+--- a/arch/arm/mach-sunxi/dram_suniv.c
++++ b/arch/arm/mach-sunxi/dram_suniv.c
+@@ -55,7 +55,7 @@
+ 
+ struct dram_para suniv_dram_para = {
+ 	.size = 32,
+-	.clk = 156,
++	.clk = CONFIG_DRAM_CLK,
+ 	.access_mode = 1,
+ 	.cs_num = 1,
+ 	.ddr8_remap = 0,
