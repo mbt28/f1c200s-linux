@@ -1,0 +1,67 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] media: suniv-di: run the module clock at 148.5 MHz
+
+The de-interlacer (0048) left its module clock at the reset divider,
+which makes it pll-video itself: 297 MHz on the F1C200s. There it puts
+isolated wrong pixels on the interpolated lines (0, or about twice the
+neighbourhood, where both fields, the previous frame and the vertical
+average agree), and not the same ones from run to run.
+
+Measured on the board, isolated outliers in 30 film frames with the
+manual's DI_PARA defaults:
+
+  module clock    stray pixels
+  297 MHz             131-139   (display on or off, LEHU running or not)
+  148.5 MHz             0
+  74.25 MHz             0
+
+At 148.5 MHz the composite camera is clean too (0 in 10 frames, against
+~30 per frame), the motion quality is unchanged (36.94 dB against the
+true progressive frame of a 50 fps test pattern) and 50 frames still
+take 1.3 s, input and output included.
+
+Set the rate on every resume, as a divider of pll-video, which the LCD
+controller owns and which is therefore not changed.
+---
+diff --git a/drivers/media/platform/sunxi/suniv-di/suniv-di.c b/drivers/media/platform/sunxi/suniv-di/suniv-di.c
+--- a/drivers/media/platform/sunxi/suniv-di/suniv-di.c
++++ b/drivers/media/platform/sunxi/suniv-di/suniv-di.c
+@@ -59,6 +59,15 @@
+ #define SUNIV_DI_FLAG_ADDR		0x70
+ #define SUNIV_DI_PARA			0x80
+ 
++/*
++ * The module clock. Left at the reset divider it is pll-video itself, 297
++ * MHz, and the de-interlacer then writes isolated wrong pixels (0, or
++ * about twice the neighbourhood) on the interpolated lines, differently
++ * from run to run: ~4 per frame on film, ~30 on the composite camera. At
++ * 148.5 MHz there are none, and 720x576 still takes well under a field.
++ */
++#define SUNIV_DI_MOD_RATE		148500000
++
+ #define SUNIV_DI_MIN_WIDTH		32U
+ #define SUNIV_DI_MIN_HEIGHT		32U
+ #define SUNIV_DI_MAX_WIDTH		720U
+@@ -775,8 +784,9 @@
+ }
+ 
+ /*
+- * The module clock is left at whatever rate it has: its parents include
+- * pll-video, which the LCD controller depends on.
++ * The module clock is set on every resume, as a divider of whatever
++ * pll-video runs at: the LCD controller owns that PLL, so its rate is not
++ * changed (the clock has no CLK_SET_RATE_PARENT).
+  */
+ static int suniv_di_runtime_resume(struct device *device)
+ {
+@@ -791,6 +801,10 @@
+ 	if (ret)
+ 		goto err_rst;
+ 
++	ret = clk_set_rate(dev->mod_clk, SUNIV_DI_MOD_RATE);
++	if (ret)
++		dev_warn(dev->dev, "cannot set the module clock: %d\n", ret);
++
+ 	ret = clk_prepare_enable(dev->mod_clk);
+ 	if (ret)
+ 		goto err_bus;
