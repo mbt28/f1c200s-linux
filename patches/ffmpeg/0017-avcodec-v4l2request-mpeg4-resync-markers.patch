@@ -1,0 +1,29 @@
+From: mbt28 <btekbas@gmail.com>
+Subject: [PATCH] avcodec/v4l2request: mpeg4 time_increment_bits and data partitioning
+
+The f1c200s-linux cedrus kernel decodes MPEG-4 VOPs with resync markers
+one video packet at a time, and parses the packet headers itself; a
+header extension needs the VOL's vop_time_increment length. Data
+partitioning is flagged so that the kernel can refuse it.
+---
+diff --git a/libavcodec/v4l2_request_mpeg4.c b/libavcodec/v4l2_request_mpeg4.c
+--- a/libavcodec/v4l2_request_mpeg4.c
++++ b/libavcodec/v4l2_request_mpeg4.c
+@@ -77,6 +77,8 @@
+         .vop_fcode_backward = ctx->b_code,
+         .trb                = { s->pb_time, s->pb_field_time },
+         .trd                = { s->pp_time, s->pp_field_time },
++        /* for video packet headers with a header extension */
++        .time_increment_bits = ctx->time_increment_bits,
+     };
+ 
+     if (ctx->mpeg_quant)
+@@ -85,6 +87,8 @@
+         vop->flags |= V4L2_MPEG4_VOP_FLAG_QUARTER_SAMPLE;
+     if (!ctx->resync_marker)
+         vop->flags |= V4L2_MPEG4_VOP_FLAG_RESYNC_MARKER_DISABLE;
++    if (ctx->h.data_partitioning)
++        vop->flags |= V4L2_MPEG4_VOP_FLAG_DATA_PARTITIONED;
+     if (!s->progressive_sequence)
+         vop->flags |= V4L2_MPEG4_VOP_FLAG_INTERLACED;
+     if (s->no_rounding)
