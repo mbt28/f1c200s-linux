@@ -37,10 +37,18 @@
 					ID_CPU_648 ID_CPU_720 ID_CPU_792>;
 			};
 
+			dram {
+				type = "menu";
+				id = <ID_DRAM>;
+				title = "Memory speed (MHz)";
+				item-label = "156", "180";
+				item-id = <ID_DRAM_156 ID_DRAM_180>;
+			};
+
 			safe {
 				type = "menu";
 				id = <ID_SAFE>;
-				title = "Safe mode (408 MHz, no app)";
+				title = "Safe mode (stock clocks, no app)";
 				item-label = "Off", "On";
 				item-id = <ID_SAFE_OFF ID_SAFE_ON>;
 			};

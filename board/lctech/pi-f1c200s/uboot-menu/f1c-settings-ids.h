@@ -53,5 +53,10 @@ enum {
 	ID_ZRAM_OFF,
 	ID_ZRAM_ON,
 
+	/* added 2026-11-16: the DRAM clock, set by the SPL (patches/uboot/0008) */
+	ID_DRAM,
+	ID_DRAM_156,
+	ID_DRAM_180,
+
 	ID_DYNAMIC_START,
 };

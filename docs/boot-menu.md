@@ -23,6 +23,7 @@ serial text mode yet.
 | Setting | Choices | Kernel argument |
 |---|---|---|
 | CPU speed (MHz) | 408 (default), 528, 600, 648, 720, 792 | `f1c.cpu_mhz=N` |
+| Memory speed (MHz) | 156 (default), 180 | none, set by the SPL |
 | Safe mode | Off, On | `f1c.safe=1` |
 | Kernel messages | Normal, Quiet, Verbose | none, `quiet`, `loglevel=8` |
 | Boot from | Auto (SD, then NAND), SD card, NAND | chooses the boot path |
@@ -32,7 +33,9 @@ serial text mode yet.
   once the filesystems are mounted. U-Boot and the early boot always run at
   the stock 408 MHz. A frequency outside the kernel's table is refused and
   logged.
-- **Safe mode** boots at 408 MHz and keeps the head-unit app (S99carplay)
+- **Memory speed** is the DRAM clock, which only the SPL can set, before
+  DRAM is up. See [Memory speed](#memory-speed) below.
+- **Safe mode** boots at 408 MHz and 156 MHz memory, and keeps the head-unit app (S99carplay)
   from starting. The radios and SSH still come up.
 - The result of each boot is logged in `/var/log/bootopts.log`.
 - Settings apply to a kernel booted from the SD card. The NAND path keeps
@@ -47,6 +50,38 @@ serial text mode yet.
   tick at 408 MHz in `cpufreq/stats/time_in_state`, the rest at 792. U-Boot
   and the kernel's first second still run at 408 MHz, which the SPL sets.
   With no CPU speed set, or in safe mode, LEHU OS stays at 408 MHz.
+
+## Memory speed
+
+The SPL runs before any storage driver, so it cannot read
+`f1c-settings.txt`. The memory speed is instead kept in the SPL's own
+header on the card (sector 16, the eGON header the boot ROM loads with the
+SPL), in a spare word at offset 0x5c: `0x4452 << 16 | MHz`, or 0 for the
+built-in 156 MHz (U-Boot patch 0008).
+
+On every boot, the boot script compares the setting with that word. When
+they differ it rewrites the header sector with the new word and a matching
+checksum, reads it back, and restarts so the SPL picks it up. That restart
+happens once per change. An `f1c-settings.txt` edited on a PC is applied
+the same way on the next boot.
+
+- If the header sector is not the expected SPL header (another loader on
+  the card), the script changes nothing and says so.
+- If the memory fails its check at 180 MHz, the SPL prints
+  `180 MHz failed,` and runs it at 156 MHz instead. The boot script then
+  reports that the memory runs slower than the setting.
+- A broken header (bad checksum) makes the boot ROM skip the card and boot
+  NAND. Rewrite the loader from a PC (`dd` of `u-boot-sunxi-with-spl.bin`
+  at 8 KiB) to recover.
+- On the card the word is at byte 0x205c and the checksum at 0x200c.
+- `f1c_dram_dry=1` in `f1c-settings.txt` (before the file's final NUL
+  byte) makes the script write the new header to sector 15 instead and not
+  restart, to check what it would write.
+
+180 MHz passed a 60-minute memory and video-engine soak on the Lctech Pi
+(2026-11-16). It is an overclock of the stock 156 MHz, so other chips may
+not take it (the fallback above covers a plain failure, not marginal
+errors), and keep 156 for anything that must not fail.
 
 ## Where the settings live
 

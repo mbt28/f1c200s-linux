@@ -44,6 +44,36 @@ setenv f1c_args_log 'if test "${c.loglevel-str}" = "Quiet"; then setenv f1c_extr
 # The Wi-Fi C3 needs none of this; esp32_spi resets it (PE5).
 setenv f1c_bt_reset 'gpio clear PE4; sleep 0.1; gpio input PE4'
 
+# Memory (DRAM) speed. The SPL sets it, long before U-Boot reads this file,
+# from the last word of its own eGON header (patches/uboot/0008), which the
+# boot ROM has copied to SRAM: 445200b4 for 180 MHz, 0 (as built) for the
+# default 156. f1c_dram_sync keeps that word in step with the "Memory speed"
+# setting (safe mode asks for 156). When they differ it rewrites the header
+# sector, card sector 16 where the SPL starts, with the word and the header
+# checksum adjusted by the same amount, reads it back, and restarts the board
+# if the memory runs at another clock than the setting, so the SPL takes it.
+# Before writing it checks that the sector is this SPL's header (eGON.BT0,
+# length 0x6000, 0x50-0x5b free); a read-back mismatch writes the old sector
+# back. A torn write leaves a header the boot ROM refuses: it then boots the
+# SPI NAND, not this card, and the card needs the U-Boot written again.
+#
+# It runs on every boot, which also applies an f1c-settings.txt edited on a PC,
+# and after the form is saved; a U-Boot written to the card later has the word
+# at 0 again and gets it back on the next boot. A clock the SPL could not use
+# (it then falls back to 156) prints a warning and never restarts. The clock
+# running now is PLL_DDR's N: 12 MHz x (N + 1), with K = M = 1 as the SPL sets
+# it. setexpr works in hex: 9c = 156, b4 = 180.
+#
+# f1c_dram_dry=1 (a line in f1c-settings.txt) writes the new header to card
+# sector 15, between the MBR and the SPL, instead, and never restarts: to check
+# the arithmetic from Linux before the real sector is touched.
+setenv f1c_dram_want 'setenv f1c_dw 0; setenv f1c_dc 9c; setenv f1c_dwd 156; if test "${c.dram-str}" = 180 && test "${c.safe-str}" != On; then setenv f1c_dw 445200b4; setenv f1c_dc b4; setenv f1c_dwd 180; fi'
+setenv f1c_dram_now 'setexpr.l f1c_pll *0x01c20020; setexpr f1c_dr ${f1c_pll} / 100; setexpr f1c_dr ${f1c_dr} % 20; setexpr f1c_dr ${f1c_dr} + 1; setexpr f1c_dr ${f1c_dr} * c'
+setenv f1c_dram_hdr 'setenv f1c_hok; if mmc read 0x80C00000 10 1; then setexpr.l f1c_h1 *0x80C00004; setexpr.l f1c_h2 *0x80C00008; setexpr.l f1c_hl *0x80C00010; setexpr.l f1c_p0 *0x80C00050; setexpr.l f1c_p1 *0x80C00054; setexpr.l f1c_p2 *0x80C00058; setexpr.l f1c_ow *0x80C0005c; setexpr.l f1c_cs *0x80C0000c; if test "${f1c_h1}" = 4e4f4765 && test "${f1c_h2}" = 3054422e && test "${f1c_hl}" = 6000 && test "${f1c_p0}" = 0 && test "${f1c_p1}" = 0 && test "${f1c_p2}" = 0; then setenv f1c_hok 1; fi; fi'
+setenv f1c_dram_write 'cp.l 0x80C00000 0x80C02000 80; setexpr f1c_cs ${f1c_cs} - ${f1c_ow}; setexpr f1c_cs ${f1c_cs} + ${f1c_dw}; mw.l 0x80C0005c ${f1c_dw}; mw.l 0x80C0000c ${f1c_cs}; setenv f1c_dsec 10; if test -n "${f1c_dram_dry}"; then setenv f1c_dsec f; fi; if mmc write 0x80C00000 ${f1c_dsec} 1 && mmc read 0x80C01000 ${f1c_dsec} 1 && cmp.l 0x80C00000 0x80C01000 80; then true; else echo "Memory speed: the header did not read back, writing the old one"; mmc write 0x80C02000 ${f1c_dsec} 1; false; fi'
+setenv f1c_dram_sync 'run f1c_dram_want; run f1c_dram_now; run f1c_dram_hdr; if test -z "${f1c_hok}"; then echo "Memory speed: card sector 16 is not the expected SPL header, setting not applied"; elif test "${f1c_ow}" != "${f1c_dw}"; then if run f1c_dram_write; then if test -n "${f1c_dram_dry}"; then echo "Memory speed: dry run, header for ${f1c_dwd} MHz written to sector 15"; else echo "Memory speed: set to ${f1c_dwd} MHz"; if test "${f1c_dr}" != "${f1c_dc}"; then echo "Memory speed: restarting to apply it"; reset; fi; fi; fi; elif test "${f1c_dr}" != "${f1c_dc}"; then echo "Memory speed: the setting is ${f1c_dwd} MHz but the memory runs at 0x${f1c_dr} MHz (the SPL fell back)"; fi'
+run f1c_dram_sync
+
 # Boot Buildroot with the settings. "Auto" is the order the board always
 # had: the SD card, then the on-board NAND. nand_boot sets its own bootargs, so the
 # settings only reach a kernel booted from the SD card.
@@ -128,13 +158,13 @@ setenv f1c_br_ostree_prev 'run f1c_br_ostree_set; setenv f1c_oupd; setenv f1c_oa
 # f1c-settings.txt saved before that menu existed. So each menu added later
 # gets its first item here when the file lacks it. The numbers are item IDs
 # from f1c-settings-ids.h (EXPOID_BASE_ID is 5): ID_OS_BUILDROOT 29,
-# ID_ZRAM_OFF 32. A menu added later gets a line here too.
-setenv f1c_settings_defaults 'if test -z "${c.os}"; then setenv c.os 29; setenv c.os-str Buildroot; fi; if test -z "${c.zram}"; then setenv c.zram 32; setenv c.zram-str Off; fi'
+# ID_ZRAM_OFF 32, ID_DRAM_156 35. A menu added later gets a line here too.
+setenv f1c_settings_defaults 'if test -z "${c.os}"; then setenv c.os 29; setenv c.os-str Buildroot; fi; if test -z "${c.zram}"; then setenv c.zram 32; setenv c.zram-str Off; fi; if test -z "${c.dram}"; then setenv c.dram 35; setenv c.dram-str 156; fi'
 
 # The settings form. ESC or "Exit" leaves without writing; "Save" writes
 # f1c-settings.txt. Either way the menu comes back, and boots by itself
 # after 10 s.
-setenv f1c_settings 'if cedit load mmc 0:1 f1c-settings.dtb; then run f1c_settings_defaults; cedit read_env; if cedit run; then cedit write_env; env export -t 0x80C00000 c.os c.os-str c.cpu c.cpu-str c.safe c.safe-str c.zram c.zram-str c.loglevel c.loglevel-str c.bootsrc c.bootsrc-str; fatwrite mmc 0:1 0x80C00000 f1c-settings.txt ${filesize}; fi; else echo "f1c-settings.dtb missing from the boot partition"; fi; bootmenu 10'
+setenv f1c_settings 'if cedit load mmc 0:1 f1c-settings.dtb; then run f1c_settings_defaults; cedit read_env; if cedit run; then cedit write_env; env export -t 0x80C00000 c.os c.os-str c.cpu c.cpu-str c.dram c.dram-str c.safe c.safe-str c.zram c.zram-str c.loglevel c.loglevel-str c.bootsrc c.bootsrc-str; fatwrite mmc 0:1 0x80C00000 f1c-settings.txt ${filesize}; run f1c_dram_sync; fi; else echo "f1c-settings.dtb missing from the boot partition"; fi; bootmenu 10'
 
 # The menu. bootmenu_default is the entry the countdown boots, and bootcmd
 # the same system, for "boot" typed at the console. An OSTree system with a

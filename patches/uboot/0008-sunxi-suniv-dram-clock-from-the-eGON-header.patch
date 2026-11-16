@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: mbt28 <btekbas@gmail.com>
+Date: Mon, 16 Nov 2026 00:00:00 +0000
+Subject: [PATCH] sunxi: suniv: DRAM clock chosen at boot, from the eGON header
+
+Let the boot menu choose the DRAM clock without a U-Boot rebuild. The
+SPL sets the clock before DRAM exists, so the choice has to be readable
+with no storage driver: it is kept in the last word of the eGON
+header's string pool (offset 0x5c, unused after the device tree name),
+which the boot ROM has already copied to SRAM with the SPL. The word is
+0x4452 ("DR") << 16 | MHz; 156, 168 and 180 are accepted, anything else
+(and the zero mksunxiboot writes) means CONFIG_DRAM_CLK. The writer must
+adjust the header checksum to match; a header with a bad checksum is
+refused by the boot ROM, which then tries the next boot device.
+
+If DRAM fails the check at the chosen clock, the SPL says so and
+initialises it again at CONFIG_DRAM_CLK instead of hanging. The clock in
+use is printed after "DRAM:".
+
+Reading the setting from the SD card in the SPL was tried first and
+dropped: a second MMC initialisation in board_init_r after one in
+board_init_f does not come back on this chip.
+
+Signed-off-by: mbt28 <btekbas@gmail.com>
+---
+--- a/arch/arm/mach-sunxi/dram_suniv.c
++++ b/arch/arm/mach-sunxi/dram_suniv.c
+@@ -17,6 +17,9 @@
+ #include <linux/delay.h>
+ #include <hang.h>
+ #include <sunxi_gpio.h>
++#include <sunxi_image.h>
++#include <asm/arch/spl.h>
++#include <linux/errno.h>
+ 
+ #define SDR_T_CAS			(0x2)
+ #define SDR_T_RAS			(0x8)
+@@ -317,7 +320,7 @@
+ 	return 0;
+ }
+ 
+-static void simple_dram_check(void)
++static int simple_dram_check(void)
+ {
+ 	volatile u32 *dram = (u32 *)CFG_SYS_SDRAM_BASE;
+ 	int i;
+@@ -328,7 +331,7 @@
+ 	for (i = 0; i < 0x40; i++) {
+ 		if (dram[i] != i) {
+ 			printf("DRAM initialization failed: dram[0x%x] != 0x%x.", i, dram[i]);
+-			hang();
++			return -EIO;
+ 		}
+ 	}
+ 
+@@ -338,12 +341,14 @@
+ 	for (i = 0; i < 0x10000; i += 0x40) {
+ 		if (dram[i] != i) {
+ 			printf("DRAM initialization failed: dram[0x%x] != 0x%x.", i, dram[i]);
+-			hang();
++			return -EIO;
+ 		}
+ 	}
++
++	return 0;
+ }
+ 
+-static void do_dram_init(struct dram_para *para)
++static int do_dram_init(struct dram_para *para)
+ {
+ 	struct sunxi_ccm_reg * const ccm =
+ 		(struct sunxi_ccm_reg *)SUNXI_CCM_BASE;
+@@ -409,12 +414,53 @@
+ 	dram_set_autofresh_cycle(para->clk);
+ 	dram_scan_readpipe(para);
+ 	dram_get_dram_size(para);
+-	simple_dram_check();
++	return simple_dram_check();
++}
++
++/*
++ * A DRAM clock chosen at boot time instead of CONFIG_DRAM_CLK, kept in the
++ * last word of the eGON header's string pool, after the device tree name:
++ * 0x4452 ("DR") in the high half, the clock in MHz in the low half. The boot
++ * ROM has copied the header to SRAM with the rest of the SPL, so no storage
++ * driver is needed before DRAM is up. The word is zero as mksunxiboot writes
++ * it; the boot menu sets it, with the header checksum adjusted to match
++ * (board/lctech/pi-f1c200s/uboot-menu/f1c-boot.cmd). A header with a bad
++ * checksum is refused by the boot ROM, which then tries the next boot device.
++ */
++#define SUNIV_DRAM_CLK_TAG		0x4452
++
++static u32 suniv_dram_clk_setting(void)
++{
++	struct boot_file_head *egon = (void *)SPL_ADDR;
++	u32 w = egon->string_pool[ARRAY_SIZE(egon->string_pool) - 1];
++
++	if ((w >> 16) != SUNIV_DRAM_CLK_TAG)
++		return CONFIG_DRAM_CLK;
++
++	switch (w & 0xffff) {
++	case 156:
++	case 168:
++	case 180:
++		return w & 0xffff;
++	}
++	return CONFIG_DRAM_CLK;
+ }
+ 
+ unsigned long sunxi_dram_init(void)
+ {
+-	do_dram_init(&suniv_dram_para);
++	struct dram_para para = suniv_dram_para;
++
++	para.clk = suniv_dram_clk_setting();
++	if (do_dram_init(&para)) {
++		if (para.clk == CONFIG_DRAM_CLK)
++			hang();
++		/* this chip cannot take the clock asked for: the default */
++		printf(" %u MHz failed,", para.clk);
++		para = suniv_dram_para;
++		if (do_dram_init(&para))
++			hang();
++	}
++	printf(" %u MHz,", para.clk);
+ 
+-	return suniv_dram_para.size * 1024 * 1024;
++	return para.size * 1024 * 1024;
+ }
+-- 
+2.39.5
+
